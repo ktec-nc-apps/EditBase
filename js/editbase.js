@@ -105,6 +105,7 @@
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
   font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif;
   line-height: 1.4; margin: 1.6em 0 0.7em; break-after: avoid-page; text-align: left;
+  color: #111111;
 }
 .eb-doc h1 { font-size: 1.9em; letter-spacing: .02em; }
 .eb-doc h2 { font-size: 1.5em; border-bottom: 1.5pt solid #222; padding-bottom: .2em; }
@@ -1145,7 +1146,7 @@
     </div>
 
     <div class="eb-toolbar" v-if="doc.id">
-      <select :value="fmt.block" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
+      <select :value="fmt.block || 'P'" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
         <option value="P">{{ t('Body text') }}</option>
         <option value="H1">{{ t('Heading 1') }}</option>
         <option value="H2">{{ t('Heading 2') }}</option>
@@ -1179,7 +1180,7 @@
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.list === 'UL' }" @mousedown.prevent @click="list('UL')" :title="t('Bulleted list')">•≡</button>
       <button class="eb-tb" :class="{ on: fmt.list === 'OL' }" @mousedown.prevent @click="list('OL')" :title="t('Numbered list')">1≡</button>
-      <button class="eb-tb" v-for="a in aligns" :key="a.cls" :class="{ on: fmt.align === a.cls }" @mousedown.prevent @click="align(a.cls)" :title="a.label">{{ a.icon }}</button>
+      <button class="eb-tb" v-for="a in aligns" :key="a.cls" :class="{ on: fmt.align === a.cls }" @mousedown.prevent @click="align(a.cls)" :title="a.label" v-html="a.icon"></button>
       <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')">⇥</button>
       <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')">⇤</button>
       <span class="sep"></span>
@@ -1418,11 +1419,15 @@
         ];
       },
       aligns() {
+        // Drawn rather than lettered: no font ships a dependable alignment glyph.
+        const bars = (widths) => '<svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">'
+          + widths.map((w, i) => '<rect x="' + w[0] + '" y="' + (1 + i * 3) + '" width="' + w[1] + '" height="1.6" rx=".8" fill="currentColor"/>').join('')
+          + '</svg>';
         return [
-          { cls: 'eb-al-l', icon: '⯀▏', label: this.t('Align left') },
-          { cls: 'eb-al-c', icon: '▏⯀▏', label: this.t('Centre') },
-          { cls: 'eb-al-r', icon: '▏⯀', label: this.t('Align right') },
-          { cls: 'eb-al-j', icon: '▤', label: this.t('Justify') },
+          { cls: 'eb-al-l', icon: bars([[0, 16], [0, 10], [0, 14], [0, 8]]), label: this.t('Align left') },
+          { cls: 'eb-al-c', icon: bars([[0, 16], [3, 10], [1, 14], [4, 8]]), label: this.t('Centre') },
+          { cls: 'eb-al-r', icon: bars([[0, 16], [6, 10], [2, 14], [8, 8]]), label: this.t('Align right') },
+          { cls: 'eb-al-j', icon: bars([[0, 16], [0, 16], [0, 16], [0, 16]]), label: this.t('Justify') },
         ];
       },
       boxes() {

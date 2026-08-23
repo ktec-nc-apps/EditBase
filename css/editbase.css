@@ -74,6 +74,10 @@
 /* NC's global button margin pushes full-width sidebar buttons past the edge. */
 #editbase-root button { font-family: inherit; cursor: pointer; margin: 0; }
 #editbase-root h1, #editbase-root h2, #editbase-root h3, #editbase-root h4, #editbase-root h5, #editbase-root h6 { color: var(--text); }
+/* …but the paper is always paper: the document's own colours must not follow the
+   application theme, or a dark chrome washes the headings off a white page. */
+#editbase-root .eb-doc h1, #editbase-root .eb-doc h2, #editbase-root .eb-doc h3,
+#editbase-root .eb-doc h4, #editbase-root .eb-doc h5, #editbase-root .eb-doc h6 { color: #111111; }
 #editbase-root input, #editbase-root select, #editbase-root textarea { font-family: inherit; font-size: 15px; }
 #editbase-root select { height: auto; min-height: 34px; line-height: normal; }
 
@@ -119,8 +123,8 @@
 }
 .eb-docitem:hover { background: var(--surface-2); }
 .eb-docitem.active { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
-.eb-docitem .t { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.eb-docitem .m { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.eb-docitem .t { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eb-docitem .m { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 
 /* ---------- main column ---------- */
 .eb-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
@@ -144,7 +148,8 @@
 .eb-tb:hover { background: var(--surface-2); border-color: var(--border); }
 .eb-tb.on { background: color-mix(in srgb, var(--primary) 18%, var(--surface)); border-color: var(--primary); }
 .eb-tb .b { font-weight: 700; } .eb-tb .i { font-style: italic; } .eb-tb .u { text-decoration: underline; } .eb-tb .s { text-decoration: line-through; }
-.eb-toolbar select { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 5px 8px; }
+.eb-toolbar select { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 5px 8px; max-width: 170px; }
+.eb-tb svg { display: block; }
 .eb-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); padding: 0; }
 
 /* the desk and the paper */
