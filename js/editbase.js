@@ -802,6 +802,9 @@
     }
     return topBlockOf(container);
   }
+  function isFurniture(el) {
+    return !!(el && el.classList && (el.classList.contains('eb-pagespacer')));
+  }
   function selectedBlocks() {
     const range = getRange();
     if (!range) { return []; }
@@ -811,7 +814,7 @@
     const out = [];
     let n = first;
     while (n) {
-      out.push(n);
+      if (!isFurniture(n)) { out.push(n); }
       if (n === last || !last) { break; }
       n = n.nextElementSibling;
     }
@@ -1229,6 +1232,125 @@
     r.collapse(true);
     selectRange(r);
     if (canvas()) { canvas().focus(); }
+  }
+
+  // ---- pagination ----------------------------------------------------------------
+  // The editing surface used to be one continuous sheet that simply grew with the
+  // text, with a dashed line where a page would end. That is not what a page looks
+  // like: the paper was A4 wide but three A4s tall. Now the canvas is laid over a
+  // stack of real sheets, and a spacer is pushed in wherever a block would straddle
+  // the join, so what is on screen is what comes out of the printer.
+  const PAGE_GAP = 16;
+
+  /**
+   * Where the spacers go, as pure arithmetic over measured boxes — kept separate
+   * from the DOM so the rule can be tested without a browser.
+   *
+   * @param blocks [{ top, height, forced }] in document order, tops relative to the
+   *        start of the text area, measured before any spacer is inserted
+   * @param usable the text height of one page
+   * @param extra  bottom margin + gap + top margin: the dead band between two pages
+   * @return [{ index, spacer }]
+   */
+  function planPages(blocks, usable, extra) {
+    const out = [];
+    let shift = 0;
+    let pageTop = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const top = blocks[i].top + shift;
+      const height = blocks[i].height;
+      const boundary = pageTop + usable;
+      const forced = !!blocks[i].forced && i > 0;
+      if (forced || (height <= usable && top < boundary && top + height > boundary + 0.5)) {
+        const spacer = Math.max(0, boundary - top) + extra;
+        out.push({ index: i, spacer });
+        shift += spacer;
+        pageTop = boundary + extra;
+        continue;
+      }
+      // Taller than a page — nothing can be done but let it run on; carry the page
+      // boundary past it so everything after it lines up again.
+      while (height > usable && top + height > pageTop + usable) {
+        pageTop += usable + extra;
+      }
+    }
+    return out;
+  }
+
+  function makeSpacer(height) {
+    const el = document.createElement('div');
+    el.className = 'eb-pagespacer';
+    el.setAttribute('contenteditable', 'false');
+    el.setAttribute('aria-hidden', 'true');
+    el.style.height = height + 'px';
+    return el;
+  }
+
+  /**
+   * Lay the text out over the sheets. Returns how many sheets are needed.
+   * Does nothing where there is no layout to measure (a document not yet shown,
+   * or the test harness), so it can be called freely.
+   */
+  function paginate() {
+    const c = canvas();
+    if (!c) { return 1; }
+    c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+    const wrap = c.parentNode;
+    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
+    const pageH = sheet ? sheet.offsetHeight : 0;
+    if (!pageH || !c.offsetHeight) { return 1; }
+    const style = window.getComputedStyle(c);
+    const mt = parseFloat(style.paddingTop) || 0;
+    const mb = parseFloat(style.paddingBottom) || 0;
+    const usable = pageH - mt - mb;
+    if (usable < 40) { return 1; }
+    const extra = mt + mb + PAGE_GAP;
+
+    let pageTop = 0;
+    let child = c.firstElementChild;
+    let index = 0;
+    let pendingBreak = false;
+    while (child) {
+      const next = child.nextElementSibling;
+      if (child.classList.contains('eb-pagebreak')) {
+        // The marker stays where the writer put it, at the foot of the page; what
+        // moves to the next sheet is the text after it.
+        if (index > 0) { pendingBreak = true; }
+        index++;
+        child = next;
+        continue;
+      }
+      if (!child.classList.contains('eb-pagespacer')) {
+        const top = child.offsetTop - mt;
+        const height = child.offsetHeight;
+        while (top >= pageTop + usable) { pageTop += usable + extra; }
+        const boundary = pageTop + usable;
+        const forced = pendingBreak;
+        pendingBreak = false;
+        if (forced || (height <= usable && top < boundary && top + height > boundary + 0.5)) {
+          const wanted = boundary + extra;
+          const spacer = makeSpacer(Math.max(0, boundary - top) + extra);
+          c.insertBefore(spacer, child);
+          // Putting an element between two blocks stops their margins collapsing, so
+          // the block lands a little lower than the arithmetic says. Measure where it
+          // actually went and take the difference back out of the spacer.
+          const landed = child.offsetTop - mt;
+          const drift = landed - wanted;
+          if (Math.abs(drift) > 0.5) {
+            spacer.style.height = Math.max(0, parseFloat(spacer.style.height) - drift) + 'px';
+          }
+          pageTop = wanted;
+        } else {
+          while (height > usable && top + height > pageTop + usable) {
+            pageTop += usable + extra;
+          }
+        }
+        index++;
+      }
+      child = next;
+    }
+    // A hair over a page needs another sheet; a hair under must not add one.
+    return Math.max(1, Math.ceil((c.offsetHeight + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
   }
 
   // ---- housekeeping -------------------------------------------------------------
@@ -1927,8 +2049,9 @@
     </div>
 
     <div class="eb-desk" :class="{ empty: !doc.id }">
-      <div class="eb-paperwrap" v-show="doc.id" :style="{ zoom: zoom / 100 }">
-        <div id="eb-canvas" class="eb-paper eb-doc" :class="{ noguides: !guides }"
+      <div class="eb-paperwrap" :class="{ noguides: !guides }" v-show="doc.id" :style="[paperStyle, { zoom: zoom / 100 }]">
+        <div class="eb-sheets" aria-hidden="true"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
+        <div id="eb-canvas" class="eb-paper eb-doc"
           :style="paperStyle" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true"></div>
       </div>
       <div class="eb-empty" v-if="!doc.id">
@@ -2597,6 +2720,7 @@
         clone.querySelectorAll('[contenteditable]').forEach((el) => el.removeAttribute('contenteditable'));
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
+        clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
         return stripEditorArtefacts(clone.innerHTML);
       },
       currentHtml() {
@@ -2683,16 +2807,21 @@
         this.counts = c ? c.textContent.replace(/\s/g, '').length : 0;
         this.repaginate();
       },
-      /** How many sheets this would print on, near enough to be worth showing. */
+      /**
+       * Lay the text over the sheets and keep the right number of sheets under it.
+       * Runs on the next frame so the measurements are of the layout as it now is,
+       * and once more afterwards because adding a sheet can change what fits.
+       */
       repaginate() {
-        const c = canvas();
-        if (!c) { return; }
-        const p = normalisePaper(this.doc.paper);
-        const mm = 96 / 25.4;
-        const pageH = (sheet(p).h - p.margin.top - p.margin.bottom) * mm;
-        const flow = c.scrollHeight - (p.margin.top + p.margin.bottom) * mm;
-        const breaks = c.querySelectorAll('.eb-pagebreak').length;
-        this.pageCount = Math.max(1, Math.ceil(Math.max(flow, 1) / pageH) + breaks);
+        if (!canvas()) { return; }
+        clearTimeout(this._pageTimer);
+        this._pageTimer = setTimeout(() => {
+          const pages = paginate();
+          if (pages !== this.pageCount) {
+            this.pageCount = pages;
+            this.$nextTick(() => { this.pageCount = paginate(); });
+          }
+        }, 60);
       },
       refreshState() {
         if (!canvas()) { return; }
@@ -2803,6 +2932,11 @@
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
         linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono]));
+        // Text set in the real typeface is a different height, so the pages have to
+        // be laid out again once the fonts have actually loaded.
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(() => this.repaginate()).catch(() => { /* nothing to redo */ });
+        }
       },
       /** Load just enough of each listed family to draw its own name. */
       loadPreviewFonts() {
@@ -3293,6 +3427,10 @@
       'doc.paper.font'() { this.applyDocFonts(); },
       'doc.paper.fontSize'() { this.touch(); this.$nextTick(() => this.repaginate()); },
       'doc.paper.lineHeight'() { this.touch(); this.$nextTick(() => this.repaginate()); },
+      'doc.paper.size'() { this.$nextTick(() => this.repaginate()); },
+      'doc.paper.orientation'() { this.$nextTick(() => this.repaginate()); },
+      'doc.paper.margin': { deep: true, handler() { this.$nextTick(() => this.repaginate()); } },
+      guides() { this.$nextTick(() => this.repaginate()); },
       fontPageItems() { this.loadPreviewFonts(); },
       zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); },
       'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
@@ -3360,6 +3498,9 @@
     if (!m) { return /^#[0-9a-f]{6}$/i.test(value) ? value : null; }
     return '#' + [1, 2, 3].map((i) => Number(m[i]).toString(16).padStart(2, '0')).join('');
   }
+
+  // The page planner is pure arithmetic and is unit-tested on its own.
+  window.__eb_planPages = planPages;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');

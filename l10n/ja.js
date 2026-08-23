@@ -80,7 +80,7 @@ OC.L10N.register(
     "Delete table": "表を削除",
     "Tab moves to the next cell; a new row is added at the end.": "Tabキーで次のセルへ移動します。末尾では行が追加されます。",
     "No document is open.": "文書が開かれていません。",
-    "{n} pages": "約{n}ページ",
+    "{n} pages": "{n}ページ",
     "{n} characters": "{n} 文字",
     "Paper size": "用紙サイズ",
     "Orientation": "向き",

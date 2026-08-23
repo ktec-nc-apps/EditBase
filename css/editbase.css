@@ -154,21 +154,30 @@
 
 /* the desk and the paper */
 .eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: center; }
-.eb-paperwrap { flex: 0 0 auto; }
+.eb-paperwrap { flex: 0 0 auto; position: relative; width: var(--eb-paper-w); --eb-gap: 16px; }
+/* The sheets are real elements behind the text: one per printed page, each exactly
+   the paper size, so the editing screen shows the paper rather than a scroll. */
+.eb-sheets { display: flex; flex-direction: column; gap: var(--eb-gap); pointer-events: none; }
+.eb-sheet {
+  height: var(--eb-paper-h); flex: 0 0 auto; background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25), 0 16px 40px rgba(0,0,0,.2);
+}
+.eb-sheet + .eb-sheet { position: relative; }
+.eb-pagespacer { display: block; }
 .eb-paper {
-  background: #ffffff; color: #111111; box-shadow: 0 2px 6px rgba(0,0,0,.25), 0 16px 40px rgba(0,0,0,.2);
-  width: var(--eb-paper-w); min-height: var(--eb-paper-h);
+  position: absolute; top: 0; left: 0; right: 0;
+  color: #111111; background: transparent;
+  min-height: var(--eb-paper-h);
   padding: var(--eb-mt) var(--eb-mr) var(--eb-mb) var(--eb-ml);
   outline: none;
-  /* Dashed guide at every page boundary. Screen px are an approximation of the
-     printed page — the browser's own print scaling has the final word. */
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0, transparent calc(var(--eb-pageh) - 1px),
-    rgba(37, 99, 235, .35) calc(var(--eb-pageh) - 1px), rgba(37, 99, 235, .35) var(--eb-pageh));
-  background-origin: content-box; background-clip: content-box; background-repeat: repeat-y;
 }
-.eb-paper.noguides { background-image: none; }
+/* A hairline where the text area of each page ends, drawn on the sheet itself. */
+.eb-sheet::after {
+  content: ""; display: block; position: relative;
+  height: var(--eb-mb); margin-top: calc(var(--eb-paper-h) - var(--eb-mb));
+  border-top: 1px dashed rgba(37, 99, 235, .35);
+}
+.eb-paperwrap.noguides .eb-sheet::after { display: none; }
 .eb-paper:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 
 /* ---------- modals ---------- */
