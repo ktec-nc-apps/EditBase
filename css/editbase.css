@@ -1,0 +1,202 @@
+/* EditBase — application chrome only.
+   The stylesheet of the *document* is not here: it lives in js/editbase.js as
+   DOC_CSS and is written into every saved file, so what the editor shows and
+   what the exported .html shows come from one single source. */
+
+#editbase-root {
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #f0f3f9;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --muted: #64748b;
+  --primary: #2563eb;
+  --primary-ink: #ffffff;
+  --accent: #059669;
+  --danger: #dc2626;
+  --shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 8px 24px rgba(15, 23, 42, .06);
+  --radius: 14px;
+  --sidebar-w: 268px;
+  /* the desk the paper lies on */
+  --desk: #8f96a3;
+}
+/* Pre-JS fallback: follow the OS until the chosen theme is applied. */
+@media (prefers-color-scheme: dark) {
+  #editbase-root:not([data-ebtheme]) {
+    --bg: #0b1220;
+    --surface: #131c2e;
+    --surface-2: #1b2740;
+    --border: #263450;
+    --text: #e6edf7;
+    --muted: #93a3bd;
+    --primary: #4f8cff;
+    --accent: #10b981;
+    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    --desk: #0f1727;
+  }
+}
+#editbase-root[data-ebtheme="light"] {
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #f0f3f9;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --muted: #64748b;
+  --primary: #2563eb;
+  --accent: #059669;
+  --shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 8px 24px rgba(15, 23, 42, .06);
+  --desk: #8f96a3;
+  color-scheme: light;
+}
+#editbase-root[data-ebtheme="dark"] {
+  --bg: #0b1220;
+  --surface: #131c2e;
+  --surface-2: #1b2740;
+  --border: #263450;
+  --text: #e6edf7;
+  --muted: #93a3bd;
+  --primary: #4f8cff;
+  --accent: #10b981;
+  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  --desk: #0f1727;
+  color-scheme: dark;
+}
+
+/* NC 32's #content is a flex row that expects an #app-content child to grow. */
+#content.app-editbase { display: flex; }
+#editbase, #editbase.app-editbase { flex: 1 1 auto; min-width: 0; width: 100%; height: calc(100dvh - var(--header-height, 50px)); }
+#editbase-root {
+  width: 100%; height: 100%; color: var(--text); background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Segoe UI", Roboto, sans-serif;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#editbase-root, #editbase-root * { box-sizing: border-box; }
+/* NC's global button margin pushes full-width sidebar buttons past the edge. */
+#editbase-root button { font-family: inherit; cursor: pointer; margin: 0; }
+#editbase-root h1, #editbase-root h2, #editbase-root h3, #editbase-root h4, #editbase-root h5, #editbase-root h6 { color: var(--text); }
+#editbase-root input, #editbase-root select, #editbase-root textarea { font-family: inherit; font-size: 15px; }
+#editbase-root select { height: auto; min-height: 34px; line-height: normal; }
+
+/* ---------- splash (before Vue mounts) ---------- */
+#editbase-root .login-wrap { height: 100%; display: flex; align-items: center; justify-content: center; }
+#editbase-root .login-card { text-align: center; color: var(--muted); }
+#editbase-root .login-card .logo svg { width: auto; height: 64px; }
+#editbase-root .login-card p { margin-top: 14px; }
+
+/* ---------- shell ---------- */
+.eb-shell { flex: 1 1 auto; display: flex; min-height: 0; }
+.eb-side {
+  width: var(--sidebar-w); flex: 0 0 auto; background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.eb-side .brand { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.eb-side .brand .logo svg { width: auto; height: 26px; display: block; }
+.eb-side .brand .name { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+.eb-side .brand .ver { margin-left: auto; font-size: 11px; color: var(--muted); }
+.eb-side .side-actions { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.eb-side .side-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+
+.eb-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 10px; padding: 8px 12px; font-size: 14px; line-height: 1.3;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+}
+.eb-btn:hover { border-color: var(--primary); }
+.eb-btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
+.eb-btn.primary:hover { filter: brightness(1.06); }
+.eb-btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.eb-btn.ghost:hover { background: var(--surface-2); color: var(--text); border-color: transparent; }
+.eb-btn.danger { color: var(--danger); border-color: var(--border); background: transparent; }
+.eb-btn.danger:hover { border-color: var(--danger); }
+.eb-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.eb-btn.wide { width: 100%; }
+
+.eb-doclist { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 4px 8px 10px; }
+.eb-doclist .hint { color: var(--muted); font-size: 13px; padding: 14px 6px; line-height: 1.6; }
+.eb-docitem {
+  width: 100%; text-align: left; border: 1px solid transparent; background: transparent; color: var(--text);
+  border-radius: 10px; padding: 8px 10px; display: block; font-weight: 400;
+}
+.eb-docitem:hover { background: var(--surface-2); }
+.eb-docitem.active { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.eb-docitem .t { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eb-docitem .m { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- main column ---------- */
+.eb-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.eb-topbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.eb-topbar .title-input {
+  flex: 1 1 auto; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text);
+  font-size: 16px; font-weight: 700; padding: 6px 8px; border-radius: 8px;
+}
+.eb-topbar .title-input:hover { border-color: var(--border); }
+.eb-topbar .title-input:focus { border-color: var(--primary); background: var(--surface-2); outline: none; }
+.eb-topbar .state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.eb-topbar .state.dirty { color: var(--danger); }
+
+/* toolbar */
+.eb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.eb-toolbar .sep { width: 1px; align-self: stretch; margin: 2px 5px; background: var(--border); }
+.eb-tb {
+  border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 8px;
+  min-width: 32px; height: 32px; padding: 0 8px; font-size: 14px; display: inline-flex; align-items: center; justify-content: center;
+}
+.eb-tb:hover { background: var(--surface-2); border-color: var(--border); }
+.eb-tb.on { background: color-mix(in srgb, var(--primary) 18%, var(--surface)); border-color: var(--primary); }
+.eb-tb .b { font-weight: 700; } .eb-tb .i { font-style: italic; } .eb-tb .u { text-decoration: underline; } .eb-tb .s { text-decoration: line-through; }
+.eb-toolbar select { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 5px 8px; }
+.eb-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); padding: 0; }
+
+/* the desk and the paper */
+.eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: center; }
+.eb-paperwrap { flex: 0 0 auto; }
+.eb-paper {
+  background: #ffffff; color: #111111; box-shadow: 0 2px 6px rgba(0,0,0,.25), 0 16px 40px rgba(0,0,0,.2);
+  width: var(--eb-paper-w); min-height: var(--eb-paper-h);
+  padding: var(--eb-mt) var(--eb-mr) var(--eb-mb) var(--eb-ml);
+  outline: none;
+  /* Dashed guide at every page boundary. Screen px are an approximation of the
+     printed page — the browser's own print scaling has the final word. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0, transparent calc(var(--eb-pageh) - 1px),
+    rgba(37, 99, 235, .35) calc(var(--eb-pageh) - 1px), rgba(37, 99, 235, .35) var(--eb-pageh));
+  background-origin: content-box; background-clip: content-box; background-repeat: repeat-y;
+}
+.eb-paper.noguides { background-image: none; }
+.eb-paper:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+/* ---------- modals ---------- */
+.eb-modal-back { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; align-items: center; justify-content: center; z-index: 3000; padding: 16px; }
+.eb-modal { background: var(--surface); color: var(--text); border-radius: var(--radius); box-shadow: var(--shadow); width: min(560px, 100%); max-height: 88vh; overflow: auto; }
+.eb-modal h3 { margin: 0; padding: 16px 18px 10px; font-size: 17px; }
+.eb-modal .body { padding: 4px 18px 8px; }
+.eb-modal .foot { padding: 12px 18px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+.eb-field { margin: 10px 0; }
+.eb-field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.eb-field input[type=text], .eb-field input[type=number], .eb-field select, .eb-field textarea {
+  width: 100%; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 9px; padding: 8px 10px;
+}
+.eb-row { display: flex; gap: 10px; }
+.eb-row > * { flex: 1 1 0; min-width: 0; }
+.eb-note { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+
+.eb-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 9px 16px; z-index: 4000; font-size: 14px; }
+
+@media (max-width: 860px) {
+  .eb-side { position: absolute; z-index: 20; height: 100%; box-shadow: var(--shadow); }
+  .eb-side.hidden { display: none; }
+  .eb-desk { padding: 14px 8px 40px; }
+}
+
+/* Printing is done from a self-contained iframe holding the exported file, so
+   the app itself never has to be printable. This is only the safety net for
+   Ctrl+P pressed on the page. */
+@media print {
+  #header, #app-navigation, .eb-side, .eb-topbar, .eb-toolbar { display: none !important; }
+  #editbase-root, #editbase, .eb-shell, .eb-main { display: block !important; height: auto !important; overflow: visible !important; }
+  .eb-desk { display: block !important; background: none !important; padding: 0 !important; overflow: visible !important; }
+  .eb-paper { box-shadow: none !important; background-image: none !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
+}

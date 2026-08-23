@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>editbase</id>
+	<name>EditBase</name>
+	<summary>Word processor that writes plain HTML — print-ready CSS typesetting, MathML and no proprietary format</summary>
+	<summary lang="ja">成果物がそのままHTMLになるワードプロセッサ ― 印刷を前提としたCSS組版・MathML対応・独自フォーマットなし</summary>
+	<description><![CDATA[EditBase is a word processor whose documents are ordinary web pages. Every document is saved to your Nextcloud Files as a single self-contained .html file with its stylesheet inside it, so it opens in any browser, on any device, for as long as browsers exist — no import, no export, no proprietary format in between.
+
+Because the document is HTML and CSS, printing is typesetting: paper size, orientation and margins are set in millimetres, page breaks are explicit, and your browser's own "Save as PDF" produces the finished result.
+
+Features:
+- Documents are plain HTML files in your own Files, editable and shareable like any other file
+- Paper setup in millimetres — A4, A3, B5, Letter and Legal, portrait or landscape
+- On-screen page guides that show where each printed page will end
+- Headings, lists, tables, quotes, callout boxes, rounded rules and horizontal rules
+- Highlighting, text colour and inline styles applied as clean HTML, never as editor cruft
+- Mathematics written as native MathML — no images, no external renderer
+- Undo history kept by the editor itself]]></description>
+	<description lang="ja"><![CDATA[EditBaseは、文書そのものがWebページであるワードプロセッサです。すべての文書は、スタイルシートを内包した1枚の独立した .html ファイルとして、あなたのNextcloud Filesに保存されます。どの端末のどのブラウザでも、ブラウザが存在する限り開けます ― 取り込みも書き出しも、その間に挟まる独自フォーマットもありません。
+
+文書がHTMLとCSSであるということは、印刷がそのまま組版であるということです。用紙サイズ・向き・余白はミリメートルで指定し、改ページは明示的に置き、仕上がりはブラウザ自身の「PDFに保存」で得られます。
+
+主な機能:
+- 文書は自分のFilesの中の素のHTMLファイル ― 他のファイルと同じように編集・共有できます
+- ミリメートル単位の用紙設定 ― A4・A3・B5・Letter・Legal、縦置き／横置き
+- 印刷したときのページの区切りを画面上に表示するページガイド
+- 見出し・箇条書き・表・引用・囲み記事・角丸罫線・水平線
+- ハイライト・文字色などの装飾を、エディタ特有のゴミではなく整ったHTMLとして適用
+- 数式はネイティブのMathMLで記述 ― 画像も外部レンダラーも使いません
+- エディタ自身が保持する取り消し履歴]]></description>
+	<version>0.1.1</version>
+	<licence>agpl</licence>
+	<author>KTEC</author>
+	<namespace>EditBase</namespace>
+	<category>office</category>
+	<category>tools</category>
+	<website>https://github.com/ktec-nc-apps/EditBase</website>
+	<bugs>https://github.com/ktec-nc-apps/EditBase/issues</bugs>
+	<repository>https://github.com/ktec-nc-apps/EditBase</repository>
+	<dependencies>
+		<nextcloud min-version="30" max-version="34"/>
+	</dependencies>
+	<navigations>
+		<navigation>
+			<name>EditBase</name>
+			<route>editbase.page.index</route>
+			<icon>app.svg</icon>
+			<order>81</order>
+		</navigation>
+	</navigations>
+</info>
