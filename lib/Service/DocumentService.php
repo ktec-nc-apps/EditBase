@@ -181,8 +181,11 @@ class DocumentService {
 	/** Turn whatever the user typed into one safe file name ending in .html. */
 	private function normaliseName(string $name): string {
 		$name = trim(str_replace(['/', '\\', "\0"], '', $name));
+		// Leading dots would make a hidden file (and "..name" reads like a path trick
+		// even though the slashes are already gone), so they go.
+		$name = ltrim($name, ". \t");
 		$name = $this->stripExt($name);
-		if ($name === '' || $name === '.' || $name === '..') {
+		if (trim($name) === '') {
 			$name = 'Document';
 		}
 		return mb_substr($name, 0, 200) . self::EXT;
