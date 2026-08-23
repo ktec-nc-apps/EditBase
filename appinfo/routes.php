@@ -16,6 +16,18 @@ return [
 		['name' => 'api#browseFiles', 'url' => '/api/files/browse', 'verb' => 'GET'],
 		['name' => 'api#fileImage', 'url' => '/api/files/{id}/image', 'verb' => 'GET'],
 
+		// the other apps on this server
+		['name' => 'api#sources', 'url' => '/api/sources', 'verb' => 'GET'],
+		['name' => 'api#tables', 'url' => '/api/tables', 'verb' => 'GET'],
+		['name' => 'api#table', 'url' => '/api/tables/{id}', 'verb' => 'GET'],
+		['name' => 'api#contacts', 'url' => '/api/contacts', 'verb' => 'GET'],
+		['name' => 'api#calendars', 'url' => '/api/calendars', 'verb' => 'GET'],
+		['name' => 'api#events', 'url' => '/api/calendar/events', 'verb' => 'GET'],
+		['name' => 'api#regibaseCollections', 'url' => '/api/regibase/collections', 'verb' => 'GET'],
+		['name' => 'api#regibaseRecords', 'url' => '/api/regibase/collections/{id}', 'verb' => 'GET'],
+		['name' => 'api#formulaCollections', 'url' => '/api/formulabase/collections', 'verb' => 'GET'],
+		['name' => 'api#formulas', 'url' => '/api/formulabase/collections/{id}/formulas', 'verb' => 'GET'],
+
 		// documents (plain .html files in the user's own Files)
 		['name' => 'api#documents', 'url' => '/api/documents', 'verb' => 'GET'],
 		['name' => 'api#createDocument', 'url' => '/api/documents', 'verb' => 'POST'],

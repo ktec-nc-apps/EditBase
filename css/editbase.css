@@ -315,3 +315,14 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 
 /* The picture the caret is in, so it is obvious which one the bar acts on. */
 .eb-paper figure.eb-img:focus-within { outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent); outline-offset: 4px; }
+
+/* ---------- panels for the other apps ---------- */
+.src-preview { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--surface); }
+.src-preview table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.src-preview th, .src-preview td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; }
+.src-preview th { background: var(--surface-2); }
+.fp-item .meta.mono { font-family: monospace; }
+.eb-modal .opt { display: flex; align-items: center; gap: 8px; font-size: 13.5px; margin: 4px 0; }
+.chips .chip { cursor: pointer; }
+
+.eb-menu { max-height: min(70vh, 520px); overflow-y: auto; }

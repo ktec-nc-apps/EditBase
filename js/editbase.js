@@ -1210,7 +1210,14 @@
     Array.from(holder.childNodes).forEach((n) => {
       if (n.nodeType === 3 && !n.data.trim()) { return; }
       const node = isBlock(n) ? n : (function () { const p = document.createElement('p'); p.appendChild(n); return p; })();
-      last = insertBlockNode(node);
+      // Each block goes after the one before it: inserting them all against the
+      // same anchor would lay the passage out backwards.
+      if (last && last.parentNode) {
+        last.parentNode.insertBefore(node, last.nextSibling);
+      } else {
+        insertBlockNode(node);
+      }
+      last = node;
     });
     if (last) { placeCaretIn(last); }
   }
@@ -1455,6 +1462,87 @@
     normaliseCanvas();
   }
 
+  // ---- other apps on this server -------------------------------------------------
+  /** A table of strings, as the document's own table markup. */
+  function tableFromRows(columns, rows, withHeader) {
+    const table = document.createElement('table');
+    table.className = 'eb-table';
+    const tbody = document.createElement('tbody');
+    if (withHeader && columns.length) {
+      const tr = document.createElement('tr');
+      columns.forEach((title) => {
+        const th = document.createElement('th');
+        th.textContent = String(title == null ? '' : title);
+        tr.appendChild(th);
+      });
+      tbody.appendChild(tr);
+    }
+    rows.forEach((row) => {
+      const tr = document.createElement('tr');
+      (columns.length ? columns : row).forEach((_, i) => {
+        const td = document.createElement('td');
+        const value = String(row[i] == null ? '' : row[i]);
+        if (value === '') { td.appendChild(document.createElement('br')); } else { td.textContent = value; }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  /** Notes are Markdown; only the parts a document actually needs are converted. */
+  function markdownToHtml(md) {
+    const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const inline = (t) => esc(t)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    const out = [];
+    let list = null;
+    String(md || '').split(/\r?\n/).forEach((line) => {
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+      const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      const closeList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+      if (heading) {
+        closeList();
+        const level = Math.min(6, heading[1].length);
+        out.push('<h' + level + '>' + inline(heading[2]) + '</h' + level + '>');
+        return;
+      }
+      if (bullet || numbered) {
+        const want = bullet ? 'ul' : 'ol';
+        if (list !== want) { closeList(); out.push('<' + want + '>'); list = want; }
+        out.push('<li>' + inline((bullet || numbered)[1]) + '</li>');
+        return;
+      }
+      closeList();
+      if (line.trim() === '') { return; }
+      out.push('<p>' + inline(line) + '</p>');
+    });
+    if (list) { out.push('</' + list + '>'); }
+    return out.join('\n');
+  }
+
+  /** Placeholders are written as {{key}} and filled in by the merge. */
+  function fillPlaceholders(html, values) {
+    return String(html).replace(/\{\{\s*([\w.-]{1,64})\s*\}\}/g, (whole, key) => {
+      const v = values[key];
+      return v == null ? '' : String(v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    });
+  }
+  function placeholdersIn(html) {
+    const found = [];
+    String(html).replace(/\{\{\s*([\w.-]{1,64})\s*\}\}/g, (whole, key) => {
+      if (found.indexOf(key) < 0) { found.push(key); }
+      return whole;
+    });
+    return found;
+  }
+
   // ---- find and replace ----------------------------------------------------------
   // Matching runs over the document's text as one string, so a phrase still matches
   // when part of it happens to be bold — which is exactly where a per-node search
@@ -1648,6 +1736,7 @@
     search: I('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>'),
     check: I('<path d="M3 8.5 6.5 12 13 4.5"/>'),
     close: I('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    link: I('<path d="M6.6 9.4a3 3 0 0 0 4.2 0l2.2-2.2a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M9.4 6.6a3 3 0 0 0-4.2 0L3 8.8a3 3 0 0 0 4.2 4.2l1-1"/>'),
     image: I('<rect x="1.8" y="3" width="12.4" height="10" rx="1.2"/><circle cx="5.6" cy="6.6" r="1.1"/><path d="M2.2 11.4 6 8.2l2.6 2.2 2.3-1.8 2.9 2.6"/>'),
     folder: I('<path d="M1.8 4.2a1 1 0 0 1 1-1h3l1.4 1.6h6a1 1 0 0 1 1 1v6.4a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z"/>'),
     up: I('<path d="M8 13V3.5M4 7.5 8 3.5l4 4"/>'),
@@ -1773,6 +1862,10 @@
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+          <div class="eb-menu-sep" v-if="anySource"></div>
+          <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
+            <span v-html="icons.link"></span>{{ sourceLabel(key) }}
+          </button>
         </div>
       </span>
       <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
@@ -1954,6 +2047,156 @@
     </div>
   </div>
 
+  <!-- the other apps on this server -->
+  <div v-if="sourceOpen" class="eb-modal-back" @click="sourceOpen = false">
+    <div class="eb-modal tall" @click.stop>
+      <h3><span v-html="icons.link"></span> {{ sourceLabel(source) }}</h3>
+      <div class="body">
+        <p class="hint" v-if="src.loading">{{ t('Loading…') }}</p>
+        <p class="eb-note" v-if="src.error" style="color:var(--danger)">{{ src.error }}</p>
+
+        <!-- Tables -->
+        <template v-if="source === 'tables'">
+          <div class="font-list" v-if="!src.detail">
+            <button v-for="x in src.items" :key="x.id" class="fp-item" @click="openCollection(x)">
+              <span class="ic">{{ x.emoji || '▦' }}</span><span class="nm">{{ x.title }}</span>
+            </button>
+            <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
+          </div>
+          <template v-if="src.detail">
+            <p class="eb-note">{{ t('{name}: {c} columns, {r} rows', { name: src.detail.title, c: src.detail.columns.length, r: src.detail.rows.length }) }}</p>
+            <label class="opt"><input type="checkbox" v-model="src.withHeader"> {{ t('First row is a header') }}</label>
+            <div class="src-preview">
+              <table class="eb-table">
+                <tr v-if="src.withHeader"><th v-for="(c, i) in src.detail.columns" :key="i">{{ c }}</th></tr>
+                <tr v-for="(row, i) in src.detail.rows.slice(0, 8)" :key="i"><td v-for="(cell, j) in row" :key="j">{{ cell }}</td></tr>
+              </table>
+            </div>
+          </template>
+        </template>
+
+        <!-- Contacts -->
+        <template v-if="source === 'contacts'">
+          <div class="font-search">
+            <span v-html="icons.search"></span>
+            <input type="text" v-model="src.query" @keydown.enter.prevent="searchContacts" :placeholder="t('Search contacts…')">
+            <button class="eb-btn" @click="searchContacts">{{ t('Search') }}</button>
+          </div>
+          <div class="font-list">
+            <button v-for="p in src.items" :key="p.id" class="fp-item" @click="insertContact(p)">
+              <span class="nm">{{ p.name }}</span>
+              <span class="meta">{{ p.org }}{{ p.system ? ' · ' + t('User directory') : '' }}</span>
+            </button>
+            <p class="hint" v-if="!src.items.length && !src.loading">{{ t('No contact matches that.') }}</p>
+          </div>
+          <p class="eb-note">{{ t('Choosing a contact writes the address block at the cursor. For one letter per contact, use the merge fields below.') }}</p>
+          <div class="chips">
+            <button v-for="k in contactFields" :key="k" class="chip" @click="insertField(k)">{{ fieldTag(k) }}</button>
+          </div>
+        </template>
+
+        <!-- Calendar -->
+        <template v-if="source === 'calendar'">
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('From') }}</label><input type="date" v-model="src.from" @change="loadEvents"></div>
+            <div class="eb-field"><label>{{ t('To') }}</label><input type="date" v-model="src.to" @change="loadEvents"></div>
+            <div class="eb-field">
+              <label>{{ t('Calendar') }}</label>
+              <select v-model="src.calendar" @change="loadEvents">
+                <option value="">{{ t('All calendars') }}</option>
+                <option v-for="c in src.items" :key="c.key" :value="c.key">{{ c.name }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="font-list">
+            <div v-for="(e, i) in src.records" :key="i" class="fp-item">
+              <span class="nm">{{ e.summary }}</span>
+              <span class="meta">{{ e.start.slice(0, 16).replace('T', ' ') }}{{ e.allDay ? ' · ' + t('All day') : '' }}{{ e.location ? ' · ' + e.location : '' }}</span>
+            </div>
+            <p class="hint" v-if="!src.records.length && !src.loading">{{ t('No events in that range.') }}</p>
+          </div>
+        </template>
+
+        <!-- RegiBase -->
+        <template v-if="source === 'regibase'">
+          <div class="font-list" v-if="!src.collection">
+            <button v-for="x in src.items" :key="x.id" class="fp-item" @click="openCollection(x)">
+              <span class="ic">{{ x.icon || '🗄' }}</span><span class="nm">{{ x.name }}</span><span class="meta">{{ x.count }}</span>
+            </button>
+            <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
+          </div>
+          <template v-if="src.collection">
+            <p class="eb-note">{{ t('{name}: {c} fields, {r} records', { name: src.collection.name, c: src.fields.length, r: src.records.length }) }}</p>
+            <div class="chips">
+              <button v-for="f in src.fields" :key="f.key" class="chip" @click="insertField(f.key)">{{ fieldTag(f.key) }} {{ f.label }}</button>
+            </div>
+            <div class="font-list">
+              <button v-for="r in src.records" :key="r.id" class="fp-item" @click="insertRecord(r)">
+                <span class="nm">{{ r.data[src.fields[0] && src.fields[0].key] || '—' }}</span>
+                <span class="meta">{{ t('Insert as a table') }}</span>
+              </button>
+            </div>
+          </template>
+        </template>
+
+        <!-- FormulaBase -->
+        <template v-if="source === 'formulabase'">
+          <div class="font-list" v-if="!src.collection">
+            <button v-for="x in src.items" :key="x.id" class="fp-item" @click="openCollection(x)">
+              <span class="ic">{{ x.icon || '∑' }}</span><span class="nm">{{ x.name }}</span>
+            </button>
+            <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
+          </div>
+          <div class="font-list" v-if="src.collection">
+            <button v-for="f in src.records" :key="f.id" class="fp-item" @click="insertFormula(f)">
+              <span class="nm">{{ f.name }}</span>
+              <span class="meta mono">{{ f.expression }}</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- Notes -->
+        <template v-if="source === 'notes'">
+          <div class="font-list">
+            <button v-for="n in src.items" :key="n.id" class="fp-item" @click="insertNote(n)">
+              <span class="nm">{{ n.title }}</span>
+              <span class="meta">{{ n.category }}</span>
+            </button>
+            <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
+          </div>
+        </template>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" v-if="src.detail || src.collection" @click="src.detail = null; src.collection = null">{{ t('Back') }}</button>
+        <button class="eb-btn ghost" v-if="source === 'contacts' || (source === 'regibase' && src.collection)" @click="openMerge(source === 'contacts' ? 'contacts' : 'regibase')">{{ t('Mail merge…') }}</button>
+        <button class="eb-btn" v-if="source === 'calendar' && src.records.length" @click="insertEvents(true)">{{ t('Insert as a table') }}</button>
+        <button class="eb-btn primary" v-if="source === 'calendar' && src.records.length" @click="insertEvents(false)">{{ t('Insert as a list') }}</button>
+        <button class="eb-btn primary" v-if="source === 'tables' && src.detail" @click="insertTableData">{{ t('Insert') }}</button>
+        <button class="eb-btn ghost" @click="sourceOpen = false">{{ t('Close') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- mail merge -->
+  <div v-if="mergeOpen" class="eb-modal-back" @click="mergeOpen = false">
+    <div class="eb-modal" @click.stop>
+      <h3>{{ t('Mail merge') }}</h3>
+      <div class="body">
+        <p class="eb-note" v-if="!merge.keys.length">{{ mergeHint }}</p>
+        <template v-else>
+          <p class="eb-note">{{ t('{n} records will be filled into {k} fields:', { n: merge.count, k: merge.keys.length }) }}</p>
+          <div class="chips"><span v-for="k in merge.keys" :key="k" class="chip">{{ fieldTag(k) }}</span></div>
+          <label class="opt" style="margin-top:10px"><input type="radio" :value="false" v-model="merge.separate"> {{ t('One document, one page per record') }}</label>
+          <label class="opt"><input type="radio" :value="true" v-model="merge.separate"> {{ t('A separate document per record') }}</label>
+        </template>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="mergeOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" :disabled="!merge.keys.length || merge.busy" @click="runMerge">{{ merge.busy ? t('Working…') : t('Merge') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- pictures from Files -->
   <div v-if="pickerOpen" class="eb-modal-back" @click="pickerOpen = false">
     <div class="eb-modal tall" @click.stop>
@@ -2115,6 +2358,16 @@
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
         find: { open: false, query: '', replace: '', hits: [], index: 0, caseSensitive: false },
+        sources: {},
+        sourceOpen: false,
+        source: '',
+        src: {
+          loading: false, error: '', items: [], detail: null, query: '',
+          collection: null, fields: [], records: [], selected: [],
+          from: '', to: '', calendar: '', asTable: false, withHeader: true,
+        },
+        mergeOpen: false,
+        merge: { source: '', keys: [], count: 0, busy: false, separate: false },
         pickerOpen: false,
         picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '' },
         table: { rows: 3, cols: 3, header: true, variant: '' },
@@ -2175,6 +2428,12 @@
         ];
       },
       docScript() { return scriptFor(this.doc.lang); },
+      sourceKeys() { return Object.keys(this.sources).filter((k) => this.sources[k]); },
+      anySource() { return this.sourceKeys.length > 0; },
+      contactFields() { return ['name', 'family', 'given', 'org', 'title', 'email', 'tel', 'postcode', 'region', 'locality', 'street']; },
+      mergeHint() {
+        return this.t('This document has no merge fields yet. Put a field such as {example} into the text first.', { example: this.fieldTag('name') });
+      },
       defaultFontName() {
         const def = defaultFonts(this.doc.lang);
         if (this.fontRole === 'mono') { return def.mono; }
@@ -2560,6 +2819,258 @@
       },
       stepZoom(d) { this.zoom = Math.min(200, Math.max(50, this.zoom + d)); },
       clearHighlight() { this.run(() => clearMarks()); },
+      // ---- the other apps on this server ----
+      async loadSources() {
+        try {
+          const r = await api('sources');
+          this.sources = r.sources || {};
+        } catch (e) { this.sources = {}; }
+      },
+      fieldTag(key) { return '{' + '{' + key + '}' + '}'; },
+      sourceLabel(key) {
+        return {
+          tables: this.t('Nextcloud Tables'), contacts: this.t('Contacts'), calendar: this.t('Calendar'),
+          notes: this.t('Notes'), regibase: 'RegiBase', formulabase: 'FormulaBase',
+        }[key] || key;
+      },
+      async openSource(key) {
+        this.menu = '';
+        this.source = key;
+        this.sourceOpen = true;
+        const today = new Date();
+        const month = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        this.src = {
+          loading: true, error: '', items: [], detail: null, query: '',
+          collection: null, fields: [], records: [], selected: [],
+          from: today.toISOString().slice(0, 10), to: month.toISOString().slice(0, 10),
+          calendar: '', asTable: false, withHeader: true,
+        };
+        try {
+          if (key === 'tables') { this.src.items = (await api('tables')).tables || []; }
+          if (key === 'contacts') { this.src.items = (await api('contacts')).contacts || []; }
+          if (key === 'regibase') { this.src.items = (await api('regibase/collections')).collections || []; }
+          if (key === 'formulabase') { this.src.items = (await api('formulabase/collections')).collections || []; }
+          if (key === 'calendar') {
+            this.src.items = (await api('calendars')).calendars || [];
+            await this.loadEvents();
+          }
+          if (key === 'notes') { this.src.items = await this.loadNotes(); }
+        } catch (e) {
+          this.src.error = e.message;
+        } finally { this.src.loading = false; }
+      },
+      /** Notes has its own API on this same session; no server-side bridge needed. */
+      async loadNotes() {
+        const url = (window.OC && OC.generateUrl) ? OC.generateUrl('/apps/notes/api/v1/notes') : '/apps/notes/api/v1/notes';
+        const res = await fetch(url, { credentials: 'same-origin', headers: { requesttoken: TOKEN } });
+        if (!res.ok) { throw new Error('HTTP ' + res.status); }
+        const body = await res.json();
+        const list = Array.isArray(body) ? body : (body && Array.isArray(body.notesData) ? body.notesData : []);
+        return list.filter((n) => n && n.id && !n.error);
+      },
+      async loadEvents() {
+        this.src.loading = true;
+        this.src.error = '';
+        try {
+          const q = 'from=' + encodeURIComponent(this.src.from) + '&to=' + encodeURIComponent(this.src.to)
+            + (this.src.calendar ? '&calendar=' + encodeURIComponent(this.src.calendar) : '');
+          this.src.records = (await api('calendar/events?' + q)).events || [];
+        } catch (e) {
+          this.src.error = e.message;
+          this.src.records = [];
+        } finally { this.src.loading = false; }
+      },
+      async searchContacts() {
+        this.src.loading = true;
+        try {
+          this.src.items = (await api('contacts?q=' + encodeURIComponent(this.src.query))).contacts || [];
+        } catch (e) { this.src.error = e.message; } finally { this.src.loading = false; }
+      },
+      async openCollection(item) {
+        this.src.loading = true;
+        this.src.error = '';
+        try {
+          if (this.source === 'tables') {
+            this.src.detail = await api('tables/' + item.id);
+          }
+          if (this.source === 'regibase') {
+            const r = await api('regibase/collections/' + item.id);
+            this.src.collection = item;
+            this.src.fields = r.fields || [];
+            this.src.records = r.records || [];
+          }
+          if (this.source === 'formulabase') {
+            this.src.collection = item;
+            this.src.records = (await api('formulabase/collections/' + item.id + '/formulas')).formulas || [];
+          }
+        } catch (e) { this.src.error = e.message; } finally { this.src.loading = false; }
+      },
+
+      insertTableData() {
+        const d = this.src.detail;
+        if (!d) { return; }
+        this.sourceOpen = false;
+        this.run(() => {
+          const table = tableFromRows(d.columns || [], d.rows || [], this.src.withHeader);
+          insertBlockNode(table);
+          const tail = document.createElement('p');
+          tail.appendChild(document.createElement('br'));
+          table.parentNode.insertBefore(tail, table.nextSibling);
+          placeCaretIn(tail);
+        });
+      },
+      /** A name-and-address block, laid out the way a letter wants it. */
+      insertContact(person) {
+        this.sourceOpen = false;
+        const lines = [];
+        if (person.postcode) { lines.push('〒' + person.postcode); }
+        const address = (person.region || '') + (person.locality || '') + (person.street ? ' ' + person.street : '');
+        if (address.trim()) { lines.push(address.trim()); }
+        if (person.org) { lines.push(person.org); }
+        if (person.title) { lines.push(person.title); }
+        if (person.name) {
+          // An honorific is a property of the language, not a phrase to translate:
+          // a Japanese letter needs 様 after the name, an English one needs nothing.
+          const honorific = { ja: ' 様', ko: ' 귀하' }[langKey(this.doc.lang)] || '';
+          lines.push(person.name + honorific);
+        }
+        const html = lines.map((l) => '<p>' + l.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p>').join('');
+        this.run(() => insertHtmlBlock(html));
+      },
+      insertEvents(asTable) {
+        const events = this.src.records || [];
+        if (!events.length) { return; }
+        this.sourceOpen = false;
+        const when = (e) => {
+          const start = new Date(e.start);
+          const date = start.toLocaleDateString();
+          if (e.allDay) { return date; }
+          return date + ' ' + start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        };
+        if (asTable) {
+          const rows = events.map((e) => [when(e), e.summary || '', e.location || '']);
+          this.run(() => {
+            const table = tableFromRows([this.t('When'), this.t('Event'), this.t('Where')], rows, true);
+            insertBlockNode(table);
+            const tail = document.createElement('p');
+            tail.appendChild(document.createElement('br'));
+            table.parentNode.insertBefore(tail, table.nextSibling);
+            placeCaretIn(tail);
+          });
+          return;
+        }
+        const items = events.map((e) => {
+          const bits = [when(e), e.summary || ''].filter(Boolean).join(' — ');
+          const where = e.location ? '（' + e.location + '）' : '';
+          return '<li>' + (bits + where).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</li>';
+        });
+        this.run(() => insertHtmlBlock('<ul>' + items.join('') + '</ul>'));
+      },
+      insertRecord(record) {
+        this.sourceOpen = false;
+        const rows = this.src.fields.map((f) => [f.label, record.data[f.key] || '']);
+        this.run(() => {
+          const table = tableFromRows([], rows, false);
+          insertBlockNode(table);
+          const tail = document.createElement('p');
+          tail.appendChild(document.createElement('br'));
+          table.parentNode.insertBefore(tail, table.nextSibling);
+          placeCaretIn(tail);
+        });
+      },
+      insertFormula(formula) {
+        this.sourceOpen = false;
+        if (!formula.mathml) {
+          this.notify(this.t('That formula could not be turned into MathML.'));
+          return;
+        }
+        this.run(() => {
+          const wrap = document.createElement('div');
+          wrap.className = 'eb-math-block';
+          const holder = document.createElement('div');
+          holder.innerHTML = formula.mathml;
+          sanitiseInto(holder);
+          const math = holder.querySelector('math');
+          if (math) { wrap.appendChild(math); }
+          insertBlockNode(wrap);
+          if (formula.description) {
+            const p = document.createElement('p');
+            p.textContent = formula.description;
+            wrap.parentNode.insertBefore(p, wrap.nextSibling);
+          }
+        });
+      },
+      insertNote(note) {
+        this.sourceOpen = false;
+        const html = markdownToHtml(note.content || '');
+        this.run(() => insertHtmlBlock('<h2>' + String(note.title || '').replace(/</g, '&lt;') + '</h2>' + html));
+      },
+      /** Put a merge field at the caret, e.g. {{name}}. */
+      insertField(key) {
+        this.run(() => {
+          const range = getRange();
+          const node = document.createTextNode('{{' + key + '}}');
+          if (range) {
+            range.deleteContents();
+            range.insertNode(node);
+            const after = document.createRange();
+            after.setStartAfter(node);
+            after.collapse(true);
+            selectRange(after);
+          }
+        });
+      },
+
+      // ---- mail merge ----
+      openMerge(source) {
+        this.sourceOpen = false;
+        this.merge.source = source;
+        this.merge.keys = placeholdersIn(this.exportBody());
+        this.merge.count = source === 'contacts' ? (this.src.items || []).length : (this.src.records || []).length;
+        this.merge.separate = false;
+        this.mergeOpen = true;
+      },
+      mergeValuesFor(row) {
+        if (this.merge.source === 'contacts') { return row; }
+        const values = {};
+        this.src.fields.forEach((f) => { values[f.key] = row.data[f.key] || ''; values[f.label] = row.data[f.key] || ''; });
+        return values;
+      },
+      async runMerge() {
+        const rows = this.merge.source === 'contacts' ? (this.src.items || []) : (this.src.records || []);
+        if (!rows.length) { return; }
+        this.merge.busy = true;
+        try {
+          const body = this.exportBody();
+          const title = this.doc.title || this.t('Untitled document');
+          if (this.merge.separate) {
+            for (const row of rows) {
+              const values = this.mergeValuesFor(row);
+              const name = (values.name || values.title || '').toString().slice(0, 60) || String(rows.indexOf(row) + 1);
+              await api('documents', {
+                method: 'POST',
+                body: {
+                  name: title + ' — ' + name,
+                  content: buildHtml({ title: title + ' — ' + name, paper: this.doc.paper, lang: this.doc.lang, body: fillPlaceholders(body, values) }),
+                },
+              });
+            }
+          } else {
+            const parts = rows.map((row, i) => (i ? '<div class="eb-pagebreak"></div>' : '') + fillPlaceholders(body, this.mergeValuesFor(row)));
+            const name = title + ' — ' + this.t('merged');
+            await api('documents', {
+              method: 'POST',
+              body: { name, content: buildHtml({ title: name, paper: this.doc.paper, lang: this.doc.lang, body: parts.join('\n') }) },
+            });
+          }
+          this.mergeOpen = false;
+          await this.loadDocs();
+          this.notify(this.t('{n} documents made', { n: this.merge.separate ? rows.length : 1 }));
+        } catch (e) {
+          this.notify(this.t('The merge failed: {msg}', { msg: e.message }));
+        } finally { this.merge.busy = false; }
+      },
+
       // ---- find and replace ----
       openFind() {
         this.find.open = true;
@@ -2769,6 +3280,7 @@
         this.applyTheme(this.settings.theme);
         if (this.settings.language && this.settings.language !== 'auto') { await this.applyLanguage(this.settings.language); }
         await this.loadDocs();
+        this.loadSources();
         const wanted = Number((root && root.dataset.fileid) || 0);
         const last = Number(window.localStorage.getItem('eb-last-doc') || 0);
         const target = wanted || (this.docs.some((d) => d.id === last) ? last : (this.docs[0] && this.docs[0].id));

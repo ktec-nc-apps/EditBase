@@ -6,6 +6,7 @@ namespace OCA\EditBase\Controller;
 
 use OCA\EditBase\AppInfo\Application;
 use OCA\EditBase\Service\DocumentService;
+use OCA\EditBase\Service\Connectors;
 use OCA\EditBase\Service\FileBrowser;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -25,6 +26,7 @@ class ApiController extends Controller {
 		IRequest $request,
 		private DocumentService $documents,
 		private FileBrowser $files,
+		private Connectors $connectors,
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
@@ -138,6 +140,65 @@ class ApiController extends Controller {
 	#[NoAdminRequired]
 	public function fileImage(int $id): JSONResponse {
 		return $this->run(fn () => $this->files->image($this->uid(), $id));
+	}
+
+	// ---- the other apps on this server ----
+
+	#[NoAdminRequired]
+	public function sources(): JSONResponse {
+		return $this->run(fn () => ['sources' => $this->connectors->available($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function tables(): JSONResponse {
+		return $this->run(fn () => ['tables' => $this->connectors->tables($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function table(int $id): JSONResponse {
+		return $this->run(fn () => $this->connectors->table($this->uid(), $id));
+	}
+
+	#[NoAdminRequired]
+	public function contacts(): JSONResponse {
+		return $this->run(fn () => ['contacts' => $this->connectors->contacts($this->uid(), (string)($this->request->getParam('q') ?? ''))]);
+	}
+
+	#[NoAdminRequired]
+	public function calendars(): JSONResponse {
+		return $this->run(fn () => ['calendars' => $this->connectors->calendars($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function events(): JSONResponse {
+		return $this->run(function () {
+			$from = (string)($this->request->getParam('from') ?? '');
+			$to = (string)($this->request->getParam('to') ?? '');
+			if ($from === '' || $to === '') {
+				throw new \InvalidArgumentException('a date range is required');
+			}
+			return ['events' => $this->connectors->events($this->uid(), $from, $to, (string)($this->request->getParam('calendar') ?? ''))];
+		});
+	}
+
+	#[NoAdminRequired]
+	public function regibaseCollections(): JSONResponse {
+		return $this->run(fn () => ['collections' => $this->connectors->regibaseCollections($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function regibaseRecords(int $id): JSONResponse {
+		return $this->run(fn () => $this->connectors->regibaseRecords($this->uid(), $id));
+	}
+
+	#[NoAdminRequired]
+	public function formulaCollections(): JSONResponse {
+		return $this->run(fn () => ['collections' => $this->connectors->formulaCollections($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function formulas(int $id): JSONResponse {
+		return $this->run(fn () => ['formulas' => $this->connectors->formulas($this->uid(), $id)]);
 	}
 
 	#[NoAdminRequired]
