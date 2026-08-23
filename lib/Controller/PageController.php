@@ -9,6 +9,7 @@ use OCP\App\IAppManager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\ContentSecurityPolicy;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\IConfig;
 use OCP\IRequest;
@@ -49,7 +50,7 @@ class PageController extends Controller {
 		}
 		$resolved = $pref === 'auto' ? $this->nextcloudTheme($uid) : $pref;
 
-		return new TemplateResponse(Application::APP_ID, 'main', [
+		$response = new TemplateResponse(Application::APP_ID, 'main', [
 			'version' => $this->appManager->getAppVersion(Application::APP_ID),
 			'loading' => $l->t('Loading…'),
 			'theme' => $pref,
@@ -57,6 +58,21 @@ class PageController extends Controller {
 			'ebtheme' => $resolved,
 			'fileId' => (int)($this->request->getParam('fileId', 0)),
 		]);
+		$response->setContentSecurityPolicy($this->policy());
+		return $response;
+	}
+
+	/**
+	 * A document may set its typeface to any Google Fonts family, and the editor has
+	 * to show the same face the printed file will use — so the stylesheet and the font
+	 * files themselves have to be reachable from this page. Nothing else is added:
+	 * scripts, frames and connections stay on Nextcloud's own default policy.
+	 */
+	private function policy(): ContentSecurityPolicy {
+		$csp = new ContentSecurityPolicy();
+		$csp->addAllowedStyleDomain('https://fonts.googleapis.com');
+		$csp->addAllowedFontDomain('https://fonts.gstatic.com');
+		return $csp;
 	}
 
 	/**

@@ -111,6 +111,23 @@ class ApiController extends Controller {
 		});
 	}
 
+	/**
+	 * The bundled Google Fonts catalogue. It ships with the app rather than being
+	 * fetched at run time, so the picker works before anything is loaded from Google
+	 * — and on a server that cannot reach Google at all, the list is still there.
+	 */
+	#[NoAdminRequired]
+	public function fonts(): JSONResponse {
+		return $this->run(function () {
+			$file = __DIR__ . '/../../data/google-fonts.json';
+			if (!is_file($file)) {
+				return ['families' => [], 'count' => 0];
+			}
+			$data = json_decode((string)file_get_contents($file), true);
+			return is_array($data) ? $data : ['families' => [], 'count' => 0];
+		});
+	}
+
 	#[NoAdminRequired]
 	public function documents(): JSONResponse {
 		return $this->run(fn () => ['documents' => $this->documents->list($this->uid())]);

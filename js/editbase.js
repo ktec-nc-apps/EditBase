@@ -57,7 +57,11 @@
     Letter: { w: 215.9, h: 279.4 },
     Legal: { w: 215.9, h: 355.6 },
   };
-  const DEFAULT_PAPER = { size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 }, font: 'serif', fontSize: 10.5 };
+  // fonts: '' on any of the three means "whatever suits the document's language".
+  const DEFAULT_PAPER = {
+    size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 },
+    font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
+  };
 
   function normalisePaper(p) {
     const out = JSON.parse(JSON.stringify(DEFAULT_PAPER));
@@ -67,6 +71,15 @@
     if (p.font === 'sans') { out.font = 'sans'; }
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
+    const lh = Number(p.lineHeight);
+    if (lh >= 1 && lh <= 3) { out.lineHeight = lh; }
+    if (p.fonts && typeof p.fonts === 'object') {
+      ['body', 'heading', 'mono'].forEach((k) => {
+        const v = p.fonts[k];
+        // A family name, nothing else: it goes into a URL and into CSS.
+        if (typeof v === 'string' && /^[\w .+&'-]{0,64}$/.test(v)) { out.fonts[k] = v.trim(); }
+      });
+    }
     ['top', 'right', 'bottom', 'left'].forEach((k) => {
       const v = Number(p.margin && p.margin[k]);
       if (v >= 0 && v <= 100) { out.margin[k] = v; }
@@ -87,23 +100,168 @@
     return '@page { size: ' + size + '; margin: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm; }';
   }
 
+  // ---- typefaces ---------------------------------------------------------------
+  // Any family on Google Fonts can be used. The catalogue ships with the app
+  // (data/google-fonts.json), so the picker works without calling Google at all;
+  // the font files themselves are fetched only once a family is actually in use,
+  // and the same stylesheet URL is written into the saved document, which is what
+  // makes the file look the same on a machine that has none of these fonts.
+  const GF_CSS = 'https://fonts.googleapis.com/css2';
+  const FALLBACK = {
+    serif: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif',
+    sans: '"Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif',
+    mono: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+    display: '"Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", Arial, sans-serif',
+    handwriting: '"Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", cursive',
+  };
+
+  // A document reads best in a face cut for its own script, so the document's
+  // language picks the starting typefaces — not the server locale, and not Latin
+  // defaults that would leave Japanese or Thai to a substitute font.
+  const LATIN = { serif: 'Source Serif 4', sans: 'Source Sans 3', mono: 'Noto Sans Mono' };
+  const LANG_FONTS = {
+    ja: { serif: 'BIZ UDPMincho', sans: 'BIZ UDPGothic', mono: 'BIZ UDGothic' },
+    zh: { serif: 'Noto Serif SC', sans: 'Noto Sans SC', mono: 'Noto Sans Mono' },
+    zh_Hant: { serif: 'Noto Serif TC', sans: 'Noto Sans TC', mono: 'Noto Sans Mono' },
+    ko: { serif: 'Noto Serif KR', sans: 'Noto Sans KR', mono: 'Noto Sans Mono' },
+    ar: { serif: 'Noto Naskh Arabic', sans: 'Noto Kufi Arabic', mono: 'Noto Sans Mono' },
+    fa: { serif: 'Noto Naskh Arabic', sans: 'Noto Kufi Arabic', mono: 'Noto Sans Mono' },
+    he: { serif: 'Noto Serif Hebrew', sans: 'Noto Sans Hebrew', mono: 'Noto Sans Mono' },
+    hi: { serif: 'Noto Serif Devanagari', sans: 'Noto Sans Devanagari', mono: 'Noto Sans Mono' },
+    th: { serif: 'Noto Serif Thai', sans: 'Noto Sans Thai', mono: 'Noto Sans Mono' },
+    ru: { serif: 'Noto Serif', sans: 'Noto Sans', mono: 'Noto Sans Mono' },
+    uk: { serif: 'Noto Serif', sans: 'Noto Sans', mono: 'Noto Sans Mono' },
+    en: LATIN, es: LATIN, fr: LATIN, de: LATIN, it: LATIN, pt: LATIN,
+    vi: LATIN, tr: LATIN, pl: LATIN, cs: LATIN, id: LATIN,
+  };
+  /** Which script a language is written in, for filtering the picker. */
+  const LANG_SCRIPT = {
+    ja: 'japanese', zh: 'chinese-simplified', zh_Hant: 'chinese-traditional', ko: 'korean',
+    ar: 'arabic', fa: 'arabic', he: 'hebrew', hi: 'devanagari', th: 'thai',
+    ru: 'cyrillic', uk: 'cyrillic', vi: 'vietnamese',
+  };
+
+  function langKey(lang) {
+    const l = String(lang || 'en').replace('-', '_');
+    if (LANG_FONTS[l]) { return l; }
+    const base = l.split('_')[0];
+    if (base === 'zh' && /(_TW|_HK|Hant)/i.test(l)) { return 'zh_Hant'; }
+    return LANG_FONTS[base] ? base : 'en';
+  }
+  function defaultFonts(lang) { return LANG_FONTS[langKey(lang)] || LATIN; }
+  function scriptFor(lang) { return LANG_SCRIPT[langKey(lang)] || 'latin'; }
+
+  // The default families, known without the catalogue: a document must produce the
+  // right stylesheet URL from the first keystroke, not only after the picker is opened.
+  const BUILTIN_FONTS = {
+    'Source Serif 4': { c: 'serif', w: [400, 700], i: true },
+    'Source Sans 3': { c: 'sans', w: [400, 700], i: true },
+    'Noto Sans Mono': { c: 'sans', w: [400, 700], i: false },
+    'BIZ UDPMincho': { c: 'serif', w: [400, 700], i: false },
+    'BIZ UDPGothic': { c: 'sans', w: [400, 700], i: false },
+    'BIZ UDGothic': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif SC': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans SC': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif TC': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans TC': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif KR': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans KR': { c: 'sans', w: [400, 700], i: false },
+    'Noto Naskh Arabic': { c: 'serif', w: [400, 700], i: false },
+    'Noto Kufi Arabic': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif Hebrew': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans Hebrew': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif Devanagari': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans Devanagari': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif Thai': { c: 'serif', w: [400, 700], i: false },
+    'Noto Sans Thai': { c: 'sans', w: [400, 700], i: false },
+    'Noto Serif': { c: 'serif', w: [400, 700], i: true },
+    'Noto Sans': { c: 'sans', w: [400, 700], i: true },
+  };
+
+  // The catalogue, loaded once per session from the app itself.
+  let fontCatalogue = null;
+  let fontIndex = Object.assign({}, BUILTIN_FONTS);
+  async function loadFonts() {
+    if (fontCatalogue) { return fontCatalogue; }
+    const data = await api('fonts');
+    fontCatalogue = data && data.families ? data : { families: [], scripts: [] };
+    fontIndex = Object.assign({}, BUILTIN_FONTS);
+    fontCatalogue.families.forEach((f) => { fontIndex[f.f] = f; });
+    return fontCatalogue;
+  }
+  function knownFont(family) { return family ? fontIndex[family] || null : null; }
+
+  /** The families a document actually uses, resolved from its settings. */
+  function resolveFonts(paper, lang) {
+    const def = defaultFonts(lang);
+    const chosen = (paper && paper.fonts) || {};
+    return {
+      body: chosen.body || def[paper && paper.font === 'sans' ? 'sans' : 'serif'],
+      head: chosen.heading || def.sans,
+      mono: chosen.mono || def.mono,
+    };
+  }
+  /** font-family value: the chosen family first, then something to fall back on. */
+  function fontStack(family, kind) {
+    const meta = knownFont(family);
+    const fb = FALLBACK[meta ? meta.c : kind] || FALLBACK[kind] || FALLBACK.sans;
+    return family ? '"' + String(family).replace(/"/g, '') + '", ' + fb : fb;
+  }
+  /**
+   * One Google Fonts stylesheet URL for a set of families. Weights are held to the
+   * two a document needs (regular and bold, plus italics where the family has them)
+   * so a document does not pull megabytes it will never draw.
+   */
+  function fontsUrl(families, sampleText) {
+    const wanted = [];
+    families.filter(Boolean).forEach((name) => {
+      if (wanted.some((w) => w.name === name)) { return; }
+      wanted.push({ name, meta: knownFont(name) });
+    });
+    if (!wanted.length) { return ''; }
+    const parts = wanted.map(({ name, meta }) => {
+      const key = 'family=' + encodeURIComponent(name).replace(/%20/g, '+');
+      // Without the catalogue there is nothing to say about weights; ask for the
+      // family plainly and let Google serve its default rather than 400 the request.
+      if (!meta) { return key; }
+      const weights = [400, 700].filter((w) => meta.w.includes(w));
+      const list = weights.length ? weights : [meta.w[0]];
+      const spec = meta.i
+        ? ':ital,wght@' + list.map((w) => '0,' + w).concat(list.map((w) => '1,' + w)).join(';')
+        : ':wght@' + list.join(';');
+      return key + spec;
+    });
+    let url = GF_CSS + '?' + parts.join('&') + '&display=swap';
+    if (sampleText) { url += '&text=' + encodeURIComponent(sampleText); }
+    return url;
+  }
+  /** Put (or replace) a stylesheet link in the page head, by id. */
+  function linkStylesheet(id, url) {
+    let link = document.getElementById(id);
+    if (!url) { if (link) { link.remove(); } return; }
+    if (!link) {
+      link = document.createElement('link');
+      link.id = id;
+      link.rel = 'stylesheet';
+      document.head.appendChild(link);
+    }
+    if (link.getAttribute('href') !== url) { link.setAttribute('href', url); }
+  }
+
   // ---- the document stylesheet ----------------------------------------------
   // Written into every saved file *and* applied to the editor canvas, so the
   // editor cannot drift from the artefact. Everything is scoped to .eb-doc: in a
   // saved file that class sits on <body>, in the editor it sits on the canvas.
   const DOC_CSS = `
 .eb-doc {
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif;
+  font-family: var(--eb-font-body, "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif);
   font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: justify;
   word-break: normal; overflow-wrap: anywhere; hyphens: auto;
-}
-.eb-doc.font-sans {
-  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif;
 }
 .eb-doc > *:first-child { margin-top: 0; }
 .eb-doc p { margin: 0 0 0.9em; }
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
-  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--eb-font-head, "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif);
   line-height: 1.4; margin: 1.6em 0 0.7em; break-after: avoid-page; text-align: left;
   color: #111111;
 }
@@ -118,11 +276,11 @@
   margin: 1em 0; padding: .4em 0 .4em 1em; border-left: 3pt solid #999; color: #333;
 }
 .eb-doc pre {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .92em;
+  font-family: var(--eb-font-mono, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace); font-size: .92em;
   background: #f4f4f4; border: .75pt solid #d5d5d5; border-radius: 4pt; padding: .7em .9em;
   overflow-x: auto; white-space: pre-wrap; break-inside: avoid;
 }
-.eb-doc code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .92em; }
+.eb-doc code { font-family: var(--eb-font-mono, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace); font-size: .92em; }
 .eb-doc a { color: #14509b; }
 .eb-doc hr { border: none; border-top: .75pt solid #999; margin: 1.4em 0; }
 .eb-doc hr.eb-rule-thick { border-top-width: 2pt; }
@@ -296,8 +454,25 @@
     const paper = normalisePaper(doc.paper);
     const lang = doc.lang || (document.documentElement.lang || 'ja');
     const body = stripEditorArtefacts(doc.body || '');
-    const size = 'html { background: #ffffff; }\nbody.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; }\n' +
-      '@media screen { body.eb-doc { max-width: ' + (sheet(paper).w - paper.margin.left - paper.margin.right) + 'mm; margin: ' + paper.margin.top + 'mm auto ' + paper.margin.bottom + 'mm; padding: 0 8px; } }';
+    const fonts = resolveFonts(paper, lang);
+    const url = fontsUrl([fonts.body, fonts.head, fonts.mono]);
+    const s = sheet(paper);
+    const page = 'html { background: #ffffff; }\n'
+      + 'body.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; line-height: ' + paper.lineHeight + '; }\n'
+      + '.eb-doc { --eb-font-body: ' + fontStack(fonts.body, 'serif') + ';'
+      + ' --eb-font-head: ' + fontStack(fonts.head, 'sans') + ';'
+      + ' --eb-font-mono: ' + fontStack(fonts.mono, 'mono') + '; }\n'
+      + '@media screen { body.eb-doc { max-width: ' + (s.w - paper.margin.left - paper.margin.right) + 'mm;'
+      + ' margin: ' + paper.margin.top + 'mm auto ' + paper.margin.bottom + 'mm; padding: 0 8px; } }';
+    // The typeface travels with the document as a stylesheet link, so the file looks
+    // the same on a machine that has none of these fonts installed. It is the only
+    // thing in the file that points anywhere outside it, and it is left out entirely
+    // when every family in use is a local one.
+    const fontLinks = url
+      ? '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+        + '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+        + '<link rel="stylesheet" href="' + escapeAttr(url) + '">\n'
+      : '';
     return '<!DOCTYPE html>\n'
       + '<html lang="' + escapeAttr(lang) + '">\n<head>\n'
       + '<meta charset="utf-8">\n'
@@ -305,8 +480,9 @@
       + '<meta name="generator" content="EditBase ' + escapeAttr(APP_VERSION) + '">\n'
       + '<meta name="editbase-paper" content="' + escapeAttr(JSON.stringify(paper)) + '">\n'
       + '<title>' + escapeAttr(doc.title || 'Document') + '</title>\n'
-      + '<style>\n' + pageRule(paper) + '\n' + size + '\n' + DOC_CSS + '</style>\n'
-      + '</head>\n<body class="eb-doc' + (paper.font === 'sans' ? ' font-sans' : '') + '">\n'
+      + fontLinks
+      + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS + '</style>\n'
+      + '</head>\n<body class="eb-doc">\n'
       + body + '\n</body>\n</html>\n';
   }
 
@@ -560,6 +736,21 @@
       el.appendChild(n);
     });
     reselectNodes(nodes);
+  }
+
+  /** Take the highlight off, whichever colour it happens to be. */
+  function clearMarks() {
+    const range = getRange();
+    if (!range || range.collapsed) { return; }
+    textNodesInRange(range).forEach((n) => {
+      let mark = null;
+      let el = n.parentNode;
+      while (el && el !== canvas()) {
+        if (el.nodeName === 'MARK') { mark = el; }
+        el = el.parentNode;
+      }
+      if (mark) { splitOut(n, mark); }
+    });
   }
 
   /** Strip every inline wrapper from the selection, leaving the text alone. */
@@ -1099,6 +1290,43 @@
     + '<path fill="currentColor" fill-rule="evenodd" d="M8,0 h56 a8,8 0 0 1 8,8 v84 a8,8 0 0 1 -8,8 h-56 a8,8 0 0 1 -8,-8 v-84 a8,8 0 0 1 8,-8 z M11,7 a4,4 0 0 0 -4,4 v78 a4,4 0 0 0 4,4 h50 a4,4 0 0 0 4,-4 v-78 a4,4 0 0 0 -4,-4 z"/>'
     + '<path fill="currentColor" d="M18,24 h36 a3.5,3.5 0 0 1 0,7 h-36 a3.5,3.5 0 0 1 0,-7 z M18,42 h36 a3.5,3.5 0 0 1 0,7 h-36 a3.5,3.5 0 0 1 0,-7 z M18,60 h22 a3.5,3.5 0 0 1 0,7 h-22 a3.5,3.5 0 0 1 0,-7 z"/></svg>';
 
+  // ---- icons -------------------------------------------------------------------
+  // Drawn, not typed: emoji and box-drawing characters render differently on every
+  // platform, and half of them have no glyph at all on a plain Linux server.
+  const I = (paths, opts) => '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="' + ((opts && opts.w) || 1.5) + '" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>';
+  const ICONS = {
+    highlight: I('<path d="M9.5 2.5 13 6l-5 5H5.5L4 9.5z"/><path d="M3 13.5h10"/>'),
+    colour: I('<path d="M8 1.8c3.4 0 6.2 2.5 6.2 5.6 0 2-1.6 2.9-2.8 2.9h-1.2c-1 0-1.7.7-1.7 1.6 0 .4.2.8.4 1.1.2.3.3.6.3.9 0 .6-.5 1.1-1.2 1.1C4.4 15 1.8 11.9 1.8 8.2 1.8 4.7 4.6 1.8 8 1.8z"/><circle cx="5.4" cy="7" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="4.9" r=".9" fill="currentColor" stroke="none"/><circle cx="10.8" cy="6.6" r=".9" fill="currentColor" stroke="none"/>'),
+    nocolour: I('<circle cx="8" cy="8" r="6"/><path d="M4 12 12 4"/>'),
+    ul: I('<path d="M6 4h8M6 8h8M6 12h8"/><circle cx="3" cy="4" r="1" fill="currentColor" stroke="none"/><circle cx="3" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="3" cy="12" r="1" fill="currentColor" stroke="none"/>'),
+    ol: I('<path d="M6 4h8M6 8h8M6 12h8"/><text x="1.2" y="5.4" font-size="4.6" fill="currentColor" stroke="none">1</text><text x="1.2" y="9.4" font-size="4.6" fill="currentColor" stroke="none">2</text><text x="1.2" y="13.4" font-size="4.6" fill="currentColor" stroke="none">3</text>'),
+    indent: I('<path d="M7 4h8M7 8h8M7 12h8M2 5.5 4.5 8 2 10.5z" />'),
+    outdent: I('<path d="M7 4h8M7 8h8M7 12h8M4.5 5.5 2 8l2.5 2.5z"/>'),
+    table: I('<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1"/><path d="M1.8 6.3h12.4M1.8 9.8h12.4M6 2.8v10.4M10 2.8v10.4"/>'),
+    box: I('<rect x="2" y="3" width="12" height="10" rx="2.5"/><path d="M4.5 6.5h5"/>'),
+    rule: I('<path d="M2 8h12"/>'),
+    pagebreak: I('<path d="M2 8h12" stroke-dasharray="2 2"/><path d="M8 2v3.4M6.4 4 8 5.6 9.6 4M8 14v-3.4M6.4 12 8 10.4 9.6 12"/>'),
+    formula: I('<path d="M4 3h7l-4 5 4 5H4"/>'),
+    clear: I('<path d="M6 3h7M9.5 3 7 13M3 13h6"/><path d="M11 9.5 14.5 13M14.5 9.5 11 13"/>'),
+    undo: I('<path d="M3 8h7.5a3 3 0 0 1 0 6H7"/><path d="M5.5 5.5 3 8l2.5 2.5"/>'),
+    redo: I('<path d="M13 8H5.5a3 3 0 0 0 0 6H9"/><path d="M10.5 5.5 13 8l-2.5 2.5"/>'),
+    guides: I('<rect x="2.5" y="1.8" width="11" height="12.4" rx="1"/><path d="M2.5 8h11" stroke-dasharray="2 1.6"/>'),
+    save: I('<path d="M3 2.8h7.5L13.2 5.5V13a.8.8 0 0 1-.8.8H3.6a.8.8 0 0 1-.8-.8V3.6a.8.8 0 0 1 .8-.8z"/><path d="M5.5 2.8v3.4h5V2.8M5.5 13.8v-3.6h5v3.6"/>'),
+    print: I('<path d="M4.5 6V2.5h7V6"/><rect x="2.2" y="6" width="11.6" height="5" rx="1"/><path d="M4.5 9.5h7v4h-7z"/>'),
+    more: I('<circle cx="3.2" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.8" cy="8" r="1.1" fill="currentColor" stroke="none"/>'),
+    menu: I('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
+    plus: I('<path d="M8 3.5v9M3.5 8h9"/>'),
+    minus: I('<path d="M3.5 8h9"/>'),
+    down: I('<path d="M4 6.5 8 10.5l4-4"/>'),
+    paper: I('<path d="M3.5 1.8h6l3 3v9.4a.6.6 0 0 1-.6.6H3.5a.6.6 0 0 1-.6-.6V2.4a.6.6 0 0 1 .6-.6z"/><path d="M9.3 1.8v3.3h3.2"/>'),
+    settings: I('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.8M8 12.6v1.8M14.4 8h-1.8M3.4 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/>'),
+    doc: I('<path d="M4 1.8h5l3 3v9.4H4z"/><path d="M8.8 1.8v3.3H12"/><path d="M6 8h4M6 10.5h4"/>'),
+    text: I('<path d="M3 3.5h10M8 3.5V13M6 13h4"/>'),
+    search: I('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>'),
+    check: I('<path d="M3 8.5 6.5 12 13 4.5"/>'),
+    close: I('<path d="M4 4l8 8M12 4l-8 8"/>'),
+  };
+
   const TEMPLATE = `
 <div class="eb-shell">
   <aside class="eb-side" :class="{ hidden: !sideOpen }">
@@ -1146,7 +1374,7 @@
     </div>
 
     <div class="eb-toolbar" v-if="doc.id">
-      <select :value="fmt.block || 'P'" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
+      <select class="tb-style" :value="fmt.block || 'P'" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
         <option value="P">{{ t('Body text') }}</option>
         <option value="H1">{{ t('Heading 1') }}</option>
         <option value="H2">{{ t('Heading 2') }}</option>
@@ -1155,60 +1383,92 @@
         <option value="BLOCKQUOTE">{{ t('Quotation') }}</option>
         <option value="PRE">{{ t('Preformatted') }}</option>
       </select>
+      <button class="eb-tb text font-btn" @mousedown.prevent @click="openFonts('body')" :title="t('Body typeface')">
+        <span class="fname" :style="{ fontFamily: fontPreviewStack(fontsInUse.body) }">{{ fontsInUse.body }}</span>
+        <span class="caret" v-html="icons.down"></span>
+      </button>
+      <span class="eb-num" :title="t('Body size (pt)')">
+        <button class="eb-tb" @mousedown.prevent @click="stepSize(-0.5)" v-html="icons.minus"></button>
+        <input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize">
+        <button class="eb-tb" @mousedown.prevent @click="stepSize(0.5)" v-html="icons.plus"></button>
+      </span>
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.bold }" @mousedown.prevent @click="inline('bold')" :title="t('Bold') + ' (Ctrl+B)'"><span class="b">B</span></button>
       <button class="eb-tb" :class="{ on: fmt.italic }" @mousedown.prevent @click="inline('italic')" :title="t('Italic') + ' (Ctrl+I)'"><span class="i">I</span></button>
       <button class="eb-tb" :class="{ on: fmt.underline }" @mousedown.prevent @click="inline('underline')" :title="t('Underline') + ' (Ctrl+U)'"><span class="u">U</span></button>
       <button class="eb-tb" :class="{ on: fmt.strike }" @mousedown.prevent @click="inline('strike')" :title="t('Strikethrough')"><span class="s">S</span></button>
-      <button class="eb-tb" :class="{ on: fmt.kenten }" @mousedown.prevent @click="inline('kenten')" :title="t('Emphasis dots')">•̈</button>
-      <button class="eb-tb" :class="{ on: fmt.sup }" @mousedown.prevent @click="inline('sup')" :title="t('Superscript')">x²</button>
-      <button class="eb-tb" :class="{ on: fmt.sub }" @mousedown.prevent @click="inline('sub')" :title="t('Subscript')">x₂</button>
-      <button class="eb-tb" :class="{ on: fmt.code }" @mousedown.prevent @click="inline('code')" :title="t('Inline code')">&lt;/&gt;</button>
+      <button class="eb-tb" :class="{ on: fmt.kenten }" @mousedown.prevent @click="inline('kenten')" :title="t('Emphasis dots')"><span class="kt">A</span></button>
+      <button class="eb-tb" :class="{ on: fmt.sup }" @mousedown.prevent @click="inline('sup')" :title="t('Superscript')"><span class="sx">x<sup>2</sup></span></button>
+      <button class="eb-tb" :class="{ on: fmt.sub }" @mousedown.prevent @click="inline('sub')" :title="t('Subscript')"><span class="sx">x<sub>2</sub></span></button>
+      <button class="eb-tb" :class="{ on: fmt.code }" @mousedown.prevent @click="inline('code')" :title="t('Inline code')"><span class="mono">&lt;/&gt;</span></button>
       <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="hlOpen = !hlOpen" :title="t('Highlight')">🖍</button>
-      <template v-if="hlOpen">
-        <button v-for="h in highlights" :key="h.key" class="eb-tb" @mousedown.prevent @click="inline(h.key); hlOpen = false" :title="h.label">
-          <span class="eb-swatch" :style="{ background: h.color }"></span>
-        </button>
-      </template>
-      <label class="eb-tb" :title="t('Text colour')" style="position:relative">
-        <span style="pointer-events:none">🎨</span>
-        <input type="color" :value="colour" @input="setColour($event.target.value)"
-          style="position:absolute;inset:0;opacity:0;cursor:pointer">
+      <span class="eb-pop">
+        <button class="eb-tb" :class="{ on: menu === 'hl' }" @mousedown.prevent @click="toggleMenu('hl')" :title="t('Highlight')"><span v-html="icons.highlight"></span></button>
+        <div class="eb-menu" v-if="menu === 'hl'" @mousedown.prevent>
+          <button v-for="h in highlights" :key="h.key" class="eb-menu-item" @click="inline(h.key); menu = ''">
+            <span class="eb-swatch" :style="{ background: h.color }"></span>{{ h.label }}
+          </button>
+          <button class="eb-menu-item" @click="clearHighlight(); menu = ''"><span class="eb-swatch none"></span>{{ t('Remove highlight') }}</button>
+        </div>
+      </span>
+      <label class="eb-tb" :title="t('Text colour')">
+        <span v-html="icons.colour"></span>
+        <span class="colour-bar" :style="{ background: colour }"></span>
+        <input type="color" :value="colour" @input="setColour($event.target.value)">
       </label>
-      <button class="eb-tb" @mousedown.prevent @click="clearColour" :title="t('Remove text colour')">🚫</button>
+      <button class="eb-tb" @mousedown.prevent @click="clearColour" :title="t('Remove text colour')"><span v-html="icons.nocolour"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: fmt.list === 'UL' }" @mousedown.prevent @click="list('UL')" :title="t('Bulleted list')">•≡</button>
-      <button class="eb-tb" :class="{ on: fmt.list === 'OL' }" @mousedown.prevent @click="list('OL')" :title="t('Numbered list')">1≡</button>
+      <button class="eb-tb" :class="{ on: fmt.list === 'UL' }" @mousedown.prevent @click="list('UL')" :title="t('Bulleted list')"><span v-html="icons.ul"></span></button>
+      <button class="eb-tb" :class="{ on: fmt.list === 'OL' }" @mousedown.prevent @click="list('OL')" :title="t('Numbered list')"><span v-html="icons.ol"></span></button>
       <button class="eb-tb" v-for="a in aligns" :key="a.cls" :class="{ on: fmt.align === a.cls }" @mousedown.prevent @click="align(a.cls)" :title="a.label" v-html="a.icon"></button>
-      <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')">⇥</button>
-      <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')">⇤</button>
+      <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')"><span v-html="icons.indent"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')"><span v-html="icons.outdent"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="tableOpen = true" :title="t('Insert table')">▦</button>
-      <button class="eb-tb" @mousedown.prevent @click="boxOpen = !boxOpen" :title="t('Insert box')">▢</button>
-      <template v-if="boxOpen">
-        <button v-for="b in boxes" :key="b.variant" class="eb-tb" @mousedown.prevent @click="addBox(b.variant); boxOpen = false" :title="b.label">{{ b.icon }}</button>
-      </template>
-      <button class="eb-tb" @mousedown.prevent @click="ruleOpen = !ruleOpen" :title="t('Insert rule')">―</button>
-      <template v-if="ruleOpen">
-        <button v-for="r in rules" :key="r.cls" class="eb-tb" @mousedown.prevent @click="addRule(r.cls); ruleOpen = false" :title="r.label">{{ r.icon }}</button>
-      </template>
-      <button class="eb-tb" @mousedown.prevent @click="addPageBreak" :title="t('Page break')">⇩⇧</button>
-      <button class="eb-tb" @mousedown.prevent @click="openMath" :title="t('Insert formula (MathML)')">∑</button>
-      <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')">✕</button>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'insert' }" @mousedown.prevent @click="toggleMenu('insert')" :title="t('Insert')">
+          <span v-html="icons.plus"></span><span class="lbl">{{ t('Insert') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'insert'" @mousedown.prevent>
+          <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
+          <div class="eb-menu-sep"></div>
+          <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
+          <div class="eb-menu-sep"></div>
+          <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
+          <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
+          <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+        </div>
+      </span>
+      <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'">↶</button>
-      <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'">↷</button>
+      <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: guides }" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')">⌗</button>
-      <span class="state" style="margin-left:auto">{{ t('{n} characters', { n: counts }) }}</span>
+      <button class="eb-tb" :class="{ on: guides }" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')"><span v-html="icons.guides"></span></button>
+      <span class="eb-num" :title="t('Zoom')">
+        <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
+        <button class="eb-tb text zoomv" @mousedown.prevent @click="zoom = 100">{{ zoom }}%</button>
+        <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
+      </span>
     </div>
 
-    <div class="eb-desk">
-      <div class="eb-paperwrap">
-        <div id="eb-canvas" class="eb-paper eb-doc" :class="{ 'font-sans': doc.paper.font === 'sans', noguides: !guides }"
+    <div class="eb-desk" :class="{ empty: !doc.id }">
+      <div class="eb-paperwrap" v-show="doc.id" :style="{ zoom: zoom / 100 }">
+        <div id="eb-canvas" class="eb-paper eb-doc" :class="{ noguides: !guides }"
           :style="paperStyle" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true"></div>
       </div>
+      <div class="eb-empty" v-if="!doc.id">
+        <span class="mark" v-html="logo"></span>
+        <p>{{ t('No document is open.') }}</p>
+        <button class="eb-btn primary" @click="newDoc">{{ t('New document') }}</button>
+      </div>
+    </div>
+
+    <div class="eb-status" v-if="doc.id">
+      <span class="grow">{{ doc.name }}</span>
+      <span>{{ t('{n} pages', { n: pageCount }) }}</span>
+      <span>{{ t('{n} characters', { n: counts }) }}</span>
+      <span>{{ paperLabel }}</span>
     </div>
   </section>
 
@@ -1237,14 +1497,20 @@
           <div class="eb-field"><label>{{ t('Right margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.right" @change="touch"></div>
         </div>
         <div class="eb-row">
-          <div class="eb-field">
-            <label>{{ t('Typeface') }}</label>
-            <select v-model="doc.paper.font" @change="touch">
-              <option value="serif">{{ t('Serif (Mincho)') }}</option>
-              <option value="sans">{{ t('Sans serif (Gothic)') }}</option>
-            </select>
-          </div>
           <div class="eb-field"><label>{{ t('Body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
+          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
+        </div>
+        <div class="eb-field">
+          <label>{{ t('Typefaces') }}</label>
+          <div class="font-rows">
+            <button v-for="r in fontRoles" :key="r.key" class="font-row" @click="openFonts(r.key)">
+              <span class="role">{{ r.label }}</span>
+              <span class="fam" :style="{ fontFamily: fontPreviewStack(fontsInUse[r.key]) }">{{ fontsInUse[r.key] }}</span>
+              <span class="tag" v-if="!doc.paper.fonts[r.key]">{{ t('default') }}</span>
+              <span class="caret" v-html="icons.down"></span>
+            </button>
+          </div>
+          <p class="eb-note">{{ t('Any family on Google Fonts can be used. The document carries its typefaces with it, so the file looks the same on a machine where they are not installed.') }}</p>
         </div>
         <p class="eb-note">{{ t('Page numbers and running headers come from your browser print dialogue: browsers do not yet support headers inside the page rule. Everything else here is written into the file.') }}</p>
       </div>
@@ -1307,6 +1573,48 @@
     </div>
   </div>
 
+  <!-- typeface picker -->
+  <div v-if="fontsOpen" class="eb-modal-back" @click="closeFonts">
+    <div class="eb-modal tall" @click.stop>
+      <h3><span v-html="icons.text"></span> {{ t('Typeface') }} — {{ fontRoleLabel }}</h3>
+      <div class="body">
+        <div class="font-search">
+          <span v-html="icons.search"></span>
+          <input type="text" v-model="fontQuery" @input="fontPage = 1" :placeholder="t('Search Google Fonts…')">
+        </div>
+        <div class="chips">
+          <button v-for="c in fontCats" :key="c.key" class="chip" :class="{ on: fontCat === c.key }" @click="fontCat = c.key; fontPage = 1">{{ c.label }}</button>
+        </div>
+        <div class="chips">
+          <select v-model="fontScript" @change="fontPage = 1">
+            <option value="auto">{{ t('Script of this document') }} — {{ scriptLabel(docScript) }}</option>
+            <option value="all">{{ t('Every script') }}</option>
+            <option v-for="sc in fontScripts" :key="sc" :value="sc">{{ scriptLabel(sc) }}</option>
+          </select>
+          <span class="count">{{ t('{n} families', { n: fontResults.length }) }}</span>
+        </div>
+        <div class="font-list">
+          <button class="font-item" :class="{ on: !doc.paper.fonts[fontRole] }" @click="chooseFont('')">
+            <span class="nm">{{ t('Default for this language') }}</span>
+            <span class="meta">{{ defaultFontName }}</span>
+          </button>
+          <button v-for="f in fontPageItems" :key="f.f" class="font-item" :class="{ on: doc.paper.fonts[fontRole] === f.f }" @click="chooseFont(f.f)">
+            <span class="nm" :style="{ fontFamily: fontPreviewStack(f.f) }">{{ f.f }}</span>
+            <span class="meta">{{ catLabel(f.c) }} · {{ t('{n} weights', { n: f.w.length }) }}</span>
+          </button>
+          <p class="hint" v-if="!fontResults.length && fontsLoading">{{ t('Loading…') }}</p>
+          <p class="hint" v-if="!fontResults.length && !fontsLoading">{{ t('No family matches that.') }}</p>
+        </div>
+        <button class="eb-btn wide" v-if="fontPageItems.length < fontResults.length" @click="fontPage++">{{ t('Show more') }}</button>
+        <div class="eb-field">
+          <label>{{ t('Preview') }}</label>
+          <div class="font-sample" :style="{ fontFamily: fontPreviewStack(previewFamily) }">{{ sampleText }}</div>
+        </div>
+      </div>
+      <div class="foot"><button class="eb-btn primary" @click="closeFonts">{{ t('Done') }}</button></div>
+    </div>
+  </div>
+
   <!-- settings -->
   <div v-if="settingsOpen" class="eb-modal-back" @click="settingsOpen = false">
     <div class="eb-modal" @click.stop>
@@ -1365,7 +1673,20 @@
       return {
         version: '',
         logo: LOGO,
+        icons: ICONS,
         sideOpen: true,
+        zoom: 100,
+        menu: '',
+        pageCount: 1,
+        fontsOpen: false,
+        fontRole: 'body',
+        fontQuery: '',
+        fontCat: 'all',
+        fontScript: 'auto',
+        fontPage: 1,
+        fontsLoading: false,
+        fontList: [],
+        fontScripts: [],
         docs: [],
         doc: { id: 0, name: '', title: '', paper: normalisePaper(null), lang: 'ja', foreign: false },
         dirty: false,
@@ -1397,6 +1718,7 @@
       paperStyle() {
         const p = normalisePaper(this.doc.paper);
         const s = sheet(p);
+        const f = resolveFonts(p, this.doc.lang);
         return {
           '--eb-paper-w': s.w + 'mm',
           '--eb-paper-h': s.h + 'mm',
@@ -1405,10 +1727,78 @@
           '--eb-mb': p.margin.bottom + 'mm',
           '--eb-ml': p.margin.left + 'mm',
           '--eb-pageh': (s.h - p.margin.top - p.margin.bottom) + 'mm',
+          '--eb-font-body': fontStack(f.body, 'serif'),
+          '--eb-font-head': fontStack(f.head, 'sans'),
+          '--eb-font-mono': fontStack(f.mono, 'mono'),
           fontSize: p.fontSize + 'pt',
+          lineHeight: String(p.lineHeight),
         };
       },
       mathPreview() { return sanitiseHtml(this.math.source); },
+      fontsInUse() {
+        const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
+        return { body: f.body, heading: f.head, mono: f.mono };
+      },
+      fontRoles() {
+        return [
+          { key: 'body', label: this.t('Body text') },
+          { key: 'heading', label: this.t('Headings') },
+          { key: 'mono', label: this.t('Preformatted') },
+        ];
+      },
+      fontRoleLabel() {
+        const r = this.fontRoles.find((x) => x.key === this.fontRole);
+        return r ? r.label : '';
+      },
+      fontCats() {
+        return [
+          { key: 'all', label: this.t('All') },
+          { key: 'serif', label: this.t('Serif') },
+          { key: 'sans', label: this.t('Sans serif') },
+          { key: 'display', label: this.t('Display') },
+          { key: 'handwriting', label: this.t('Handwriting') },
+          { key: 'mono', label: this.t('Monospace') },
+        ];
+      },
+      docScript() { return scriptFor(this.doc.lang); },
+      defaultFontName() {
+        const def = defaultFonts(this.doc.lang);
+        if (this.fontRole === 'mono') { return def.mono; }
+        if (this.fontRole === 'heading') { return def.sans; }
+        return def[this.doc.paper.font === 'sans' ? 'sans' : 'serif'];
+      },
+      fontResults() {
+        const q = this.fontQuery.trim().toLowerCase();
+        const script = this.fontScript === 'auto' ? this.docScript : this.fontScript;
+        return this.fontList.filter((f) => {
+          if (q && f.f.toLowerCase().indexOf(q) < 0) { return false; }
+          if (this.fontCat !== 'all' && f.c !== this.fontCat) { return false; }
+          if (this.fontScript !== 'all' && script && f.s.indexOf(script) < 0) { return false; }
+          return true;
+        });
+      },
+      fontPageItems() { return this.fontResults.slice(0, this.fontPage * 24); },
+      previewFamily() { return this.doc.paper.fonts[this.fontRole] || this.defaultFontName; },
+      sampleText() {
+        const samples = {
+          japanese: 'あの日見た花の名前を僕達はまだ知らない。永字八法 1234567890',
+          'chinese-simplified': '天地玄黄，宇宙洪荒。日月盈昃，辰宿列张。1234567890',
+          'chinese-traditional': '天地玄黃，宇宙洪荒。日月盈昃，辰宿列張。1234567890',
+          korean: '다람쥐 헌 쳇바퀴에 타고파. 1234567890',
+          arabic: 'نص حكيم له سر قاطع وذو شأن عظيم ١٢٣٤٥٦٧٨٩٠',
+          hebrew: 'דג סקרן שט בים מאוכזב ולפתע מצא חברה 1234567890',
+          devanagari: 'ऋषियों को सताने वाले दुष्ट राक्षसों के राजा रावण का 1234567890',
+          thai: 'เป็นมนุษย์สุดประเสริฐเลิศคุณค่า ๑๒๓๔๕๖๗๘๙๐',
+          cyrillic: 'Съешь же ещё этих мягких французских булок 1234567890',
+          vietnamese: 'Do bạch kim rất quý nên sẽ dùng để lắp vô xe. 1234567890',
+        };
+        return samples[this.docScript] || 'The quick brown fox jumps over the lazy dog. 1234567890';
+      },
+      paperLabel() {
+        const p = normalisePaper(this.doc.paper);
+        const o = p.orientation === 'landscape' ? this.t('Landscape') : this.t('Portrait');
+        return p.size + ' ' + o + ' · ' + p.margin.top + '/' + p.margin.right + '/' + p.margin.bottom + '/' + p.margin.left + ' mm';
+      },
       highlights() {
         return [
           { key: 'mark', color: '#fff3a3', label: this.t('Yellow') },
@@ -1506,6 +1896,17 @@
           };
           canvas().innerHTML = parsed.body || '<p><br></p>';
           normaliseCanvas(this.t('Page break'));
+          // A family the built-in list does not know needs the catalogue, or the
+          // saved file would lose its stylesheet link on the next save.
+          const chosen = Object.values(parsed.paper.fonts || {}).filter(Boolean);
+          if (chosen.some((f) => !knownFont(f)) && !this.fontList.length) {
+            loadFonts().then((cat) => {
+              this.fontList = cat.families || [];
+              this.fontScripts = cat.scripts || [];
+              this.applyDocFonts();
+            }).catch(() => { /* the fallback stack still renders */ });
+          }
+          this.applyDocFonts();
           history.reset();
           this.dirty = false;
           this.savedAt = (d.mtime || 0) * 1000;
@@ -1606,6 +2007,18 @@
       recount() {
         const c = canvas();
         this.counts = c ? c.textContent.replace(/\s/g, '').length : 0;
+        this.repaginate();
+      },
+      /** How many sheets this would print on, near enough to be worth showing. */
+      repaginate() {
+        const c = canvas();
+        if (!c) { return; }
+        const p = normalisePaper(this.doc.paper);
+        const mm = 96 / 25.4;
+        const pageH = (sheet(p).h - p.margin.top - p.margin.bottom) * mm;
+        const flow = c.scrollHeight - (p.margin.top + p.margin.bottom) * mm;
+        const breaks = c.querySelectorAll('.eb-pagebreak').length;
+        this.pageCount = Math.max(1, Math.ceil(Math.max(flow, 1) / pageH) + breaks);
       },
       refreshState() {
         if (!canvas()) { return; }
@@ -1664,6 +2077,75 @@
           this.run(() => insertMath(src, block));
         } catch (e) { this.notify(this.t('That is not valid MathML.')); }
       },
+      // ---- typefaces ----
+      fontPreviewStack(family) { return fontStack(family, 'sans'); },
+      catLabel(c) {
+        const m = this.fontCats.find((x) => x.key === c);
+        return m ? m.label : c;
+      },
+      scriptLabel(code) {
+        const names = {
+          latin: this.t('Latin'), 'latin-ext': this.t('Latin (extended)'), cyrillic: this.t('Cyrillic'),
+          'cyrillic-ext': this.t('Cyrillic (extended)'), greek: this.t('Greek'), 'greek-ext': this.t('Greek (extended)'),
+          vietnamese: this.t('Vietnamese'), japanese: this.t('Japanese'), korean: this.t('Korean'),
+          'chinese-simplified': this.t('Chinese (simplified)'), 'chinese-traditional': this.t('Chinese (traditional)'),
+          'chinese-hongkong': this.t('Chinese (Hong Kong)'), arabic: this.t('Arabic'), hebrew: this.t('Hebrew'),
+          devanagari: this.t('Devanagari'), bengali: this.t('Bengali'), tamil: this.t('Tamil'), telugu: this.t('Telugu'),
+          thai: this.t('Thai'), khmer: this.t('Khmer'), myanmar: this.t('Burmese'), sinhala: this.t('Sinhala'),
+          gujarati: this.t('Gujarati'), kannada: this.t('Kannada'), malayalam: this.t('Malayalam'),
+          oriya: this.t('Odia'), gurmukhi: this.t('Gurmukhi'), armenian: this.t('Armenian'),
+          georgian: this.t('Georgian'), ethiopic: this.t('Ethiopic'), math: this.t('Mathematics'), symbols: this.t('Symbols'),
+        };
+        return names[code] || code;
+      },
+      async openFonts(role) {
+        this.fontRole = role;
+        this.fontsOpen = true;
+        this.menu = '';
+        this.fontQuery = '';
+        this.fontPage = 1;
+        this.fontCat = 'all';
+        if (!this.fontList.length) {
+          this.fontsLoading = true;
+          try {
+            const cat = await loadFonts();
+            this.fontList = cat.families || [];
+            this.fontScripts = cat.scripts || [];
+          } catch (e) {
+            this.notify(this.t('Could not load the font list: {msg}', { msg: e.message }));
+          } finally { this.fontsLoading = false; }
+        }
+      },
+      closeFonts() {
+        this.fontsOpen = false;
+        linkStylesheet('eb-font-preview', '');
+      },
+      chooseFont(family) {
+        this.doc.paper.fonts[this.fontRole] = family;
+        this.applyDocFonts();
+        this.touch();
+      },
+      /** Load the families this document uses, for the editor's own canvas. */
+      applyDocFonts() {
+        const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
+        linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono]));
+      },
+      /** Load just enough of each listed family to draw its own name. */
+      loadPreviewFonts() {
+        const names = this.fontPageItems.map((f) => f.f).slice(0, 24);
+        if (!names.length) { linkStylesheet('eb-font-preview', ''); return; }
+        const text = names.join('') + this.sampleText;
+        linkStylesheet('eb-font-preview', fontsUrl(names, text.slice(0, 1200)));
+      },
+
+      toggleMenu(key) { this.menu = this.menu === key ? '' : key; },
+      stepSize(d) {
+        const next = Math.min(36, Math.max(6, Math.round((Number(this.doc.paper.fontSize) + d) * 2) / 2));
+        this.doc.paper.fontSize = next;
+      },
+      stepZoom(d) { this.zoom = Math.min(200, Math.max(50, this.zoom + d)); },
+      clearHighlight() { this.run(() => clearMarks()); },
+
       undo() { canvas().focus(); if (history.undo()) { this.touch(); this.refreshState(); this.recount(); } },
       redo() { canvas().focus(); if (history.redo()) { this.touch(); this.refreshState(); this.recount(); } },
 
@@ -1749,6 +2231,12 @@
     },
     watch: {
       'doc.id'(id) { if (id) { window.localStorage.setItem('eb-last-doc', String(id)); } },
+      'doc.paper.fonts': { deep: true, handler() { this.applyDocFonts(); } },
+      'doc.paper.font'() { this.applyDocFonts(); },
+      'doc.paper.fontSize'() { this.touch(); this.$nextTick(() => this.repaginate()); },
+      'doc.paper.lineHeight'() { this.touch(); this.$nextTick(() => this.repaginate()); },
+      fontPageItems() { this.loadPreviewFonts(); },
+      zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); },
       'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
@@ -1764,6 +2252,11 @@
       if (stored != null) { this.autosave = stored === '1'; }
       const g = window.localStorage.getItem('eb-guides');
       if (g != null) { this.guides = g === '1'; }
+      const z = Number(window.localStorage.getItem('eb-zoom') || 0);
+      if (z >= 50 && z <= 200) { this.zoom = z; }
+      document.addEventListener('click', (e) => {
+        if (this.menu && !e.target.closest('.eb-pop')) { this.menu = ''; }
+      });
 
       const c = canvasEl;
       c.addEventListener('beforeinput', () => history.push(false));
