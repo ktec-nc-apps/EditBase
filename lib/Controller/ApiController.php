@@ -6,6 +6,7 @@ namespace OCA\EditBase\Controller;
 
 use OCA\EditBase\AppInfo\Application;
 use OCA\EditBase\Service\DocumentService;
+use OCA\EditBase\Service\FileBrowser;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -23,6 +24,7 @@ class ApiController extends Controller {
 	public function __construct(
 		IRequest $request,
 		private DocumentService $documents,
+		private FileBrowser $files,
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
@@ -126,6 +128,16 @@ class ApiController extends Controller {
 			$data = json_decode((string)file_get_contents($file), true);
 			return is_array($data) ? $data : ['families' => [], 'count' => 0];
 		});
+	}
+
+	#[NoAdminRequired]
+	public function browseFiles(): JSONResponse {
+		return $this->run(fn () => $this->files->browse($this->uid(), (string)($this->request->getParam('path') ?? '')));
+	}
+
+	#[NoAdminRequired]
+	public function fileImage(int $id): JSONResponse {
+		return $this->run(fn () => $this->files->image($this->uid(), $id));
 	}
 
 	#[NoAdminRequired]

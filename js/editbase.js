@@ -286,8 +286,13 @@
 .eb-doc hr.eb-rule-thick { border-top-width: 2pt; }
 .eb-doc hr.eb-rule-dashed { border-top-style: dashed; }
 .eb-doc img { max-width: 100%; height: auto; }
-.eb-doc figure { margin: 1.2em 0; text-align: center; break-inside: avoid; }
+.eb-doc figure { margin: 1.2em auto; text-align: center; break-inside: avoid; }
 .eb-doc figcaption { font-size: .88em; color: #444; margin-top: .4em; }
+.eb-doc figcaption:empty { display: none; }
+.eb-doc figure.eb-img-s { max-width: 34%; }
+.eb-doc figure.eb-img-m { max-width: 62%; }
+.eb-doc figure.eb-img-l { max-width: 100%; }
+.eb-doc figure.eb-img img { width: 100%; height: auto; }
 
 /* callout boxes — borders rather than fills, because browsers do not print
    background colours unless the reader turns them on */
@@ -361,6 +366,8 @@
 .eb-paper p:empty::after, .eb-paper h1:empty::after, .eb-paper h2:empty::after,
 .eb-paper h3:empty::after, .eb-paper h4:empty::after, .eb-paper li:empty::after { content: ""; display: inline-block; }
 .eb-paper [contenteditable="false"] { user-select: none; }
+.eb-paper figcaption:empty { display: block; min-height: 1.3em; }
+.eb-paper figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
 .eb-paper table.eb-table td:focus, .eb-paper table.eb-table th:focus { outline: 2px solid #2563eb33; }
 `;
 
@@ -943,6 +950,182 @@
     return table;
   }
 
+  // ---- pictures ----------------------------------------------------------------
+  // A picture is embedded, not linked. A document that points back at Nextcloud for
+  // its images stops being a document as soon as it leaves Nextcloud.
+  function insertImage(dataUrl, alt, size) {
+    const fig = document.createElement('figure');
+    fig.className = 'eb-img ' + (size || 'eb-img-m');
+    const img = document.createElement('img');
+    img.setAttribute('src', dataUrl);
+    img.setAttribute('alt', alt || '');
+    fig.appendChild(img);
+    const cap = document.createElement('figcaption');
+    fig.appendChild(cap);
+    insertBlockNode(fig);
+    const after = document.createElement('p');
+    after.appendChild(document.createElement('br'));
+    fig.parentNode.insertBefore(after, fig.nextSibling);
+    placeCaretIn(cap);
+    return fig;
+  }
+  function imageAt(node) {
+    let n = node;
+    if (!n) {
+      const r = getRange();
+      n = r ? r.startContainer : null;
+    }
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    while (n && n !== canvas()) {
+      if (n.nodeName === 'FIGURE' && n.classList.contains('eb-img')) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function setImageSize(cls) {
+    const fig = imageAt();
+    if (!fig) { return; }
+    ['eb-img-s', 'eb-img-m', 'eb-img-l'].forEach((c) => fig.classList.remove(c));
+    fig.classList.add(cls);
+  }
+  function deleteImage() {
+    const fig = imageAt();
+    if (!fig) { return; }
+    const after = fig.nextElementSibling;
+    fig.remove();
+    placeCaretIn(after || canvas().lastElementChild);
+  }
+
+  // ---- tables ------------------------------------------------------------------
+  // A table you can only create is not much use; these work on whichever cell the
+  // caret is in, which is how every other editor behaves and how people expect it.
+  function cellAt(node) {
+    let n = node;
+    if (!n) {
+      const r = getRange();
+      n = r ? r.startContainer : null;
+    }
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    while (n && n !== canvas()) {
+      if (n.nodeName === 'TD' || n.nodeName === 'TH') { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function tableOf(cell) {
+    let n = cell;
+    while (n && n !== canvas()) {
+      if (n.nodeName === 'TABLE') { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function tableRows(table) { return Array.from(table.querySelectorAll('tr')); }
+  function cellIndex(cell) { return Array.prototype.indexOf.call(cell.parentNode.children, cell); }
+  function blankCell(tag) {
+    const c = document.createElement(tag || 'TD');
+    c.appendChild(document.createElement('br'));
+    return c;
+  }
+
+  function addRow(dir) {
+    const cell = cellAt();
+    if (!cell) { return; }
+    const row = cell.parentNode;
+    const tr = document.createElement('tr');
+    // A new row is always body cells, even when copied from the header.
+    Array.from(row.children).forEach(() => tr.appendChild(blankCell('TD')));
+    row.parentNode.insertBefore(tr, dir < 0 ? row : row.nextSibling);
+    placeCaretIn(tr.firstChild);
+  }
+  function addColumn(dir) {
+    const cell = cellAt();
+    if (!cell) { return; }
+    const table = tableOf(cell);
+    const idx = cellIndex(cell);
+    if (!table) { return; }
+    tableRows(table).forEach((row) => {
+      const ref = row.children[idx];
+      const fresh = blankCell(ref ? ref.nodeName : 'TD');
+      row.insertBefore(fresh, dir < 0 ? ref : (ref ? ref.nextSibling : null));
+    });
+    placeCaretIn(cell.parentNode.children[dir < 0 ? idx : idx + 1]);
+  }
+  function deleteRow() {
+    const cell = cellAt();
+    if (!cell) { return; }
+    const row = cell.parentNode;
+    const table = tableOf(cell);
+    const rows = tableRows(table);
+    if (rows.length <= 1) { return deleteTable(); }
+    const next = row.nextElementSibling || row.previousElementSibling;
+    row.remove();
+    placeCaretIn(next && next.firstChild ? next.firstChild : table);
+  }
+  function deleteColumn() {
+    const cell = cellAt();
+    if (!cell) { return; }
+    const table = tableOf(cell);
+    const idx = cellIndex(cell);
+    if (cell.parentNode.children.length <= 1) { return deleteTable(); }
+    tableRows(table).forEach((row) => {
+      if (row.children[idx]) { row.children[idx].remove(); }
+    });
+    const row = tableRows(table)[0];
+    placeCaretIn(row ? (row.children[Math.min(idx, row.children.length - 1)] || row) : table);
+  }
+  function deleteTable() {
+    const cell = cellAt();
+    const table = cell ? tableOf(cell) : null;
+    if (!table) { return; }
+    const after = table.nextElementSibling;
+    table.remove();
+    placeCaretIn(after || canvas().lastElementChild);
+  }
+  /** Turn the first row into header cells, or back into ordinary ones. */
+  function toggleHeaderRow() {
+    const cell = cellAt();
+    const table = cell ? tableOf(cell) : null;
+    if (!table) { return; }
+    const row = tableRows(table)[0];
+    if (!row) { return; }
+    const toHeader = row.children[0] && row.children[0].nodeName === 'TD';
+    Array.from(row.children).forEach((c) => {
+      const fresh = document.createElement(toHeader ? 'th' : 'td');
+      while (c.firstChild) { fresh.appendChild(c.firstChild); }
+      Array.from(c.attributes).forEach((a) => fresh.setAttribute(a.name, a.value));
+      c.parentNode.replaceChild(fresh, c);
+    });
+  }
+  function setTableVariant(variant) {
+    const cell = cellAt();
+    const table = cell ? tableOf(cell) : null;
+    if (!table) { return; }
+    table.className = 'eb-table' + (variant ? ' ' + variant : '');
+  }
+  function atLastCell() {
+    const cell = cellAt();
+    if (!cell) { return false; }
+    const cells = Array.from(tableOf(cell).querySelectorAll('th, td'));
+    return cells.indexOf(cell) === cells.length - 1;
+  }
+
+  /** Tab through the cells, adding a row when it runs off the end. */
+  function moveCell(dir) {
+    const cell = cellAt();
+    if (!cell) { return false; }
+    const table = tableOf(cell);
+    const cells = Array.from(table.querySelectorAll('th, td'));
+    const at = cells.indexOf(cell);
+    const next = cells[at + dir];
+    if (next) { placeCaretIn(next); return true; }
+    if (dir > 0) {
+      addRow(1);
+      return true;
+    }
+    return false;
+  }
+
   function insertPageBreak(label) {
     const div = document.createElement('div');
     div.className = 'eb-pagebreak';
@@ -1044,7 +1227,7 @@
   // ---- housekeeping -------------------------------------------------------------
   /** Keep the canvas a flat run of blocks: loose text is what makes contenteditable
    *  produce <div> soup, so it gets a paragraph of its own before that can happen. */
-  function normaliseCanvas(pageBreakLabel) {
+  function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
     let stray = null;
@@ -1075,6 +1258,9 @@
       el.setAttribute('contenteditable', 'false');
       if (pageBreakLabel) { el.setAttribute('data-label', pageBreakLabel); }
     });
+    if (captionLabel) {
+      c.querySelectorAll('figure.eb-img figcaption').forEach((el) => el.setAttribute('data-ph', captionLabel));
+    }
   }
 
   /** Caret position as a plain character offset, so it survives a whole-tree restore. */
@@ -1155,20 +1341,20 @@
   };
 
   /** Run an editing command as one undoable step. */
-  function command(fn, pageBreakLabel) {
+  function command(fn, pageBreakLabel, captionLabel) {
     if (!canvas()) { return; }
     history.push(true);
     try {
       fn();
     } finally {
-      normaliseCanvas(pageBreakLabel);
+      normaliseCanvas(pageBreakLabel, captionLabel);
       history.lastPush = Date.now();
     }
   }
 
   // ---- what is switched on at the caret ------------------------------------------
   function activeFormats() {
-    const state = { block: '', align: '', list: '' };
+    const state = { block: '', align: '', list: '', table: false, tableVariant: '', tableHeader: false, image: false, imageSize: '' };
     Object.keys(INLINE_SPECS).forEach((k) => { state[k] = false; });
     const range = getRange();
     if (!range) { return state; }
@@ -1176,6 +1362,18 @@
     Object.keys(INLINE_SPECS).forEach((k) => {
       state[k] = !!closestMatching(start, INLINE_SPECS[k]);
     });
+    state.image = !!imageAt(start);
+    if (state.image) {
+      const fig = imageAt(start);
+      state.imageSize = ['eb-img-s', 'eb-img-m', 'eb-img-l'].find((c) => fig.classList.contains(c)) || 'eb-img-m';
+    }
+    const cell = cellAt(start);
+    state.table = !!cell;
+    if (cell) {
+      const table = tableOf(cell);
+      state.tableVariant = table ? (table.className.replace('eb-table', '').trim()) : '';
+      state.tableHeader = !!(table && table.querySelector('tr th'));
+    }
     const block = topBlockOf(start);
     if (block) {
       state.block = block.nodeName === 'UL' || block.nodeName === 'OL' ? 'P' : block.nodeName;
@@ -1185,6 +1383,9 @@
       });
       if (block.nodeName === 'LI' && block.parentNode) { state.list = block.parentNode.nodeName; }
     }
+    // Inside a table cell, a figure or anything else the style menu does not offer,
+    // the menu shows Body text rather than going blank.
+    if (['P', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE'].indexOf(state.block) < 0) { state.block = 'P'; }
     return state;
   }
   function closestMatching(node, spec) {
@@ -1252,6 +1453,128 @@
       }
     }
     normaliseCanvas();
+  }
+
+  // ---- find and replace ----------------------------------------------------------
+  // Matching runs over the document's text as one string, so a phrase still matches
+  // when part of it happens to be bold — which is exactly where a per-node search
+  // fails and where people notice.
+  function textMap() {
+    const c = canvas();
+    const chunks = [];
+    let full = '';
+    if (!c) { return { chunks, full }; }
+    const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
+    let n = walker.nextNode();
+    while (n) {
+      if (n.data.length) {
+        chunks.push({ node: n, at: full.length, len: n.data.length });
+        full += n.data;
+      }
+      n = walker.nextNode();
+    }
+    return { chunks, full };
+  }
+  function pointFor(chunks, offset) {
+    for (let i = 0; i < chunks.length; i++) {
+      const ch = chunks[i];
+      if (offset <= ch.at + ch.len) { return { node: ch.node, offset: Math.max(0, offset - ch.at) }; }
+    }
+    const last = chunks[chunks.length - 1];
+    return last ? { node: last.node, offset: last.len } : null;
+  }
+  function rangeBetween(chunks, from, to) {
+    const a = pointFor(chunks, from);
+    const b = pointFor(chunks, to);
+    if (!a || !b) { return null; }
+    const r = document.createRange();
+    r.setStart(a.node, a.offset);
+    r.setEnd(b.node, b.offset);
+    return r;
+  }
+  /** Every occurrence, as [start, end] offsets into the document's text. */
+  function findAll(query, caseSensitive) {
+    const { chunks, full } = textMap();
+    const out = [];
+    if (!query) { return { chunks, hits: out }; }
+    const hay = caseSensitive ? full : full.toLowerCase();
+    const needle = caseSensitive ? query : query.toLowerCase();
+    let at = hay.indexOf(needle);
+    while (at >= 0) {
+      out.push([at, at + needle.length]);
+      at = hay.indexOf(needle, at + Math.max(1, needle.length));
+    }
+    return { chunks, hits: out };
+  }
+  function selectHit(chunks, hit) {
+    const r = rangeBetween(chunks, hit[0], hit[1]);
+    if (!r) { return false; }
+    selectRange(r);
+    const box = r.getBoundingClientRect ? r.getBoundingClientRect() : null;
+    const el = r.startContainer.parentElement;
+    if (el && el.scrollIntoView && (!box || box.height === 0 || box.top < 0 || box.top > window.innerHeight)) {
+      el.scrollIntoView({ block: 'center' });
+    }
+    return true;
+  }
+  /** Replace one occurrence; the caller has already taken a snapshot. */
+  function replaceRange(chunks, hit, text) {
+    const r = rangeBetween(chunks, hit[0], hit[1]);
+    if (!r) { return null; }
+    r.deleteContents();
+    const node = document.createTextNode(text);
+    r.insertNode(node);
+    const after = document.createRange();
+    after.setStartAfter(node);
+    after.collapse(true);
+    selectRange(after);
+    return node;
+  }
+
+  // ---- pictures on the way in ----------------------------------------------------
+  /**
+   * Photographs come off phones at 4000px and 8 MB; embedded whole they would make a
+   * document nobody can open or mail. Anything past the size a page can actually show
+   * is resampled in the browser before it goes in. Vector and animated images are left
+   * exactly as they are — resampling those would destroy them.
+   */
+  function loadImage(src) {
+    // Times out rather than hanging: a picture that will not decode must not leave
+    // the editor waiting for an event that is never coming.
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const timer = setTimeout(() => reject(new Error('image timed out')), 8000);
+      img.onload = () => { clearTimeout(timer); resolve(img); };
+      img.onerror = () => { clearTimeout(timer); reject(new Error('image could not be read')); };
+      img.src = src;
+    });
+  }
+  async function shrinkImage(dataUrl, mime, maxEdge) {
+    const limit = maxEdge || 2200;
+    if (mime === 'image/svg+xml' || mime === 'image/gif') { return dataUrl; }
+    const probe = document.createElement('canvas');
+    if (typeof probe.getContext !== 'function') { return dataUrl; }
+    let img;
+    try { img = await loadImage(dataUrl); } catch (e) { return dataUrl; }
+    const edge = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+    if (edge <= limit) { return dataUrl; }
+    const scale = limit / edge;
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = Math.round((img.naturalWidth || img.width) * scale);
+    canvasEl.height = Math.round((img.naturalHeight || img.height) * scale);
+    const ctx = canvasEl.getContext('2d');
+    if (!ctx) { return dataUrl; }
+    ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
+    const out = mime === 'image/png' ? canvasEl.toDataURL('image/png') : canvasEl.toDataURL('image/jpeg', 0.85);
+    return out.length < dataUrl.length ? out : dataUrl;
+  }
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('file could not be read'));
+      reader.readAsDataURL(file);
+    });
   }
 
   // ---- printing --------------------------------------------------------------------
@@ -1325,6 +1648,18 @@
     search: I('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>'),
     check: I('<path d="M3 8.5 6.5 12 13 4.5"/>'),
     close: I('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    image: I('<rect x="1.8" y="3" width="12.4" height="10" rx="1.2"/><circle cx="5.6" cy="6.6" r="1.1"/><path d="M2.2 11.4 6 8.2l2.6 2.2 2.3-1.8 2.9 2.6"/>'),
+    folder: I('<path d="M1.8 4.2a1 1 0 0 1 1-1h3l1.4 1.6h6a1 1 0 0 1 1 1v6.4a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z"/>'),
+    up: I('<path d="M8 13V3.5M4 7.5 8 3.5l4 4"/>'),
+    search2: I('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>'),
+    rowAbove: I('<rect x="1.8" y="6" width="12.4" height="8.2" rx="1"/><path d="M1.8 10.1h12.4M6 6v8.2M10 6v8.2"/><path d="M8 1.2v3.4M6.4 2.8 8 1.2l1.6 1.6"/>'),
+    rowBelow: I('<rect x="1.8" y="1.8" width="12.4" height="8.2" rx="1"/><path d="M1.8 5.9h12.4M6 1.8v8.2M10 1.8v8.2"/><path d="M8 14.8v-3.4M6.4 13.2 8 14.8l1.6-1.6"/>'),
+    colLeft: I('<rect x="6" y="1.8" width="8.2" height="12.4" rx="1"/><path d="M10.1 1.8v12.4M6 6h8.2M6 10h8.2"/><path d="M1.2 8h3.4M2.8 6.4 1.2 8l1.6 1.6"/>'),
+    colRight: I('<rect x="1.8" y="1.8" width="8.2" height="12.4" rx="1"/><path d="M5.9 1.8v12.4M1.8 6h8.2M1.8 10h8.2"/><path d="M14.8 8h-3.4M13.2 6.4 14.8 8l-1.6 1.6"/>'),
+    rowDel: I('<rect x="1.8" y="2.4" width="12.4" height="7.2" rx="1"/><path d="M1.8 6h12.4M6 2.4v7.2M10 2.4v7.2"/><path d="M5.6 12 10.4 15.2M10.4 12 5.6 15.2"/>'),
+    colDel: I('<rect x="2.4" y="1.8" width="7.2" height="12.4" rx="1"/><path d="M6 1.8v12.4M2.4 6h7.2M2.4 10h7.2"/><path d="M12 5.6 15.2 10.4M15.2 5.6 12 10.4"/>'),
+    header: I('<rect x="1.8" y="2.4" width="12.4" height="11.2" rx="1"/><path d="M1.8 6.2h12.4M6 6.2v7.4M10 6.2v7.4"/><rect x="1.8" y="2.4" width="12.4" height="3.8" fill="currentColor" stroke="none" opacity=".35"/>'),
+    tableDel: I('<rect x="1.8" y="2.4" width="12.4" height="11.2" rx="1"/><path d="M1.8 6.2h12.4M6 2.4v11.2"/><path d="M9.2 9.2 13.6 13.6M13.6 9.2 9.2 13.6"/>'),
   };
 
   const TEMPLATE = `
@@ -1430,6 +1765,7 @@
         </button>
         <div class="eb-menu wide" v-if="menu === 'insert'" @mousedown.prevent>
           <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
+          <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
@@ -1450,6 +1786,51 @@
         <button class="eb-tb text zoomv" @mousedown.prevent @click="zoom = 100">{{ zoom }}%</button>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
       </span>
+    </div>
+
+    <div class="eb-find" v-if="doc.id && find.open">
+      <span class="ic" v-html="icons.search"></span>
+      <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
+      <span class="count">{{ find.hits.length ? (find.index + 1) + ' / ' + find.hits.length : t('none') }}</span>
+      <button class="eb-tb" @click="findNext(-1)" :title="t('Previous')">↑</button>
+      <button class="eb-tb" @click="findNext(1)" :title="t('Next')">↓</button>
+      <label class="opt"><input type="checkbox" v-model="find.caseSensitive" @change="runFind()"> {{ t('Match case') }}</label>
+      <span class="sep"></span>
+      <input type="text" v-model="find.replace" :placeholder="t('Replace with')" @keydown.enter.prevent="replaceOne">
+      <button class="eb-btn" @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
+      <button class="eb-btn" @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
+      <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
+      <span class="grp">{{ t('Picture') }}</span>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-s' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-s')">{{ t('Small') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
+      <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
+      <span class="grp">{{ t('Table') }}</span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowBelow')" :title="t('Insert row below')"><span v-html="icons.rowBelow"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colLeft')" :title="t('Insert column left')"><span v-html="icons.colLeft"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colRight')" :title="t('Insert column right')"><span v-html="icons.colRight"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowDel')" :title="t('Delete row')"><span v-html="icons.rowDel"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colDel')" :title="t('Delete column')"><span v-html="icons.colDel"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" :class="{ on: fmt.tableHeader }" @mousedown.prevent @click="tableCmd('header')" :title="t('First row is a header')"><span v-html="icons.header"></span></button>
+      <select :value="fmt.tableVariant" @change="tableCmd('variant', $event.target.value)" :title="t('Style')">
+        <option value="">{{ t('All borders') }}</option>
+        <option value="rows">{{ t('Horizontal lines only') }}</option>
+        <option value="borderless">{{ t('No borders') }}</option>
+      </select>
+      <span class="sep"></span>
+      <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
+      <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
     </div>
 
     <div class="eb-desk" :class="{ empty: !doc.id }">
@@ -1569,6 +1950,36 @@
       <div class="foot">
         <button class="eb-btn ghost" @click="mathOpen = false">{{ t('Cancel') }}</button>
         <button class="eb-btn primary" @click="addMath">{{ t('Insert') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- pictures from Files -->
+  <div v-if="pickerOpen" class="eb-modal-back" @click="pickerOpen = false">
+    <div class="eb-modal tall" @click.stop>
+      <h3><span v-html="icons.image"></span> {{ t('Insert picture') }}</h3>
+      <div class="body">
+        <div class="fp-path">
+          <button class="eb-btn ghost" :disabled="picker.parent === null || picker.loading" @click="pickerLoad(picker.parent)"><span v-html="icons.up"></span></button>
+          <span class="crumbs">/{{ picker.path }}</span>
+        </div>
+        <div class="font-list">
+          <p class="hint" v-if="picker.loading">{{ t('Loading…') }}</p>
+          <p class="hint" v-if="picker.error">{{ picker.error }}</p>
+          <button v-for="x in picker.entries" :key="x.path" class="fp-item"
+            :class="{ on: picker.selected && picker.selected.path === x.path, dim: !x.is_dir && !x.is_image }"
+            @click="pickerClick(x)" @dblclick="pickerConfirm(x)">
+            <span class="ic" v-html="x.is_dir ? icons.folder : icons.image"></span>
+            <span class="nm">{{ x.name }}</span>
+            <span class="meta" v-if="!x.is_dir">{{ size(x.size) }}</span>
+          </button>
+          <p class="hint" v-if="!picker.loading && !picker.entries.length">{{ t('This folder is empty.') }}</p>
+        </div>
+        <p class="eb-note">{{ t('The picture is embedded in the document itself, so it travels with the file. Large photographs are scaled down on the way in.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="pickerOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : t('Insert') }}</button>
       </div>
     </div>
   </div>
@@ -1703,6 +2114,9 @@
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
+        find: { open: false, query: '', replace: '', hits: [], index: 0, caseSensitive: false },
+        pickerOpen: false,
+        picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '' },
         table: { rows: 3, cols: 3, header: true, variant: '' },
         math: { source: '', block: true },
         paperSizes: Object.keys(PAPERS),
@@ -1895,7 +2309,7 @@
             paper: parsed.paper, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
           canvas().innerHTML = parsed.body || '<p><br></p>';
-          normaliseCanvas(this.t('Page break'));
+          normaliseCanvas(this.t('Page break'), this.t('Caption'));
           // A family the built-in list does not know needs the catalogue, or the
           // saved file would lose its stylesheet link on the next save.
           const chosen = Object.values(parsed.paper.fonts || {}).filter(Boolean);
@@ -1923,6 +2337,7 @@
         const clone = canvas().cloneNode(true);
         clone.querySelectorAll('[contenteditable]').forEach((el) => el.removeAttribute('contenteditable'));
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
+        clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         return stripEditorArtefacts(clone.innerHTML);
       },
       currentHtml() {
@@ -2041,7 +2456,7 @@
           c.focus();
           if (clone) { selectRange(clone); }
         }
-        command(fn, this.t('Page break'));
+        command(fn, this.t('Page break'), this.t('Caption'));
         this.touch();
         this.refreshState();
         this.recount();
@@ -2145,6 +2560,130 @@
       },
       stepZoom(d) { this.zoom = Math.min(200, Math.max(50, this.zoom + d)); },
       clearHighlight() { this.run(() => clearMarks()); },
+      // ---- find and replace ----
+      openFind() {
+        this.find.open = true;
+        const sel = window.getSelection();
+        const picked = sel && !sel.isCollapsed ? sel.toString() : '';
+        if (picked && picked.length < 120) { this.find.query = picked; }
+        this.$nextTick(() => {
+          const el = this.$refs.findInput;
+          if (el) { el.focus(); el.select(); }
+          this.runFind();
+        });
+      },
+      closeFind() {
+        this.find.open = false;
+        this.find.hits = [];
+        canvas().focus();
+      },
+      runFind(keepIndex) {
+        const r = findAll(this.find.query, this.find.caseSensitive);
+        this.find.hits = r.hits;
+        this._findChunks = r.chunks;
+        if (!r.hits.length) { this.find.index = 0; return; }
+        this.find.index = keepIndex ? Math.min(this.find.index, r.hits.length - 1) : 0;
+        selectHit(r.chunks, r.hits[this.find.index]);
+      },
+      findNext(dir) {
+        if (!this.find.hits.length) { return; }
+        const n = this.find.hits.length;
+        this.find.index = (this.find.index + dir + n) % n;
+        selectHit(this._findChunks, this.find.hits[this.find.index]);
+      },
+      replaceOne() {
+        if (!this.find.hits.length) { return; }
+        const hit = this.find.hits[this.find.index];
+        history.push(true);
+        replaceRange(this._findChunks, hit, this.find.replace);
+        normaliseCanvas(this.t('Page break'), this.t('Caption'));
+        this.touch();
+        this.recount();
+        this.runFind(true);
+      },
+      replaceAll() {
+        if (!this.find.hits.length) { return; }
+        history.push(true);
+        // Backwards, so the offsets of the occurrences still to come stay valid —
+        // a replacement only ever shifts the text after it. The node map has to be
+        // rebuilt each time even so, because the nodes themselves have changed.
+        const hits = this.find.hits.slice().reverse();
+        hits.forEach((hit) => {
+          replaceRange(textMap().chunks, hit, this.find.replace);
+        });
+        normaliseCanvas(this.t('Page break'), this.t('Caption'));
+        this.touch();
+        this.recount();
+        const done = hits.length;
+        this.runFind();
+        this.notify(this.t('{n} replaced', { n: done }));
+      },
+
+      // ---- pictures ----
+      openPicker() {
+        this.pickerOpen = true;
+        this.picker.selected = null;
+        this.pickerLoad('');
+      },
+      async pickerLoad(path) {
+        this.picker.loading = true;
+        this.picker.error = '';
+        this.picker.selected = null;
+        try {
+          const r = await api('files/browse?path=' + encodeURIComponent(path || ''));
+          this.picker.path = r.path || '';
+          this.picker.parent = r.parent === undefined ? null : r.parent;
+          this.picker.entries = r.entries || [];
+        } catch (e) {
+          this.picker.error = this.t('Could not open the folder: {msg}', { msg: e.message });
+          this.picker.entries = [];
+        } finally { this.picker.loading = false; }
+      },
+      pickerClick(x) {
+        if (x.is_dir) { this.pickerLoad(x.path); return; }
+        if (x.is_image) { this.picker.selected = x; }
+      },
+      async pickerConfirm(x) {
+        const chosen = x && !x.is_dir ? x : this.picker.selected;
+        if (!chosen || !chosen.is_image || this.picker.busy) { return; }
+        this.picker.busy = true;
+        try {
+          const r = await api('files/' + chosen.id + '/image');
+          const raw = 'data:' + r.mime + ';base64,' + r.data;
+          const url = await shrinkImage(raw, r.mime);
+          this.pickerOpen = false;
+          this.run(() => insertImage(url, r.name, 'eb-img-m'));
+        } catch (e) {
+          this.notify(this.t('Could not read the picture: {msg}', { msg: e.message }));
+        } finally { this.picker.busy = false; }
+      },
+      imageCmd(kind, arg) {
+        if (kind === 'size') { this.run(() => setImageSize(arg)); }
+        if (kind === 'delete') { this.run(() => deleteImage()); }
+      },
+      /** A picture on the clipboard goes straight in, same as one picked from Files. */
+      async insertPastedFiles(files) {
+        for (const file of files) {
+          if (!/^image\//.test(file.type)) { continue; }
+          try {
+            const raw = await readFileAsDataUrl(file);
+            const url = await shrinkImage(raw, file.type);
+            this.run(() => insertImage(url, file.name || '', 'eb-img-m'));
+          } catch (e) {
+            this.notify(this.t('Could not read the picture: {msg}', { msg: e.message }));
+          }
+        }
+      },
+      tableCmd(kind, arg) {
+        const ops = {
+          rowAbove: () => addRow(-1), rowBelow: () => addRow(1),
+          colLeft: () => addColumn(-1), colRight: () => addColumn(1),
+          rowDel: () => deleteRow(), colDel: () => deleteColumn(),
+          header: () => toggleHeaderRow(), variant: () => setTableVariant(arg),
+          delete: () => deleteTable(),
+        };
+        if (ops[kind]) { this.run(ops[kind]); }
+      },
 
       undo() { canvas().focus(); if (history.undo()) { this.touch(); this.refreshState(); this.recount(); } },
       redo() { canvas().focus(); if (history.redo()) { this.touch(); this.refreshState(); this.recount(); } },
@@ -2198,12 +2737,19 @@
           if (k === 'u') { e.preventDefault(); return this.inline('underline'); }
           if (k === 's') { e.preventDefault(); return this.save(); }
           if (k === 'p') { e.preventDefault(); return this.printDoc(); }
+          if (k === 'f') { e.preventDefault(); return this.openFind(); }
+          if (k === 'h') { e.preventDefault(); return this.openFind(); }
           if (k === 'z' && !e.shiftKey) { e.preventDefault(); return this.undo(); }
           if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); return this.redo(); }
         }
         // Tab indents the paragraph instead of leaving the document.
         if (e.key === 'Tab') {
           e.preventDefault();
+          if (cellAt()) {
+            // Only adding a row is a change worth recording; walking is not.
+            if (!e.shiftKey && atLastCell()) { this.run(() => moveCell(1)); } else { moveCell(e.shiftKey ? -1 : 1); this.refreshState(); }
+            return undefined;
+          }
           return this.indent(e.shiftKey ? -1 : 1);
         }
         return undefined;
@@ -2261,7 +2807,17 @@
       const c = canvasEl;
       c.addEventListener('beforeinput', () => history.push(false));
       c.addEventListener('input', () => { this.touch(); this.recount(); });
-      c.addEventListener('paste', (e) => { handlePaste(e, e.shiftKey); this.touch(); this.recount(); });
+      c.addEventListener('paste', (e) => {
+        const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
+        if (files.some((f) => /^image\//.test(f.type))) {
+          e.preventDefault();
+          this.insertPastedFiles(files);
+          return;
+        }
+        handlePaste(e, e.shiftKey);
+        this.touch();
+        this.recount();
+      });
       c.addEventListener('keydown', (e) => this.onKey(e));
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
       window.addEventListener('beforeunload', (e) => {

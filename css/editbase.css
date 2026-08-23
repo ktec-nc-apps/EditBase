@@ -276,3 +276,42 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 .font-row .role { flex: 0 0 92px; font-size: 12.5px; color: var(--muted); }
 .font-row .fam { flex: 1 1 auto; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-row .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+
+/* ---------- contextual bars (table, picture) ---------- */
+.eb-toolbar.sub { background: var(--surface-2); padding: 5px 10px; }
+.eb-toolbar .grp { font-size: 12px; color: var(--muted); font-weight: 600; margin-right: 4px; }
+.eb-toolbar .hint { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.eb-tb.danger { color: var(--danger); }
+.eb-tb.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+/* ---------- find and replace ---------- */
+.eb-find {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.eb-find .ic { color: var(--muted); display: inline-flex; }
+.eb-find input[type=text] {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 9px; padding: 6px 10px; font-size: 14px; min-width: 170px;
+}
+.eb-find input[type=text]:focus { border-color: var(--primary); outline: none; }
+.eb-find .count { font-size: 12px; color: var(--muted); min-width: 62px; font-variant-numeric: tabular-nums; }
+.eb-find .opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.eb-find .eb-btn { padding: 6px 11px; font-size: 13px; }
+
+/* ---------- the Files picker ---------- */
+.fp-path { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fp-path .crumbs { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font-weight: 400;
+  border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 8px; padding: 7px 10px;
+}
+.fp-item:hover { background: var(--surface-2); }
+.fp-item.on { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.fp-item.dim { opacity: .45; }
+.fp-item .ic { display: inline-flex; color: var(--muted); }
+.fp-item .nm { flex: 1 1 auto; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-item .meta { font-size: 11.5px; color: var(--muted); }
+
+/* The picture the caret is in, so it is obvious which one the bar acts on. */
+.eb-paper figure.eb-img:focus-within { outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent); outline-offset: 4px; }

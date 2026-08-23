@@ -12,6 +12,10 @@ return [
 		['name' => 'api#getI18n', 'url' => '/api/i18n/{lang}', 'verb' => 'GET'],
 		['name' => 'api#fonts', 'url' => '/api/fonts', 'verb' => 'GET'],
 
+		// pictures, from the user's own Files
+		['name' => 'api#browseFiles', 'url' => '/api/files/browse', 'verb' => 'GET'],
+		['name' => 'api#fileImage', 'url' => '/api/files/{id}/image', 'verb' => 'GET'],
+
 		// documents (plain .html files in the user's own Files)
 		['name' => 'api#documents', 'url' => '/api/documents', 'verb' => 'GET'],
 		['name' => 'api#createDocument', 'url' => '/api/documents', 'verb' => 'POST'],

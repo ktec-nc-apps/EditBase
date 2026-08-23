@@ -28,7 +28,7 @@ Features:
 - ハイライト・文字色などの装飾を、エディタ特有のゴミではなく整ったHTMLとして適用
 - 数式はネイティブのMathMLで記述 ― 画像も外部レンダラーも使いません
 - エディタ自身が保持する取り消し履歴]]></description>
-	<version>0.1.5</version>
+	<version>0.1.7</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
 	<namespace>EditBase</namespace>
