@@ -292,7 +292,7 @@
 .eb-doc figure.eb-img-s { max-width: 34%; }
 .eb-doc figure.eb-img-m { max-width: 62%; }
 .eb-doc figure.eb-img-l { max-width: 100%; }
-.eb-doc figure.eb-img img { width: 100%; height: auto; }
+.eb-doc figure.eb-img img { width: 100%; height: auto; }\n.eb-doc figure.eb-img-left { float: left; margin: .3em 1.4em .8em 0; }\n.eb-doc figure.eb-img-right { float: right; margin: .3em 0 .8em 1.4em; }\n.eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6, .eb-doc table { clear: both; }\n.eb-doc a { text-decoration: underline; text-underline-offset: 2px; }
 
 /* callout boxes — borders rather than fills, because browsers do not print
    background colours unless the reader turns them on */
@@ -381,7 +381,7 @@
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin-left|margin-right|padding-left|width|height|max-width|border|border-radius|border-color|border-width|border-style|vertical-align|letter-spacing|writing-mode)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin-left|margin-right|margin-top|margin-bottom|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-radius|border-color|border-width|border-style|border-collapse|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout)$/;
 
   function cleanStyle(value) {
     const kept = [];
@@ -518,6 +518,8 @@
   // is meant to stay readable. Everything below works on Ranges and produces the
   // same markup everywhere.
   let canvasEl = null;
+  // The selection a dialog interrupted, so that applying it lands where it was.
+  let ctxRange = null;
   function canvas() { return canvasEl; }
 
   const INLINE_SPECS = {
@@ -678,6 +680,77 @@
       }
     });
     reselectNodes(nodes);
+  }
+
+  // ---- links ---------------------------------------------------------------------
+  function linkAt(node) {
+    let n = node;
+    if (!n) { const r = getRange(); n = r ? r.startContainer : null; }
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    while (n && n !== canvas()) {
+      if (n.nodeName === 'A') { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  /**
+   * What a person types in the address box is usually a bare host, so complete it;
+   * anything a browser must not follow from a saved file is refused outright.
+   */
+  function tidyUrl(url) {
+    const raw = String(url == null ? '' : url).trim();
+    if (!raw) { return ''; }
+    if (/^\s*(javascript|vbscript|data):/i.test(raw)) { return ''; }
+    if (/^([a-z][a-z0-9+.-]*:|#|\/|\.\/|\.\.\/)/i.test(raw)) { return raw; }
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) { return 'mailto:' + raw; }
+    return 'https://' + raw;
+  }
+
+  function applyLink(url, text) {
+    const href = tidyUrl(url);
+    if (!href) { return false; }
+    const existing = linkAt();
+    if (existing) {
+      existing.setAttribute('href', href);
+      if (text && text !== existing.textContent) { existing.textContent = text; }
+      return true;
+    }
+    const range = getRange();
+    if (!range) { return false; }
+    if (range.collapsed) {
+      const a = document.createElement('a');
+      a.setAttribute('href', href);
+      a.textContent = text || href;
+      range.insertNode(a);
+      const after = document.createRange();
+      after.setStartAfter(a);
+      after.collapse(true);
+      selectRange(after);
+      return true;
+    }
+    const nodes = textNodesInRange(range);
+    if (!nodes.length) { return false; }
+    if (text && nodes.length === 1 && text !== nodes[0].data) { nodes[0].data = text; }
+    nodes.forEach((n) => {
+      if (ancestorMatching(n, { tag: 'A' })) { return; }
+      const a = document.createElement('a');
+      a.setAttribute('href', href);
+      n.parentNode.insertBefore(a, n);
+      a.appendChild(n);
+    });
+    reselectNodes(nodes);
+    return true;
+  }
+
+  function removeLink() {
+    const a = linkAt();
+    if (!a) { return false; }
+    const parent = a.parentNode;
+    while (a.firstChild) { parent.insertBefore(a.firstChild, a); }
+    parent.removeChild(a);
+    parent.normalize();
+    return true;
   }
 
   /** Nothing is selected: start a wrapper and leave the caret inside it. */
@@ -991,6 +1064,32 @@
     ['eb-img-s', 'eb-img-m', 'eb-img-l'].forEach((c) => fig.classList.remove(c));
     fig.classList.add(cls);
   }
+  const IMG_FLOATS = ['eb-img-left', 'eb-img-right'];
+  /** Text wrapping is a float in HTML, which is exactly what prints too. */
+  function setImageFloat(kind) {
+    const fig = imageAt();
+    if (!fig) { return; }
+    IMG_FLOATS.forEach((c) => fig.classList.remove(c));
+    if (kind === 'left' || kind === 'right') { fig.classList.add('eb-img-' + kind); }
+  }
+  function imageFloat() {
+    const fig = imageAt();
+    if (!fig) { return ''; }
+    if (fig.classList.contains('eb-img-left')) { return 'left'; }
+    if (fig.classList.contains('eb-img-right')) { return 'right'; }
+    return '';
+  }
+  function setImageAlt(text) {
+    const fig = imageAt();
+    const img = fig && fig.querySelector('img');
+    if (img) { img.setAttribute('alt', String(text == null ? '' : text)); }
+  }
+  function imageAlt() {
+    const fig = imageAt();
+    const img = fig && fig.querySelector('img');
+    return img ? (img.getAttribute('alt') || '') : '';
+  }
+
   function deleteImage() {
     const fig = imageAt();
     if (!fig) { return; }
@@ -1106,6 +1205,146 @@
     if (!table) { return; }
     table.className = 'eb-table' + (variant ? ' ' + variant : '');
   }
+  /**
+   * The table as a grid of positions, so that a cell already carrying a colspan or
+   * rowspan occupies every square it covers. Merging and splitting both need this:
+   * the DOM order of <td>s says nothing about which column they are in.
+   */
+  function tableGrid(table) {
+    const grid = [];
+    tableRows(table).forEach((tr, r) => {
+      if (!grid[r]) { grid[r] = []; }
+      let c = 0;
+      Array.from(tr.children).forEach((cell) => {
+        while (grid[r][c]) { c++; }
+        const cs = Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10));
+        const rs = Math.max(1, parseInt(cell.getAttribute('rowspan') || '1', 10));
+        for (let i = 0; i < rs; i++) {
+          if (!grid[r + i]) { grid[r + i] = []; }
+          for (let j = 0; j < cs; j++) { grid[r + i][c + j] = cell; }
+        }
+        c += cs;
+      });
+    });
+    return grid;
+  }
+  function cellBox(grid, cell) {
+    let r0 = Infinity; let r1 = -1; let c0 = Infinity; let c1 = -1;
+    grid.forEach((row, r) => row.forEach((it, c) => {
+      if (it !== cell) { return; }
+      r0 = Math.min(r0, r); r1 = Math.max(r1, r);
+      c0 = Math.min(c0, c); c1 = Math.max(c1, c);
+    }));
+    return r1 < 0 ? null : { r0, r1, c0, c1 };
+  }
+  function setSpan(cell, name, value) {
+    if (value > 1) { cell.setAttribute(name, String(value)); } else { cell.removeAttribute(name); }
+  }
+
+  /**
+   * Merge every cell the selection touches. The rectangle is taken from the two
+   * ends, and a merge that would cut through a cell already spanning out of it is
+   * refused rather than guessed at.
+   */
+  function mergeCells() {
+    const range = getRange();
+    const start = cellAt(range ? range.startContainer : null);
+    if (!start) { return false; }
+    const table = tableOf(start);
+    const end = cellAt(range ? range.endContainer : null) || start;
+    if (!table || tableOf(end) !== table) { return false; }
+    const grid = tableGrid(table);
+    const a = cellBox(grid, start);
+    const b = cellBox(grid, end);
+    if (!a || !b) { return false; }
+    const r0 = Math.min(a.r0, b.r0); const r1 = Math.max(a.r1, b.r1);
+    const c0 = Math.min(a.c0, b.c0); const c1 = Math.max(a.c1, b.c1);
+    if (r0 === r1 && c0 === c1) { return false; }
+    const inside = [];
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const cell = grid[r] && grid[r][c];
+        if (cell && inside.indexOf(cell) < 0) { inside.push(cell); }
+      }
+    }
+    const ragged = inside.some((cell) => {
+      const box = cellBox(grid, cell);
+      return !box || box.r0 < r0 || box.r1 > r1 || box.c0 < c0 || box.c1 > c1;
+    });
+    if (ragged) { return false; }
+    const keep = grid[r0][c0];
+    inside.forEach((cell) => {
+      if (cell === keep) { return; }
+      const text = cell.textContent.replace(/\u200b/g, '').trim();
+      if (text) {
+        if (keep.textContent.trim()) { keep.appendChild(document.createElement('br')); }
+        keep.appendChild(document.createTextNode(text));
+      }
+      cell.remove();
+    });
+    setSpan(keep, 'colspan', c1 - c0 + 1);
+    setSpan(keep, 'rowspan', r1 - r0 + 1);
+    placeCaretIn(keep);
+    return true;
+  }
+
+  /** Undo a merge: the cell keeps its content and the squares it took come back empty. */
+  function splitCell() {
+    const cell = cellAt();
+    if (!cell) { return false; }
+    const table = tableOf(cell);
+    if (!table) { return false; }
+    const box = cellBox(tableGrid(table), cell);
+    if (!box || (box.r0 === box.r1 && box.c0 === box.c1)) { return false; }
+    cell.removeAttribute('colspan');
+    cell.removeAttribute('rowspan');
+    const rows = tableRows(table);
+    for (let r = box.r0; r <= box.r1; r++) {
+      for (let c = box.c0; c <= box.c1; c++) {
+        if (r === box.r0 && c === box.c0) { continue; }
+        const grid = tableGrid(table);
+        if (grid[r] && grid[r][c]) { continue; }
+        const tr = rows[r];
+        if (!tr) { continue; }
+        let ref = null;
+        Array.from(tr.children).some((child) => {
+          const cb = cellBox(grid, child);
+          if (cb && cb.c0 > c) { ref = child; return true; }
+          return false;
+        });
+        tr.insertBefore(blankCell(cell.nodeName), ref);
+      }
+    }
+    return true;
+  }
+
+  /** Alignment belongs to the cell, so it travels with the table into the file. */
+  function setCellAlign(align) {
+    const range = getRange();
+    const start = cellAt(range ? range.startContainer : null);
+    if (!start) { return false; }
+    const table = tableOf(start);
+    const end = cellAt(range ? range.endContainer : null) || start;
+    const cells = [start];
+    if (table && end !== start && tableOf(end) === table) {
+      const grid = tableGrid(table);
+      const a = cellBox(grid, start); const b = cellBox(grid, end);
+      if (a && b) {
+        for (let r = Math.min(a.r0, b.r0); r <= Math.max(a.r1, b.r1); r++) {
+          for (let c = Math.min(a.c0, b.c0); c <= Math.max(a.c1, b.c1); c++) {
+            const cell = grid[r] && grid[r][c];
+            if (cell && cells.indexOf(cell) < 0) { cells.push(cell); }
+          }
+        }
+      }
+    }
+    cells.forEach((cell) => {
+      if (align) { cell.style.textAlign = align; } else { cell.style.removeProperty('text-align'); }
+      if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+    });
+    return true;
+  }
+
   function atLastCell() {
     const cell = cellAt();
     if (!cell) { return false; }
@@ -1533,55 +1772,50 @@
     e.preventDefault();
     const html = plainOnly ? '' : data.getData('text/html');
     history.push(true);
-    if (html) {
-      const holder = document.createElement('div');
-      holder.innerHTML = html;
-      sanitiseInto(holder);
-      holder.querySelectorAll('*').forEach((el) => {
-        // Word and Google Docs paste a wall of inline styles; keep the structure only.
-        if (el.hasAttribute('style')) {
-          const keep = cleanStyle(el.getAttribute('style'))
-            .split('; ').filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
-          if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
-        }
-        if (el.hasAttribute('class') && !/^eb-/.test(el.getAttribute('class'))) { el.removeAttribute('class'); }
-      });
-      const range = getRange();
-      if (range) {
-        range.deleteContents();
-        const frag = document.createDocumentFragment();
-        while (holder.firstChild) { frag.appendChild(holder.firstChild); }
-        const last = frag.lastChild;
-        range.insertNode(frag);
-        if (last) {
-          const after = document.createRange();
-          after.setStartAfter(last);
-          after.collapse(true);
-          selectRange(after);
-        }
-      }
-    } else {
-      const text = data.getData('text/plain') || '';
-      const range = getRange();
-      if (range) {
-        range.deleteContents();
-        const lines = text.split(/\r?\n/);
-        const frag = document.createDocumentFragment();
-        lines.forEach((line, i) => {
-          if (i) { frag.appendChild(document.createElement('br')); }
-          frag.appendChild(document.createTextNode(line));
-        });
-        const last = frag.lastChild;
-        range.insertNode(frag);
-        if (last) {
-          const after = document.createRange();
-          after.setStartAfter(last);
-          after.collapse(true);
-          selectRange(after);
-        }
-      }
-    }
+    if (html) { pasteHtmlAt(html); } else { pasteTextAt(data.getData('text/plain') || ''); }
     normaliseCanvas();
+  }
+
+  /** Drop a fragment in at the caret and leave the caret after it. */
+  function insertFragmentAt(frag) {
+    const range = getRange();
+    if (!range) { return; }
+    range.deleteContents();
+    const last = frag.lastChild;
+    range.insertNode(frag);
+    if (last) {
+      const after = document.createRange();
+      after.setStartAfter(last);
+      after.collapse(true);
+      selectRange(after);
+    }
+  }
+
+  function pasteHtmlAt(html) {
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    sanitiseInto(holder);
+    holder.querySelectorAll('*').forEach((el) => {
+      // Word and Google Docs paste a wall of inline styles; keep the structure only.
+      if (el.hasAttribute('style')) {
+        const keep = cleanStyle(el.getAttribute('style'))
+          .split('; ').filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
+        if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
+      }
+      if (el.hasAttribute('class') && !/^eb-/.test(el.getAttribute('class'))) { el.removeAttribute('class'); }
+    });
+    const frag = document.createDocumentFragment();
+    while (holder.firstChild) { frag.appendChild(holder.firstChild); }
+    insertFragmentAt(frag);
+  }
+
+  function pasteTextAt(text) {
+    const frag = document.createDocumentFragment();
+    String(text == null ? '' : text).split(/\r?\n/).forEach((line, i) => {
+      if (i) { frag.appendChild(document.createElement('br')); }
+      frag.appendChild(document.createTextNode(line));
+    });
+    insertFragmentAt(frag);
   }
 
   // ---- other apps on this server -------------------------------------------------
@@ -1821,7 +2055,7 @@
   // ---- the chrome (Vue) --------------------------------------------------------
   // The supplied EditBase logo, inline so it needs no extra request and can be
   // themed by the page around it. Kept identical to img/logo.svg.
-  const LOGO = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"334 400 1332 1014\" width=\"1em\" height=\"1em\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"100\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#2e3192\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#e56b00\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"106.22\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"#0000ff\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/></svg>";
+  const LOGO = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"334 400 1332 1014\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"100\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#2e3192\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#e56b00\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"106.22\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"#0000ff\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/></svg>";
 
   // ---- icons -------------------------------------------------------------------
   // Drawn, not typed: emoji and box-drawing characters render differently on every
@@ -2440,6 +2674,148 @@
     </div>
   </div>
 
+  <!-- the right button, as a word processor uses it -->
+  <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtx" @contextmenu.prevent="closeCtx"></div>
+  <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
+    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s">Ctrl+X</span></button>
+    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s">Ctrl+C</span></button>
+    <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s">Ctrl+V</span></button>
+    <button class="ci" @click="ctxDo('pasteText')"><span>{{ t('Paste as plain text') }}</span><span class="s">Ctrl+Shift+V</span></button>
+    <div class="sep"></div>
+
+    <template v-if="ctx.link">
+      <button class="ci" @click="ctxDo('linkOpen')">{{ t('Open the link') }}</button>
+      <button class="ci" @click="ctxDo('link')">{{ t('Edit the link…') }}</button>
+      <button class="ci" @click="ctxDo('linkDel')">{{ t('Remove the link') }}</button>
+    </template>
+    <button v-else class="ci" @click="ctxDo('link')"><span>{{ t('Hyperlink…') }}</span><span class="s">Ctrl+K</span></button>
+    <div class="sep"></div>
+
+    <div class="ci has-sub" @mouseenter="placeFly">
+      <span>{{ t('Paragraph style') }}</span><span class="s">›</span>
+      <div class="fly">
+        <button class="ci" @click="ctxDo('block','P')">{{ t('Body text') }}</button>
+        <button class="ci" @click="ctxDo('block','H1')">{{ t('Heading 1') }}</button>
+        <button class="ci" @click="ctxDo('block','H2')">{{ t('Heading 2') }}</button>
+        <button class="ci" @click="ctxDo('block','H3')">{{ t('Heading 3') }}</button>
+        <button class="ci" @click="ctxDo('block','H4')">{{ t('Heading 4') }}</button>
+        <button class="ci" @click="ctxDo('block','BLOCKQUOTE')">{{ t('Quotation') }}</button>
+        <button class="ci" @click="ctxDo('block','PRE')">{{ t('Preformatted') }}</button>
+      </div>
+    </div>
+    <div class="ci has-sub" @mouseenter="placeFly">
+      <span>{{ t('Character') }}</span><span class="s">›</span>
+      <div class="fly">
+        <button class="ci" @click="ctxDo('inline','bold')"><span>{{ t('Bold') }}</span><span class="s">Ctrl+B</span></button>
+        <button class="ci" @click="ctxDo('inline','italic')"><span>{{ t('Italic') }}</span><span class="s">Ctrl+I</span></button>
+        <button class="ci" @click="ctxDo('inline','underline')"><span>{{ t('Underline') }}</span><span class="s">Ctrl+U</span></button>
+        <button class="ci" @click="ctxDo('inline','strike')">{{ t('Strikethrough') }}</button>
+        <button class="ci" @click="ctxDo('inline','kenten')">{{ t('Emphasis dots') }}</button>
+        <button class="ci" @click="ctxDo('inline','sup')">{{ t('Superscript') }}</button>
+        <button class="ci" @click="ctxDo('inline','sub')">{{ t('Subscript') }}</button>
+        <button class="ci" @click="ctxDo('inline','code')">{{ t('Monospaced') }}</button>
+      </div>
+    </div>
+    <div class="ci has-sub" @mouseenter="placeFly">
+      <span>{{ t('Alignment') }}</span><span class="s">›</span>
+      <div class="fly">
+        <button class="ci" @click="ctxDo('align','left')">{{ t('Left') }}</button>
+        <button class="ci" @click="ctxDo('align','center')">{{ t('Centre') }}</button>
+        <button class="ci" @click="ctxDo('align','right')">{{ t('Right') }}</button>
+        <button class="ci" @click="ctxDo('align','justify')">{{ t('Justified') }}</button>
+      </div>
+    </div>
+    <div class="ci has-sub" @mouseenter="placeFly">
+      <span>{{ t('List') }}</span><span class="s">›</span>
+      <div class="fly">
+        <button class="ci" @click="ctxDo('list','UL')">{{ t('Bulleted list') }}</button>
+        <button class="ci" @click="ctxDo('list','OL')">{{ t('Numbered list') }}</button>
+        <button class="ci" @click="ctxDo('indent',1)"><span>{{ t('Increase indent') }}</span><span class="s">Tab</span></button>
+        <button class="ci" @click="ctxDo('indent',-1)"><span>{{ t('Decrease indent') }}</span><span class="s">Shift+Tab</span></button>
+      </div>
+    </div>
+
+    <template v-if="ctx.table">
+      <div class="sep"></div>
+      <div class="ci has-sub" @mouseenter="placeFly">
+        <span>{{ t('Table') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('table','rowAbove')">{{ t('Insert a row above') }}</button>
+          <button class="ci" @click="ctxDo('table','rowBelow')">{{ t('Insert a row below') }}</button>
+          <button class="ci" @click="ctxDo('table','colLeft')">{{ t('Insert a column to the left') }}</button>
+          <button class="ci" @click="ctxDo('table','colRight')">{{ t('Insert a column to the right') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('table','rowDel')">{{ t('Delete the row') }}</button>
+          <button class="ci" @click="ctxDo('table','colDel')">{{ t('Delete the column') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('merge')">{{ t('Merge the cells') }}</button>
+          <button class="ci" @click="ctxDo('split')">{{ t('Split the cell') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('cellAlign','left')">{{ t('Cell text left') }}</button>
+          <button class="ci" @click="ctxDo('cellAlign','center')">{{ t('Cell text centred') }}</button>
+          <button class="ci" @click="ctxDo('cellAlign','right')">{{ t('Cell text right') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('table','header')">{{ t('Header row') }}</button>
+          <button class="ci" @click="ctxDo('table','delete')">{{ t('Delete the table') }}</button>
+        </div>
+      </div>
+    </template>
+
+    <template v-if="ctx.image">
+      <div class="sep"></div>
+      <div class="ci has-sub" @mouseenter="placeFly">
+        <span>{{ t('Picture') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('image','eb-img-s')">{{ t('Small') }}</button>
+          <button class="ci" @click="ctxDo('image','eb-img-m')">{{ t('Medium') }}</button>
+          <button class="ci" @click="ctxDo('image','eb-img-l')">{{ t('Large') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('float','')">{{ t('No text wrap') }}</button>
+          <button class="ci" @click="ctxDo('float','left')">{{ t('Wrap text on the right') }}</button>
+          <button class="ci" @click="ctxDo('float','right')">{{ t('Wrap text on the left') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('alt')">{{ t('Alternative text…') }}</button>
+          <button class="ci" @click="ctxDo('imageDel')">{{ t('Delete the picture') }}</button>
+        </div>
+      </div>
+    </template>
+
+    <div class="sep"></div>
+    <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
+  </div>
+
+  <!-- a hyperlink -->
+  <div v-if="linkOpen" class="eb-modal-back" @click="linkOpen = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ link.editing ? t('Edit the link…') : t('Hyperlink…') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('Text') }}</label><input type="text" v-model="link.text" :placeholder="t('The words that carry the link')"></div>
+        <div class="eb-field"><label>{{ t('Address') }}</label><input type="text" v-model="link.url" placeholder="example.org/page" @keydown.enter.prevent="applyLinkDialog"></div>
+        <p class="eb-note">{{ t('A bare address becomes https://, and an e-mail address becomes a mailto: link.') }}</p>
+      </div>
+      <div class="foot">
+        <button v-if="link.editing" class="eb-btn ghost" @click="linkOpen = false; ctxDo('linkDel')">{{ t('Remove the link') }}</button>
+        <button class="eb-btn ghost" @click="linkOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyLinkDialog">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- what a reader hears in place of the picture -->
+  <div v-if="altOpen" class="eb-modal-back" @click="altOpen = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Alternative text…') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('Alternative text') }}</label><input type="text" v-model="altText" @keydown.enter.prevent="applyAlt"></div>
+        <p class="eb-note">{{ t('This is what a screen reader says, and what shows if the picture cannot be loaded. It is written into the file as the alt attribute.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="altOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyAlt">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="toast" class="eb-toast">{{ toast }}</div>
 </div>
 `;
@@ -2480,6 +2856,11 @@
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false },
+        linkOpen: false,
+        link: { url: '', text: '', editing: false },
+        altOpen: false,
+        altText: '',
         find: { open: false, query: '', replace: '', hits: [], index: 0, caseSensitive: false },
         sources: {},
         sourceOpen: false,
@@ -3330,6 +3711,179 @@
         if (ops[kind]) { this.run(ops[kind]); }
       },
 
+      // ---- the context menu ----------------------------------------------------
+      /**
+       * LibreOffice puts its own menu on the right button, and so does this: the
+       * items are the ones that apply where the pointer is. Shift+right-click is
+       * left alone, which is how a reader still reaches the browser's own menu
+       * (spelling suggestions live there).
+       */
+      openCtx(e) {
+        if (e.shiftKey || !this.doc.id) { return; }
+        const c = canvas();
+        if (!c || !inCanvas(e.target)) { return; }
+        e.preventDefault();
+        const point = caretFromPoint(e.clientX, e.clientY);
+        const sel = getRange();
+        let inside = false;
+        if (sel && !sel.collapsed && point) {
+          try { inside = sel.comparePoint(point.startContainer, point.startOffset) === 0; } catch (err) { inside = false; }
+        }
+        if (point && !inside) { selectRange(point); }
+        const at = point && !inside ? point.startContainer : e.target;
+        const range = getRange();
+        this.ctx.table = !!cellAt(at);
+        this.ctx.image = !!imageAt(at);
+        this.ctx.link = !!linkAt(at);
+        this.ctx.list = !!(topBlockOf(at) && closestMatching(at, { tag: 'LI' }));
+        this.ctx.selection = !!(range && !range.collapsed);
+        // Keep the whole menu on screen; its own height is capped in the stylesheet.
+        this.ctx.flip = e.clientX > window.innerWidth - 500;
+        this.ctx.x = Math.max(6, Math.min(e.clientX, window.innerWidth - 250));
+        this.ctx.y = Math.max(6, Math.min(e.clientY, window.innerHeight - 430));
+        this.ctx.open = true;
+        this.refreshState();
+      },
+      closeCtx() { this.ctx.open = false; },
+      /**
+       * A submenu opens beside its row, which near the foot of the window would
+       * run off the bottom. Measure it once it is up and pull it back inside.
+       */
+      placeFly(e) {
+        const fly = e.currentTarget.querySelector('.fly');
+        if (!fly) { return; }
+        fly.style.top = '-6px';
+        fly.style.bottom = 'auto';
+        fly.style.maxHeight = '';
+        const measure = () => {
+          const r = fly.getBoundingClientRect();
+          if (!r.height) { return; }
+          const room = window.innerHeight - 16;
+          if (r.height > room) { fly.style.maxHeight = room + 'px'; }
+          const after = fly.getBoundingClientRect();
+          if (after.bottom > window.innerHeight - 8) {
+            fly.style.top = 'auto';
+            fly.style.bottom = '-6px';
+            const up = fly.getBoundingClientRect();
+            if (up.top < 8) { fly.style.bottom = (up.top - 8) + 'px'; }
+          }
+        };
+        measure();
+        window.requestAnimationFrame(measure);
+      },
+      ctxDo(kind, arg) {
+        this.closeCtx();
+        const acts = {
+          block: () => this.setBlock(arg),
+          inline: () => this.inline(arg),
+          align: () => this.align(arg),
+          list: () => this.list(arg),
+          indent: () => this.indent(arg),
+          clear: () => this.clearFmt(),
+          cut: () => this.clipboard('cut'),
+          copy: () => this.clipboard('copy'),
+          paste: () => this.pasteFromClipboard(false),
+          pasteText: () => this.pasteFromClipboard(true),
+          link: () => this.openLink(),
+          linkOpen: () => this.openLinkTarget(),
+          linkDel: () => this.run(() => removeLink()),
+          table: () => this.tableCmd(arg),
+          cellAlign: () => this.run(() => setCellAlign(arg)),
+          merge: () => this.doMerge(),
+          split: () => this.doSplit(),
+          image: () => this.imageCmd('size', arg),
+          float: () => this.run(() => setImageFloat(arg)),
+          alt: () => this.openAlt(),
+          imageDel: () => this.imageCmd('delete'),
+        };
+        if (acts[kind]) { acts[kind](); }
+      },
+
+      // ---- clipboard -----------------------------------------------------------
+      clipboard(kind) {
+        let ok = false;
+        try { ok = document.execCommand(kind); } catch (e) { ok = false; }
+        if (!ok) {
+          this.notify(this.t('The browser only allows this from the keyboard: {keys}', { keys: kind === 'cut' ? 'Ctrl+X' : 'Ctrl+C' }));
+          return;
+        }
+        if (kind === 'cut') { this.touch(); this.recount(); this.repaginate(); }
+      },
+      /**
+       * Reading the clipboard needs the browser's permission, which it only gives
+       * to a page the reader is using. If it says no, say which keys do work
+       * rather than failing silently.
+       */
+      async pasteFromClipboard(plainOnly) {
+        let html = '';
+        let text = '';
+        try {
+          if (!plainOnly && navigator.clipboard && navigator.clipboard.read) {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+              const types = item.types || [];
+              if (types.indexOf('text/html') >= 0) { html = await (await item.getType('text/html')).text(); break; }
+              if (types.indexOf('text/plain') >= 0) { text = await (await item.getType('text/plain')).text(); }
+            }
+          } else if (navigator.clipboard && navigator.clipboard.readText) {
+            text = await navigator.clipboard.readText();
+          }
+        } catch (e) {
+          this.notify(this.t('The browser would not hand over the clipboard. Use {keys} instead.', { keys: plainOnly ? 'Ctrl+Shift+V' : 'Ctrl+V' }));
+          return;
+        }
+        if (!html && !text) { return; }
+        this.run(() => { if (html) { pasteHtmlAt(html); } else { pasteTextAt(text); } });
+        this.repaginate();
+      },
+
+      // ---- links ---------------------------------------------------------------
+      openLink() {
+        const a = linkAt();
+        const r = getRange();
+        ctxRange = r ? r.cloneRange() : null;
+        this.link.editing = !!a;
+        this.link.url = a ? (a.getAttribute('href') || '') : '';
+        this.link.text = a ? a.textContent : (r && !r.collapsed ? String(r) : '');
+        this.linkOpen = true;
+      },
+      applyLinkDialog() {
+        const url = this.link.url;
+        const text = this.link.text;
+        this.linkOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        let ok = false;
+        this.run(() => { ok = applyLink(url, text); });
+        if (!ok) { this.notify(this.t('That address cannot be linked to.')); }
+      },
+      openLinkTarget() {
+        const a = linkAt();
+        if (a) { window.open(a.getAttribute('href'), '_blank', 'noopener'); }
+      },
+
+      // ---- pictures and cells --------------------------------------------------
+      openAlt() {
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.altText = imageAlt();
+        this.altOpen = true;
+      },
+      applyAlt() {
+        const text = this.altText;
+        this.altOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the picture moved on */ } }
+        this.run(() => setImageAlt(text));
+      },
+      doMerge() {
+        let ok = false;
+        this.run(() => { ok = mergeCells(); });
+        if (!ok) { this.notify(this.t('Select the cells to merge first. Cells that already span out of the selection cannot be merged.')); }
+      },
+      doSplit() {
+        let ok = false;
+        this.run(() => { ok = splitCell(); });
+        if (!ok) { this.notify(this.t('This cell is not a merged one.')); }
+      },
+
       undo() { canvas().focus(); if (history.undo()) { this.touch(); this.refreshState(); this.recount(); } },
       redo() { canvas().focus(); if (history.redo()) { this.touch(); this.refreshState(); this.recount(); } },
 
@@ -3383,6 +3937,7 @@
           if (k === 's') { e.preventDefault(); return this.save(); }
           if (k === 'p') { e.preventDefault(); return this.printDoc(); }
           if (k === 'f') { e.preventDefault(); return this.openFind(); }
+          if (k === 'k') { e.preventDefault(); return this.openLink(); }
           if (k === 'h') { e.preventDefault(); return this.openFind(); }
           if (k === 'z' && !e.shiftKey) { e.preventDefault(); return this.undo(); }
           if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); return this.redo(); }
@@ -3456,8 +4011,9 @@
       // Escape closes whatever is on top: a popup menu, then a modal, then the find bar.
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') { return; }
+        if (this.ctx.open) { this.closeCtx(); e.preventDefault(); return; }
         if (this.menu) { this.menu = ''; e.preventDefault(); return; }
-        const modals = ['fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
+        const modals = ['linkOpen', 'altOpen', 'fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
           'tableOpen', 'paperOpen', 'settingsOpen', 'menuOpen'];
         for (const key of modals) {
           if (!this[key]) { continue; }
@@ -3483,6 +4039,9 @@
         this.recount();
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
+      c.addEventListener('contextmenu', (e) => this.openCtx(e));
+      window.addEventListener('resize', () => this.closeCtx());
+      document.addEventListener('scroll', () => this.closeCtx(), true);
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
       window.addEventListener('beforeunload', (e) => {
         if (this.dirty) { e.preventDefault(); e.returnValue = ''; }
@@ -3493,6 +4052,20 @@
   });
 
   /** Nextcloud's dark mode is a theme app, not a media query, so ask the page. */
+  /** The caret position under the pointer, however this browser spells it. */
+  function caretFromPoint(x, y) {
+    if (document.caretRangeFromPoint) { return document.caretRangeFromPoint(x, y); }
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (!p) { return null; }
+      const r = document.createRange();
+      r.setStart(p.offsetNode, p.offset);
+      r.collapse(true);
+      return r;
+    }
+    return null;
+  }
+
   function ncIsDark() {
     try {
       // Nextcloud sets its theme variables on <body>, not on <html>, and a theme
