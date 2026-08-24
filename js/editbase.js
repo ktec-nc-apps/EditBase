@@ -1721,9 +1721,57 @@
   // ---- housekeeping -------------------------------------------------------------
   /** Keep the canvas a flat run of blocks: loose text is what makes contenteditable
    *  produce <div> soup, so it gets a paragraph of its own before that can happen. */
+  // A paragraph may not contain a block, and a display=block formula needs its own
+  // line.  A native drag and drop breaks both of those rules -- the browser moves
+  // the markup its own way -- so every command puts the tree back in order.
+  // BLOCKQUOTE and LI are left out on purpose: a quotation holding paragraphs and a
+  // list item holding a nested list are both correct HTML.
+  const TEXT_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, figcaption';
+
+  function repairNesting() {
+    const c = canvas();
+    if (!c) { return; }
+    Array.from(c.querySelectorAll('math')).forEach((math) => {
+      if (math.getAttribute('display') !== 'block') { return; }
+      const parent = math.parentNode;
+      if (parent && parent.nodeType === 1 && parent.classList && parent.classList.contains('eb-math-block')) { return; }
+      const wrap = document.createElement('div');
+      wrap.className = 'eb-math-block';
+      parent.insertBefore(wrap, math);
+      wrap.appendChild(math);
+    });
+    const lifted = [];
+    for (let pass = 0; pass < 20; pass++) {
+      let moved = false;
+      Array.from(c.querySelectorAll(TEXT_BLOCKS)).forEach((host) => {
+        if (!host.parentNode) { return; }
+        let anchor = host;
+        Array.from(host.children).forEach((child) => {
+          if (!isBlock(child)) { return; }
+          host.parentNode.insertBefore(child, anchor.nextSibling);
+          anchor = child;
+          moved = true;
+          if (lifted.indexOf(host) < 0) { lifted.push(host); }
+        });
+      });
+      if (!moved) { break; }
+    }
+    // Only a host this pass emptied is removed: an empty figcaption, say, is the
+    // placeholder a caption is typed into and has to stay.
+    lifted.forEach((host) => {
+      if (host.childNodes.length || !host.parentNode) { return; }
+      if (host.parentNode === c && c.children.length === 1) {
+        host.appendChild(document.createElement('br'));
+        return;
+      }
+      host.remove();
+    });
+  }
+
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
+    repairNesting();
     let stray = null;
     Array.from(c.childNodes).forEach((n) => {
       if (n.nodeType === 3) {
@@ -4087,6 +4135,39 @@
         window.localStorage.setItem('eb-autolink', this.autolink ? '1' : '0');
       },
 
+      // ---- dragging ------------------------------------------------------------
+      onDragStart() {
+        const r = getRange();
+        dragRange = r && !r.collapsed ? r.cloneRange() : null;
+      },
+      onDragOver(e) {
+        if (!this.doc.id) { return; }
+        e.preventDefault();
+        if (e.dataTransfer) { e.dataTransfer.dropEffect = dragRange ? 'move' : 'copy'; }
+        // Show where it would land, the way a text cursor does.
+        const point = caretFromPoint(e.clientX, e.clientY);
+        if (point && !pointInsideRange(dragRange, point)) { selectRange(point); }
+      },
+      onDrop(e) {
+        if (!this.doc.id) { return; }
+        e.preventDefault();
+        const point = caretFromPoint(e.clientX, e.clientY);
+        const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+        if (files.some((f) => /^image\//.test(f.type))) {
+          if (point) { selectRange(point); }
+          dragRange = null;
+          this.insertPastedFiles(files);
+          return;
+        }
+        const data = e.dataTransfer;
+        let ok = false;
+        this.run(() => { ok = dropAt(point, data); });
+        dragRange = null;
+        if (!ok) { this.notify(this.t('There is nowhere to drop that.')); }
+        this.repaginate();
+      },
+      onDragEnd() { dragRange = null; },
+
       // ---- clipboard -----------------------------------------------------------
       clipboard(kind) {
         let ok = false;
@@ -4335,6 +4416,10 @@
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
+      c.addEventListener('dragstart', () => this.onDragStart());
+      c.addEventListener('dragover', (e) => this.onDragOver(e));
+      c.addEventListener('drop', (e) => this.onDrop(e));
+      c.addEventListener('dragend', () => this.onDragEnd());
       window.addEventListener('resize', () => this.closeCtx());
       document.addEventListener('scroll', () => this.closeCtx(), true);
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
@@ -4372,6 +4457,66 @@
       after.collapse(true);
       selectRange(after);
     }
+    return true;
+  }
+
+  // ---- dragging inside the document ------------------------------------------------
+  // Left to itself the browser moves the markup its own way: blocks end up inside
+  // paragraphs, computed styles come along for the ride, and nothing reaches the
+  // undo history. So the drop is done here, through the same path as every edit.
+  let dragRange = null;
+
+  /** Is the drop point inside the thing being dragged? Then there is nowhere to put it. */
+  function pointInsideRange(range, point) {
+    if (!range || !point) { return false; }
+    try {
+      return range.comparePoint(point.startContainer, point.startOffset) === 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Markup from somewhere else, cleaned the same way a paste is. */
+  function fragmentFromTransfer(data) {
+    if (!data) { return null; }
+    const html = data.getData('text/html');
+    const holder = document.createElement('div');
+    if (html) {
+      holder.innerHTML = html;
+      sanitiseInto(holder);
+      holder.querySelectorAll('*').forEach((el) => {
+        if (el.hasAttribute('style')) {
+          const keep = cleanStyle(el.getAttribute('style')).split('; ')
+            .filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
+          if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
+        }
+        if (el.hasAttribute('class') && !/^eb-/.test(el.getAttribute('class'))) { el.removeAttribute('class'); }
+      });
+    } else {
+      const text = data.getData('text/plain') || '';
+      if (!text) { return null; }
+      text.split(/\r?\n/).forEach((line, i) => {
+        if (i) { holder.appendChild(document.createElement('br')); }
+        holder.appendChild(document.createTextNode(line));
+      });
+    }
+    if (!holder.firstChild) { return null; }
+    const frag = document.createDocumentFragment();
+    while (holder.firstChild) { frag.appendChild(holder.firstChild); }
+    return frag;
+  }
+
+  /**
+   * A move inside the document takes the markup itself rather than the browser's
+   * copy of it, so a formula or a table arrives exactly as it left.
+   */
+  function dropAt(point, data) {
+    if (!point || !inCanvas(point.startContainer)) { return false; }
+    if (dragRange && pointInsideRange(dragRange, point)) { return false; }
+    const frag = dragRange ? dragRange.extractContents() : fragmentFromTransfer(data);
+    if (!frag || !frag.firstChild) { return false; }
+    selectRange(point);
+    insertFragmentAt(frag);
     return true;
   }
 

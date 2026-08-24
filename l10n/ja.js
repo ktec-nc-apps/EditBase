@@ -310,6 +310,7 @@ OC.L10N.register(
     "Could not read the picture: {msg}": "画像を読み込めませんでした: {msg}",
     "Contents": "目次",
     "Give the document some headings first — the contents are built from them.": "先に見出しを付けてください。目次は見出しから作成します。",
+    "There is nowhere to drop that.": "そこには置けません。",
     "The browser only allows this from the keyboard: {keys}": "この操作はブラウザの制限によりキーボードからのみ実行できます：{keys}",
     "The browser would not hand over the clipboard. Use {keys} instead.": "ブラウザがクリップボードの読み取りを許可しませんでした。{keys} をお使いください。",
     "That address cannot be linked to.": "このリンク先は使用できません。",
