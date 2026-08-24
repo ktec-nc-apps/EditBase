@@ -1728,9 +1728,67 @@
   // list item holding a nested list are both correct HTML.
   const TEXT_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, figcaption';
 
+  /**
+   * The classes a document is allowed to wear. Everything else beginning with eb-
+   * or app- is this app's own chrome: a drag that starts outside the page hands the
+   * browser the editor's own markup, and dropping that in leaves a copy of the whole
+   * editor -- desk, paper wrap, canvas and all -- inside the document. That is what
+   * turned the page into a grey slab lying over the text.
+   */
+  const DOC_CLASSES = new Set([
+    'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
+    'eb-box', 'eb-box-title', 'sq', 'dashed', 'tint', 'note', 'borderless', 'rows',
+    'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
+    'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
+    'eb-math-block', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
+    'eb-pagebreak', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
+    // not part of a document, but the editor's own page spacer lives in the canvas
+    'eb-pagespacer',
+  ]);
+  const APP_IDS = /^(content|app-content|app-navigation|editbase|editbase-root|eb-canvas|header)$/;
+
+  /**
+   * Take the chrome out: unwrap anything wearing a class the document model does not
+   * know, and drop the ids -- a second element carrying the canvas's own id is what
+   * leaves two editors inside one another.
+   */
+  function stripFurniture(root, allIds) {
+    Array.from(root.querySelectorAll('[id]')).forEach((el) => {
+      if (allIds || APP_IDS.test(el.getAttribute('id') || '')) { el.removeAttribute('id'); }
+    });
+    for (let pass = 0; pass < 30; pass++) {
+      let again = false;
+      Array.from(root.querySelectorAll('[class]')).forEach((el) => {
+        if (!el.parentNode) { return; }
+        const classes = Array.from(el.classList);
+        if (classes.some((c) => !DOC_CLASSES.has(c) && /^(eb-|app-)/.test(c))) {
+          const parent = el.parentNode;
+          while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+          parent.removeChild(el);
+          again = true;
+          return;
+        }
+        const keep = classes.filter((c) => DOC_CLASSES.has(c));
+        if (keep.length === classes.length) { return; }
+        if (keep.length) { el.setAttribute('class', keep.join(' ')); } else { el.removeAttribute('class'); }
+      });
+      if (!again) { break; }
+    }
+  }
+
   function repairNesting() {
     const c = canvas();
     if (!c) { return; }
+    stripFurniture(c, false);
+    // A window-sized pixel width means nothing on paper: it is chrome that was
+    // dropped in, and it is what covered the page. Pictures and tables may size
+    // themselves; a paragraph or a bare div may not.
+    Array.from(c.querySelectorAll('[style]')).forEach((el) => {
+      if (/^(IMG|FIGURE|TABLE|TD|TH|COL|COLGROUP)$/.test(el.nodeName)) { return; }
+      el.style.removeProperty('width');
+      el.style.removeProperty('height');
+      if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+    });
     Array.from(c.querySelectorAll('math')).forEach((math) => {
       if (math.getAttribute('display') !== 'block') { return; }
       const parent = math.parentNode;
@@ -1976,8 +2034,8 @@
           .split('; ').filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
         if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
       }
-      if (el.hasAttribute('class') && !/^eb-/.test(el.getAttribute('class'))) { el.removeAttribute('class'); }
     });
+    stripFurniture(holder, true);
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
     insertFragmentAt(frag);
@@ -4490,8 +4548,8 @@
             .filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
           if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
         }
-        if (el.hasAttribute('class') && !/^eb-/.test(el.getAttribute('class'))) { el.removeAttribute('class'); }
       });
+      stripFurniture(holder, true);
     } else {
       const text = data.getData('text/plain') || '';
       if (!text) { return null; }
@@ -4561,6 +4619,8 @@
 
   // The page planner is pure arithmetic and is unit-tested on its own.
   window.__eb_planPages = planPages;
+  // the paste path, so the tests can drive it without a clipboard event
+  window.__eb_pasteHtmlAt = pasteHtmlAt;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');
