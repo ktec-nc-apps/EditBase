@@ -309,6 +309,7 @@
         "Could not read the picture: {msg}": "Could not read the picture: {msg}",
         "Contents": "Contents",
         "Give the document some headings first — the contents are built from them.": "Give the document some headings first — the contents are built from them.",
+        "There is nowhere to drop that.": "There is nowhere to drop that.",
         "The browser only allows this from the keyboard: {keys}": "The browser only allows this from the keyboard: {keys}",
         "The browser would not hand over the clipboard. Use {keys} instead.": "The browser would not hand over the clipboard. Use {keys} instead.",
         "That address cannot be linked to.": "That address cannot be linked to.",
