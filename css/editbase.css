@@ -153,7 +153,7 @@
 .eb-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); padding: 0; }
 
 /* the desk and the paper */
-.eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: center; }
+.eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: center; align-items: flex-start; }
 .eb-paperwrap { flex: 0 0 auto; position: relative; width: var(--eb-paper-w); --eb-gap: 16px; }
 /* The sheets are real elements behind the text: one per printed page, each exactly
    the paper size, so the editing screen shows the paper rather than a scroll. */
@@ -164,11 +164,19 @@
 }
 .eb-sheet + .eb-sheet { position: relative; }
 .eb-pagespacer { display: block; }
-.eb-paper {
+/* Nextcloud's server.css styles every div[contenteditable] as a 130px form
+   field (width, padding, margin, min-height).  That selector out-specifies a
+   plain class, so the canvas needs the attribute in its own selector to win. */
+.eb-paper,
+#editbase-root div.eb-paper[contenteditable="true"],
+#editbase-root div.eb-paper[contenteditable="false"] {
   position: absolute; top: 0; left: 0; right: 0;
+  width: auto; height: auto; margin: 0;
   color: #111111; background: transparent;
   min-height: var(--eb-paper-h);
   padding: var(--eb-mt) var(--eb-mr) var(--eb-mb) var(--eb-ml);
+  border: 0; border-radius: 0; box-shadow: none;
+  font-size: inherit; line-height: inherit;
   outline: none;
 }
 /* A hairline where the text area of each page ends, drawn on the sheet itself. */
