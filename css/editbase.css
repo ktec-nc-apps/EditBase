@@ -93,10 +93,11 @@
   width: var(--sidebar-w); flex: 0 0 auto; background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; min-height: 0;
 }
-.eb-side .brand { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
-.eb-side .brand .logo svg { width: auto; height: 26px; display: block; }
-.eb-side .brand .name { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
-.eb-side .brand .ver { margin-left: auto; font-size: 11px; color: var(--muted); }
+.eb-side .brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px 12px; border-bottom: 1px solid var(--border); -webkit-user-select: none; user-select: none; }
+.eb-side .brand .logo { display: flex; align-items: center; }
+.eb-side .brand .logo svg { width: auto; height: 30px; display: block; }
+.eb-side .brand .name { font-weight: 800; font-size: 20px; letter-spacing: .3px; }
+.eb-side .brand .ver { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); background: var(--surface-2); padding: 2px 8px; border-radius: 999px; }
 .eb-side .side-actions { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .eb-side .side-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 
@@ -262,7 +263,8 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 /* ---------- desk, status bar, empty state ---------- */
 .eb-desk.empty { align-items: center; }
 .eb-empty { text-align: center; color: #e8ecf3; margin: auto; }
-.eb-empty .mark { display: block; font-size: 56px; opacity: .5; margin-bottom: 10px; }
+.eb-empty .mark { display: block; opacity: .5; margin-bottom: 14px; }
+.eb-empty .mark svg { width: auto; height: 72px; display: inline-block; }
 .eb-empty p { margin: 0 0 14px; font-size: 15px; }
 .eb-status {
   flex: 0 0 auto; display: flex; gap: 16px; align-items: center; padding: 5px 14px;
@@ -343,3 +345,29 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 .chips .chip { cursor: pointer; }
 
 .eb-menu { max-height: min(70vh, 520px); overflow-y: auto; }
+
+/* ---------- the right button ---------- */
+.eb-ctx-back { position: fixed; inset: 0; z-index: 3400; }
+.eb-ctxmenu {
+  position: fixed; z-index: 3401; min-width: 238px; padding: 5px; font-size: 13.5px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 11px; box-shadow: var(--shadow);
+}
+.eb-ctxmenu .ci {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  width: 100%; position: relative; font: inherit; text-align: left; cursor: pointer;
+  background: none; border: 0; color: inherit; padding: 6px 10px; border-radius: 7px;
+}
+.eb-ctxmenu .ci:hover, .eb-ctxmenu .ci:focus-visible { background: var(--surface-2); }
+.eb-ctxmenu .ci[disabled] { opacity: .38; cursor: default; }
+.eb-ctxmenu .ci[disabled]:hover { background: none; }
+.eb-ctxmenu .ci .s { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.eb-ctxmenu .sep { height: 1px; background: var(--border); margin: 5px 6px; }
+.eb-ctxmenu .fly {
+  display: none; position: absolute; left: 100%; top: -6px; z-index: 1; min-width: 224px; padding: 5px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 11px; box-shadow: var(--shadow);
+}
+.eb-ctxmenu.flip .fly { left: auto; right: 100%; }
+.eb-ctxmenu .fly { overflow-y: auto; }
+.eb-ctxmenu .has-sub:hover > .fly, .eb-ctxmenu .has-sub:focus-within > .fly { display: block; }
+.eb-ctxmenu .has-sub > .s { opacity: .7; }
