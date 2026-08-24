@@ -1899,7 +1899,7 @@
 
   <section class="eb-main">
     <div class="eb-topbar">
-      <button class="eb-tb" @click="sideOpen = !sideOpen" :title="t('Documents')">☰</button>
+      <button class="eb-tb" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
       <input class="title-input" v-model="doc.title" :placeholder="t('Untitled document')" @change="applyTitle" :disabled="!doc.id">
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
       <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 {{ t('Save') }}</button>
