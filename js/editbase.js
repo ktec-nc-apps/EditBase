@@ -3453,6 +3453,20 @@
       document.addEventListener('click', (e) => {
         if (this.menu && !e.target.closest('.eb-pop')) { this.menu = ''; }
       });
+      // Escape closes whatever is on top: a popup menu, then a modal, then the find bar.
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') { return; }
+        if (this.menu) { this.menu = ''; e.preventDefault(); return; }
+        const modals = ['fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
+          'tableOpen', 'paperOpen', 'settingsOpen', 'menuOpen'];
+        for (const key of modals) {
+          if (!this[key]) { continue; }
+          if (key === 'fontsOpen') { this.closeFonts(); } else { this[key] = false; }
+          e.preventDefault();
+          return;
+        }
+        if (this.find.open) { this.closeFind(); e.preventDefault(); }
+      });
 
       const c = canvasEl;
       c.addEventListener('beforeinput', () => history.push(false));
@@ -3481,7 +3495,12 @@
   /** Nextcloud's dark mode is a theme app, not a media query, so ask the page. */
   function ncIsDark() {
     try {
-      const probe = getComputedStyle(document.documentElement).getPropertyValue('--color-main-background').trim();
+      // Nextcloud sets its theme variables on <body>, not on <html>, and a theme
+      // may state the colour as rgb().  Read both, and normalise, before falling
+      // back to the device preference — the dark theme is an app, not a media query.
+      let probe = getComputedStyle(document.body).getPropertyValue('--color-main-background').trim()
+        || getComputedStyle(document.documentElement).getPropertyValue('--color-main-background').trim();
+      probe = rgbToHex(probe) || probe;
       const m = probe.match(/^#?([0-9a-f]{6})$/i);
       if (m) {
         const n = parseInt(m[1], 16);
