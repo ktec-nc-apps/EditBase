@@ -292,7 +292,7 @@
 .eb-doc figure.eb-img-s { max-width: 34%; }
 .eb-doc figure.eb-img-m { max-width: 62%; }
 .eb-doc figure.eb-img-l { max-width: 100%; }
-.eb-doc figure.eb-img img { width: 100%; height: auto; }\n.eb-doc figure.eb-img-left { float: left; margin: .3em 1.4em .8em 0; }\n.eb-doc figure.eb-img-right { float: right; margin: .3em 0 .8em 1.4em; }\n.eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6, .eb-doc table { clear: both; }\n.eb-doc a { text-decoration: underline; text-underline-offset: 2px; }
+.eb-doc figure.eb-img img { width: 100%; height: auto; }\n.eb-doc figure.eb-img-left { float: left; margin: .3em 1.4em .8em 0; }\n.eb-doc figure.eb-img-right { float: right; margin: .3em 0 .8em 1.4em; }\n.eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6, .eb-doc table { clear: both; }\n.eb-doc a { text-decoration: underline; text-underline-offset: 2px; }\n.eb-doc nav.eb-toc { margin: 1.4em 0; break-inside: avoid; }\n.eb-doc nav.eb-toc .eb-toc-title { font-weight: 700; margin: 0 0 .5em; }\n.eb-doc nav.eb-toc ul { list-style: none; margin: 0; padding: 0; }\n.eb-doc nav.eb-toc li { margin: .2em 0; }\n.eb-doc nav.eb-toc li.eb-toc-l2 { padding-left: 1.5em; }\n.eb-doc nav.eb-toc li.eb-toc-l3 { padding-left: 3em; }\n.eb-doc nav.eb-toc li.eb-toc-l4 { padding-left: 4.5em; }\n.eb-doc nav.eb-toc a { color: inherit; text-decoration: none; }
 
 /* callout boxes — borders rather than fills, because browsers do not print
    background colours unless the reader turns them on */
@@ -377,7 +377,7 @@
   // removed on the way in; the structural markup is left exactly as written.
   const HTML_TAGS = new Set(['P', 'BR', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'DEL', 'INS', 'MARK', 'CODE', 'PRE', 'SUB', 'SUP', 'SMALL', 'A',
     'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'CAPTION', 'COLGROUP', 'COL',
-    'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
+    'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
@@ -989,6 +989,132 @@
   }
 
   // ---- insertions ---------------------------------------------------------------
+  // ---- paragraph properties --------------------------------------------------------
+  function numberIn(value, unit) {
+    const m = String(value || '').match(/^(-?[\d.]+)\s*([a-z%]*)$/);
+    if (!m || (unit && m[2] !== unit)) { return ''; }
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) ? n : '';
+  }
+  function styleOrClear(el, prop, value) {
+    if (value === '' || value == null) { el.style.removeProperty(prop); } else { el.style.setProperty(prop, value); }
+  }
+
+  /** What the dialog shows: only what the paragraph itself sets, not what it inherits. */
+  function paragraphProps() {
+    const block = selectedBlocks()[0];
+    if (!block) { return null; }
+    const s = block.style;
+    return {
+      align: s.getPropertyValue('text-align') || '',
+      lineHeight: numberIn(s.getPropertyValue('line-height'), ''),
+      before: numberIn(s.getPropertyValue('margin-top'), 'pt'),
+      after: numberIn(s.getPropertyValue('margin-bottom'), 'pt'),
+      left: numberIn(s.getPropertyValue('margin-left'), 'mm'),
+      right: numberIn(s.getPropertyValue('margin-right'), 'mm'),
+      firstLine: numberIn(s.getPropertyValue('text-indent'), 'mm'),
+      pageBefore: s.getPropertyValue('break-before') === 'page',
+      keepWithNext: s.getPropertyValue('break-after') === 'avoid',
+      keepTogether: s.getPropertyValue('break-inside') === 'avoid',
+    };
+  }
+
+  /**
+   * Every property is written as an inline style, because that is what the saved
+   * file carries: no class the reader would have to be given a stylesheet for.
+   */
+  function setParagraphProps(v) {
+    const blocks = selectedBlocks();
+    if (!blocks.length) { return false; }
+    const num = (x) => (x === '' || x == null || Number.isNaN(Number(x)) ? '' : Number(x));
+    blocks.forEach((block) => {
+      styleOrClear(block, 'text-align', v.align || '');
+      styleOrClear(block, 'line-height', num(v.lineHeight) === '' ? '' : String(num(v.lineHeight)));
+      styleOrClear(block, 'margin-top', num(v.before) === '' ? '' : num(v.before) + 'pt');
+      styleOrClear(block, 'margin-bottom', num(v.after) === '' ? '' : num(v.after) + 'pt');
+      styleOrClear(block, 'margin-left', num(v.left) === '' ? '' : num(v.left) + 'mm');
+      styleOrClear(block, 'margin-right', num(v.right) === '' ? '' : num(v.right) + 'mm');
+      styleOrClear(block, 'text-indent', num(v.firstLine) === '' ? '' : num(v.firstLine) + 'mm');
+      styleOrClear(block, 'break-before', v.pageBefore ? 'page' : '');
+      styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : '');
+      styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : '');
+      if (!block.getAttribute('style')) { block.removeAttribute('style'); }
+    });
+    return true;
+  }
+
+  // ---- table of contents -----------------------------------------------------------
+  /** A heading needs an id before anything can link to it; keep any it already has. */
+  function headingId(head, used) {
+    let id = head.getAttribute('id') || '';
+    if (!id) {
+      const base = (head.textContent || '').trim().toLowerCase()
+        .replace(/[\s\u3000]+/g, '-').replace(/[^\w\u3040-\u30ff\u4e00-\u9fff-]/g, '').slice(0, 40);
+      id = base || 'section';
+    }
+    let out = id;
+    let n = 2;
+    while (used.has(out)) { out = id + '-' + n; n++; }
+    used.add(out);
+    head.setAttribute('id', out);
+    return out;
+  }
+
+  /**
+   * The contents are plain links to the headings, which is what HTML has instead of
+   * page numbers: they work in the browser and read as a list on paper.
+   */
+  function buildToc(title) {
+    const c = canvas();
+    if (!c) { return false; }
+    const heads = Array.from(c.querySelectorAll('h1, h2, h3, h4')).filter((h) => !h.closest('nav.eb-toc'));
+    if (!heads.length) { return false; }
+    const used = new Set();
+    const nav = document.createElement('nav');
+    nav.className = 'eb-toc';
+    if (title) {
+      const cap = document.createElement('p');
+      cap.className = 'eb-toc-title';
+      cap.textContent = title;
+      nav.appendChild(cap);
+    }
+    const list = document.createElement('ul');
+    heads.forEach((head) => {
+      const li = document.createElement('li');
+      li.className = 'eb-toc-l' + head.nodeName.slice(1);
+      const a = document.createElement('a');
+      a.setAttribute('href', '#' + headingId(head, used));
+      a.textContent = (head.textContent || '').trim();
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+    nav.appendChild(list);
+    const old = c.querySelector('nav.eb-toc');
+    if (old) {
+      old.replaceWith(nav);
+    } else {
+      insertBlockNode(nav);
+      const after = document.createElement('p');
+      after.appendChild(document.createElement('br'));
+      if (nav.parentNode) { nav.parentNode.insertBefore(after, nav.nextSibling); }
+    }
+    return true;
+  }
+
+  /** A character from the palette, dropped in where the caret is. */
+  function insertText(text) {
+    const range = getRange();
+    if (!range) { return false; }
+    range.deleteContents();
+    const node = document.createTextNode(String(text));
+    range.insertNode(node);
+    const after = document.createRange();
+    after.setStartAfter(node);
+    after.collapse(true);
+    selectRange(after);
+    return true;
+  }
+
   function insertBlockNode(node) {
     const range = getRange();
     const blocks = selectedBlocks();
@@ -2107,6 +2233,22 @@
     tableDel: I('<rect x="1.8" y="2.4" width="12.4" height="11.2" rx="1"/><path d="M1.8 6.2h12.4M6 2.4v11.2"/><path d="M9.2 9.2 13.6 13.6M13.6 9.2 9.2 13.6"/>'),
   };
 
+  /**
+   * A small, useful set rather than the whole of Unicode: the marks a Japanese
+   * business document actually needs, plus maths, arrows and Greek.
+   */
+  // The group names are looked up at run time, so name them here for the extractor:
+  // t('Punctuation'), t('Marks'), t('Currency'), t('Mathematics'), t('Arrows'), t('Greek'), t('Numbers')
+  const CHAR_SETS = [
+    { key: 'Punctuation', chars: '「」『』（）〔〕［］｛｝〈〉《》【】…‥—―‐・、。，．！？：；／＼〜※' },
+    { key: 'Marks', chars: '§¶†‡°′″№℡㊤㊥㊦㊧㊨★☆●○◎■□▲△▼▽◆◇♪♭♯✓✕♂♀©®™' },
+    { key: 'Currency', chars: '¥＄€£¢₩₽₹¤' },
+    { key: 'Mathematics', chars: '±×÷≠≒≦≧＜＞≪≫∞∴∵∫∑√∂∇⊥∠∽≡⇒⇔∈∋⊂⊃∩∪¬∀∃' },
+    { key: 'Arrows', chars: '←↑→↓↔↕⇐⇑⇒⇓⇔⇕↖↗↘↙⇄⇅' },
+    { key: 'Greek', chars: 'αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ' },
+    { key: 'Numbers', chars: '½⅓⅔¼¾⅛⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉①②③④⑤⑥⑦⑧⑨⑩Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ Ⅶ Ⅷ Ⅸ Ⅹ'.replace(/ /g, '') },
+  ];
+
   const TEMPLATE = `
 <div class="eb-shell">
   <aside class="eb-side" :class="{ hidden: !sideOpen }">
@@ -2218,6 +2360,8 @@
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+          <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
+          <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
           <div class="eb-menu-sep" v-if="anySource"></div>
           <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
             <span v-html="icons.link"></span>{{ sourceLabel(key) }}
@@ -2286,7 +2430,7 @@
       <div class="eb-paperwrap" :class="{ noguides: !guides }" v-show="doc.id" :style="[paperStyle, { zoom: zoom / 100 }]">
         <div class="eb-sheets" aria-hidden="true"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
         <div id="eb-canvas" class="eb-paper eb-doc"
-          :style="paperStyle" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true"></div>
+          :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
       </div>
       <div class="eb-empty" v-if="!doc.id">
         <span class="mark" v-html="logo"></span>
@@ -2653,6 +2797,11 @@
             </select>
           </div>
         </div>
+        <div class="eb-field">
+          <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
+          <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
+          <p class="eb-note">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
+        </div>
         <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
       </div>
       <div class="foot">
@@ -2735,6 +2884,9 @@
       </div>
     </div>
 
+    <button class="ci" @click="ctxDo('para')">{{ t('Paragraph settings…') }}</button>
+    <button class="ci" @click="ctxDo('chars')">{{ t('Special character…') }}</button>
+
     <template v-if="ctx.table">
       <div class="sep"></div>
       <div class="ci has-sub" @mouseenter="placeFly">
@@ -2782,6 +2934,77 @@
 
     <div class="sep"></div>
     <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
+  </div>
+
+  <!-- paragraph properties, written as inline styles so the file carries them -->
+  <div v-if="paraOpen" class="eb-modal-back" @click="paraOpen = false">
+    <div class="eb-modal" style="width:min(580px,100%)" @click.stop>
+      <h3>{{ t('Paragraph settings…') }}</h3>
+      <div class="body">
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Alignment') }}</label>
+            <select v-model="para.align">
+              <option value="">{{ t('Unchanged') }}</option>
+              <option value="left">{{ t('Left') }}</option>
+              <option value="center">{{ t('Centre') }}</option>
+              <option value="right">{{ t('Right') }}</option>
+              <option value="justify">{{ t('Justified') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="para.before"></div>
+          <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="para.after"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Indent left (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.left"></div>
+          <div class="eb-field"><label>{{ t('Indent right (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
+          <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
+        </div>
+        <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+        <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
+        <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
+        <p class="eb-note">{{ t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="clearPara">{{ t('Reset') }}</button>
+        <button class="eb-btn ghost" @click="paraOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyPara">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- a table of contents, as links rather than page numbers -->
+  <div v-if="tocOpen" class="eb-modal-back" @click="tocOpen = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Table of contents…') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('Title') }}</label><input type="text" v-model="tocTitle" @keydown.enter.prevent="applyToc"></div>
+        <p class="eb-note">{{ t('Built from the headings in the document, as links to them. Running it again brings an existing contents list up to date.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="tocOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyToc">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- characters that are awkward to type -->
+  <div v-if="charsOpen" class="eb-modal-back" @click="charsOpen = false">
+    <div class="eb-modal" style="width:min(620px,100%)" @click.stop>
+      <h3>{{ t('Special character…') }}</h3>
+      <div class="body">
+        <div class="chips">
+          <button v-for="c in charSets" :key="c.key" class="chip" :class="{ on: charSet === c.key }" @click="charSet = c.key">{{ t(c.key) }}</button>
+        </div>
+        <div class="eb-chargrid">
+          <button v-for="(ch, i) in charsOf(charSet)" :key="i" class="eb-charcell" @click="pickChar(ch)">{{ ch }}</button>
+        </div>
+        <p class="eb-note">{{ t('The character goes in at the caret. The dialog stays open so several can be picked.') }}</p>
+      </div>
+      <div class="foot"><button class="eb-btn primary" @click="charsOpen = false">{{ t('Close') }}</button></div>
+    </div>
   </div>
 
   <!-- a hyperlink -->
@@ -2857,6 +3080,15 @@
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false },
+        paraOpen: false,
+        para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false },
+        charsOpen: false,
+        charSets: CHAR_SETS,
+        charSet: 'Punctuation',
+        tocOpen: false,
+        tocTitle: '',
+        spellcheck: false,
+        autolink: true,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
         altOpen: false,
@@ -3780,6 +4012,9 @@
           list: () => this.list(arg),
           indent: () => this.indent(arg),
           clear: () => this.clearFmt(),
+          para: () => this.openPara(),
+          toc: () => this.openToc(),
+          chars: () => this.openChars(),
           cut: () => this.clipboard('cut'),
           copy: () => this.clipboard('copy'),
           paste: () => this.pasteFromClipboard(false),
@@ -3797,6 +4032,59 @@
           imageDel: () => this.imageCmd('delete'),
         };
         if (acts[kind]) { acts[kind](); }
+      },
+
+      // ---- paragraph, contents, characters --------------------------------------
+      openPara() {
+        const now = paragraphProps();
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        if (now) { this.para = Object.assign({}, now); }
+        this.paraOpen = true;
+      },
+      applyPara() {
+        const v = Object.assign({}, this.para);
+        this.paraOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => setParagraphProps(v));
+        this.repaginate();
+      },
+      clearPara() {
+        this.para = { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false };
+      },
+      openToc() {
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        if (!this.tocTitle) { this.tocTitle = this.t('Contents'); }
+        this.tocOpen = true;
+      },
+      applyToc() {
+        const title = this.tocTitle;
+        this.tocOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        let ok = false;
+        this.run(() => { ok = buildToc(title); });
+        if (!ok) { this.notify(this.t('Give the document some headings first — the contents are built from them.')); }
+        this.repaginate();
+      },
+      openChars() {
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.charsOpen = true;
+      },
+      pickChar(ch) {
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => insertText(ch));
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+      },
+      charsOf(key) {
+        const set = CHAR_SETS.find((c) => c.key === key);
+        return set ? Array.from(set.chars) : [];
+      },
+      toggleSpellcheck() {
+        this.spellcheck = !this.spellcheck;
+        window.localStorage.setItem('eb-spellcheck', this.spellcheck ? '1' : '0');
+      },
+      toggleAutolink() {
+        this.autolink = !this.autolink;
+        window.localStorage.setItem('eb-autolink', this.autolink ? '1' : '0');
       },
 
       // ---- clipboard -----------------------------------------------------------
@@ -3942,6 +4230,9 @@
           if (k === 'z' && !e.shiftKey) { e.preventDefault(); return this.undo(); }
           if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); return this.redo(); }
         }
+        if (this.autolink && (e.key === ' ' || e.key === 'Enter') && !meta && urlBeforeCaret()) {
+          this.run(() => autoLink());
+        }
         // Tab indents the paragraph instead of leaving the document.
         if (e.key === 'Tab') {
           e.preventDefault();
@@ -4001,6 +4292,10 @@
 
       const stored = window.localStorage.getItem('eb-autosave');
       if (stored != null) { this.autosave = stored === '1'; }
+      const sp = window.localStorage.getItem('eb-spellcheck');
+      if (sp != null) { this.spellcheck = sp === '1'; }
+      const al = window.localStorage.getItem('eb-autolink');
+      if (al != null) { this.autolink = al === '1'; }
       const g = window.localStorage.getItem('eb-guides');
       if (g != null) { this.guides = g === '1'; }
       const z = Number(window.localStorage.getItem('eb-zoom') || 0);
@@ -4013,7 +4308,7 @@
         if (e.key !== 'Escape') { return; }
         if (this.ctx.open) { this.closeCtx(); e.preventDefault(); return; }
         if (this.menu) { this.menu = ''; e.preventDefault(); return; }
-        const modals = ['linkOpen', 'altOpen', 'fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
+        const modals = ['charsOpen', 'tocOpen', 'paraOpen', 'linkOpen', 'altOpen', 'fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
           'tableOpen', 'paperOpen', 'settingsOpen', 'menuOpen'];
         for (const key of modals) {
           if (!this[key]) { continue; }
@@ -4052,6 +4347,34 @@
   });
 
   /** Nextcloud's dark mode is a theme app, not a media query, so ask the page. */
+  const URL_BEFORE = /(?:^|[\s　(（「『])((?:https?:\/\/[^\s　）」』]+)|(?:www\.[^\s　）」』]+)|(?:[^\s　@（）「」]+@[^\s　@（）「」]+\.[A-Za-z]{2,}))$/;
+  /** The address the caret has just finished typing, if that is what it is. */
+  function urlBeforeCaret() {
+    const r = getRange();
+    if (!r || !r.collapsed || r.startContainer.nodeType !== 3) { return null; }
+    if (linkAt(r.startContainer)) { return null; }
+    const m = r.startContainer.data.slice(0, r.startOffset).match(URL_BEFORE);
+    return m ? { node: r.startContainer, end: r.startOffset, text: m[1] } : null;
+  }
+  /** Turn it into a link and leave the caret outside, so the next word is plain. */
+  function autoLink() {
+    const found = urlBeforeCaret();
+    if (!found) { return false; }
+    const r = document.createRange();
+    r.setStart(found.node, found.end - found.text.length);
+    r.setEnd(found.node, found.end);
+    selectRange(r);
+    if (!applyLink(found.text, '')) { return false; }
+    const a = linkAt();
+    if (a) {
+      const after = document.createRange();
+      after.setStartAfter(a);
+      after.collapse(true);
+      selectRange(after);
+    }
+    return true;
+  }
+
   /** The caret position under the pointer, however this browser spells it. */
   function caretFromPoint(x, y) {
     if (document.caretRangeFromPoint) { return document.caretRangeFromPoint(x, y); }
