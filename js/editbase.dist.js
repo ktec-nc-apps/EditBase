@@ -2832,6 +2832,17 @@
     return el;
   }
 
+  /** A frame of words put down where it is dropped, not where the text is. */
+  function insertFreeFrame() {
+    const box = insertFrame();
+    setObjectFree(box, true);
+    box.style.left = '0mm';
+    box.style.top = '0mm';
+    box.style.width = '60mm';
+    box.style.minHeight = '20mm';
+    return box;
+  }
+
   function insertFrame() {
     const box = document.createElement('div');
     box.className = 'eb-frame';
@@ -5556,13 +5567,13 @@ return function render(_ctx, _cache) {
                     _hoisted_112,
                     _createElementVNode("button", {
                       class: "eb-menu-item",
-                      onClick: _cache[79] || (_cache[79] = $event => {_ctx.addFrame(); _ctx.menu = ''})
+                      onPointerdown: _cache[79] || (_cache[79] = _withModifiers($event => (_ctx.shapeGrab($event, 'frame')), ["prevent"]))
                     }, [
                       _createElementVNode("span", {
                         innerHTML: _ctx.icons.frame
                       }, null, 8 /* PROPS */, _hoisted_113),
                       _createTextVNode(_toDisplayString(_ctx.t('Text frame')), 1 /* TEXT */)
-                    ]),
+                    ], 32 /* NEED_HYDRATION */),
                     _hoisted_114,
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.shapes, (sh) => {
                       return (_openBlock(), _createElementBlock("button", {
@@ -11205,12 +11216,17 @@ return function render(_ctx, _cache) {
       dropShape(kind, ev) {
         const c = canvas();
         if (!c) { return; }
+        // Pressed rather than dragged, a frame of words goes into the flow where
+        // the caret is, which is what someone writing a letter wants. Dragged, it
+        // is put down where it lands, which is what someone laying out a page
+        // wants. Both are one gesture apart.
+        if (kind === 'frame' && !ev) { this.addFrame(); return; }
         if (ev) {
           const at2 = caretFromPoint(ev.clientX, ev.clientY);
           if (at2) { selectRange(at2); }
         }
         let made = null;
-        this.run(() => { made = insertShape(kind); });
+        this.run(() => { made = kind === 'frame' ? insertFreeFrame() : insertShape(kind); });
         this.$nextTick(() => {
           if (made && made.parentNode && ev) {
             this.moveFreeTo(made, ev.clientX, ev.clientY);
