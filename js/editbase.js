@@ -393,9 +393,14 @@
   padding: 2mm; margin: 1.1em 0;
 }
 .eb-doc .eb-shape.eb-sh-round { border-radius: 4mm; }
-.eb-doc .eb-v-mid, .eb-doc .eb-v-bot { display: flex; flex-direction: column; }
-.eb-doc .eb-v-mid { justify-content: center; }
-.eb-doc .eb-v-bot { justify-content: flex-end; }
+/* Only on the things that are boxes to write in. Laying a table out as a column
+   of flex items would take it apart. */
+.eb-doc .eb-shape.eb-v-mid, .eb-doc .eb-frame.eb-v-mid, .eb-doc .eb-box.eb-v-mid,
+.eb-doc .eb-shape.eb-v-bot, .eb-doc .eb-frame.eb-v-bot, .eb-doc .eb-box.eb-v-bot {
+  display: flex; flex-direction: column;
+}
+.eb-doc .eb-shape.eb-v-mid, .eb-doc .eb-frame.eb-v-mid, .eb-doc .eb-box.eb-v-mid { justify-content: center; }
+.eb-doc .eb-shape.eb-v-bot, .eb-doc .eb-frame.eb-v-bot, .eb-doc .eb-box.eb-v-bot { justify-content: flex-end; }
 .eb-doc .eb-shape.eb-sh-ellipse { border-radius: 50%; }
 .eb-doc .eb-shape.eb-sh-line {
   min-height: 0; height: 0; padding: 0; border: none; border-top: 1pt solid #333333;
@@ -5168,7 +5173,7 @@
               <option value="free">{{ t('Placed freely') }}</option>
             </select>
           </div>
-          <div class="eb-field">
+          <div class="eb-field" v-if="frameHoldsWords">
             <label>{{ t('Text down the box') }}</label>
             <select v-model="fprops.vpos">
               <option value="">{{ t('At the top') }}</option>
@@ -5854,6 +5859,10 @@
       /** Wrapping and free placement cannot both be true: CSS has only one answer. */
       freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
       /** What the frame is, in the writer's words, for the bar and the dialogue. */
+      /** Whether this object is a box with words in it, as against a table or a rule. */
+      frameHoldsWords() {
+        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT'].indexOf(this.frame.kind) >= 0;
+      },
       frameLabel() {
         const kind = this.frame.kind;
         const names = {
