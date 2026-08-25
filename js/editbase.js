@@ -707,7 +707,13 @@
     const fonts = resolveFonts(paper, lang);
     const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)).concat(stylesFamilies(styles)));
     const s = sheet(paper);
+    // On screen the file should read as a sheet of paper, the way the editor
+    // draws it -- a white page on a grey ground -- not as a web page that happens
+    // to be narrow. Print takes none of this: paper is already white.
     const page = 'html { background: #ffffff; }\n'
+      + '@media screen { html { background: #f1f2f4; -webkit-print-color-adjust: exact; }\n'
+      + '  body.eb-doc { background: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18); }\n'
+      + '  @media (prefers-color-scheme: dark) { html { background: #2b2d31; } } }\n'
       + 'body.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; line-height: ' + paper.lineHeight + '; }\n'
       + '.eb-doc { --eb-font-body: ' + fontStack(fonts.body, 'serif') + ';'
       + ' --eb-font-head: ' + fontStack(fonts.head, 'sans') + ';'
