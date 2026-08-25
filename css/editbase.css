@@ -706,3 +706,15 @@
   width: max-content; height: auto; max-width: none; min-height: 0; min-width: var(--eb-paper-w);
 }
 .eb-desk { align-items: flex-start; }
+
+/* the crop preview: the frame's shape, the picture filling it, drag to choose */
+.eb-cropbox {
+  position: relative; width: 100%; max-height: 40vh; margin: 10px 0 4px;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: var(--surface-2); cursor: move; touch-action: none;
+}
+.eb-cropbox img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; pointer-events: none; }
+.eb-cropbox .hint {
+  position: absolute; left: 8px; bottom: 8px; font-size: 11.5px; color: #fff;
+  background: rgba(15, 23, 42, .55); border-radius: 6px; padding: 2px 7px; pointer-events: none;
+}
