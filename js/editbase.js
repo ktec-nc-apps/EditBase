@@ -6592,10 +6592,11 @@
        */
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
-        // A frame in the run of a sentence has no alignment of its own, and one
-        // parked by hand is already where the writer put it. Neither is the
-        // paragraph, which is not what was picked up: leave them where they are.
-        if (el.nodeName === 'SPAN' || objectFree(el)) { return true; }
+        // A frame in the run of a sentence has no alignment of its own, and neither
+        // has one parked by hand. Say so and let the paragraph command run: a
+        // button that quietly does nothing is worse than one that moves the line
+        // the frame is standing in, which is what the writer sees anyway.
+        if (el.nodeName === 'SPAN' || objectFree(el)) { return false; }
         const want = { 'eb-al-l': ['0', 'auto'], 'eb-al-c': ['auto', 'auto'], 'eb-al-r': ['auto', '0'] }[cls];
         if (!want) { return false; }
         const now = [el.style.marginLeft || '', el.style.marginRight || ''];
