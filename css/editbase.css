@@ -726,3 +726,28 @@
   border: 1.5px dashed #2563eb; background: rgba(37, 99, 235, .08);
   transform: translate(-50%, -50%); border-radius: 2px;
 }
+
+/* The shelf of things that can be put on the page. */
+#editbase-root .eb-desk { position: relative; }
+/* Room for the shelf, so it stands beside the paper instead of over it. */
+#editbase-root .eb-desk.withpal { padding-left: 56px; }
+#editbase-root .eb-palette {
+  position: absolute; left: 8px; top: 12px; z-index: 6;
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--color-main-background, #fff);
+  border: 1px solid var(--color-border, #ddd); border-radius: 8px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .12);
+}
+#editbase-root .eb-palette .pal {
+  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent; cursor: grab; padding: 0;
+  color: var(--color-main-text, #222);
+}
+#editbase-root .eb-palette .pal:hover { background: var(--color-background-hover, #f2f3f5); }
+#editbase-root .eb-palette .pal:active { cursor: grabbing; }
+/* Below this the paper and the shelf cannot both fit, and the shelf would stand
+   on the page. The things on it are still in the insert menu. */
+@media (max-width: 1150px) {
+  #editbase-root .eb-palette { display: none; }
+  #editbase-root .eb-desk.withpal { padding-left: 0; }
+}
