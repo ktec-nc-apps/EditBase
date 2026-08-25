@@ -77,8 +77,6 @@ OC.L10N.register(
     "Show the margin boundaries": "Show the margin boundaries",
     "Show the page as it prints": "Show the page as it prints",
     "Fit the text to the screen": "Fit the text to the screen",
-    "Screen": "Screen",
-    "Page": "Page",
     "Zoom": "Zoom",
     "Find": "Find",
     "none": "none",

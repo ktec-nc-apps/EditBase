@@ -346,6 +346,7 @@
 #editbase-root label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
 .eb-num { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.eb-num .cap { font-size: 12px; color: var(--muted); padding: 0 2px 0 9px; white-space: nowrap; }
 .eb-num input { width: 52px; border: none; background: transparent; color: var(--text); text-align: center; font-size: 13px; padding: 4px 0; -moz-appearance: textfield; }
 .eb-num input::-webkit-outer-spin-button, .eb-num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 #editbase-root .eb-num .eb-tb { min-width: 26px; height: 28px; }
