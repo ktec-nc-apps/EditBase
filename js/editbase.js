@@ -3639,6 +3639,8 @@
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    pageView: I('<rect x="3.4" y="1.8" width="9.2" height="12.4" rx="1"/><path d="M5.8 5h4.4M5.8 8h4.4M5.8 11h2.6"/>'),
+    screenView: I('<rect x="1.6" y="3" width="12.8" height="8.4" rx="1"/><path d="M6 13.6h4"/>'),
     review: I('<path d="M2.6 12.4 5 12l7.4-7.4a1.4 1.4 0 0 0-2-2L3 10z"/><path d="M2.6 14.4h10.8"/>'),
     crop: I('<path d="M4.6 1.6v9.8h9.8M1.6 4.6h9.8v9.8"/>'),
     cellBorder: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10M2 8h12" stroke-dasharray="1.6 1.4"/>'),
@@ -3875,10 +3877,12 @@
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
-      <button class="eb-tb text" :class="{ on: flow }" @mousedown.prevent @click="toggleFlow" :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
-        <span class="lbl">{{ flow ? t('Screen') : t('Page') }}</span>
+      <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
+        :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
+        <span v-html="flow ? icons.screenView : icons.pageView"></span>
       </button>
       <span class="eb-num" :title="t('Zoom')" v-if="!flow">
+        <span class="cap">{{ t('Zoom') }}</span>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
         <button class="eb-tb text zoomv" @mousedown.prevent @click="zoomSetByHand = true; zoom = 100">{{ zoom }}%</button>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
