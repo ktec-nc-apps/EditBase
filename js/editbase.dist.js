@@ -515,6 +515,13 @@
 
   /** The stylesheet the editor canvas needs on top of DOC_CSS (never exported). */
   const EDITOR_CSS = `
+/* A line is a fraction of a millimetre tall, which is nothing to aim at. In the
+   editor it is given an invisible band above and below to be caught by; the
+   saved file has none of this, and the line prints as thin as it is drawn. */
+.eb-paper .eb-shape.eb-sh-line, .eb-paper .eb-shape.eb-sh-arrow { position: relative; }
+.eb-paper .eb-shape.eb-sh-line::before, .eb-paper .eb-shape.eb-sh-arrow::before {
+  content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 13px;
+}
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -6277,7 +6284,8 @@ return function render(_ctx, _cache) {
             ? (_openBlock(), _createElementBlock("div", {
                 key: 6,
                 class: _normalizeClass(["eb-fsel", { dragging: _ctx.frame.dragging }]),
-                style: _normalizeStyle({ left: _ctx.frame.x + 'px', top: _ctx.frame.y + 'px', width: _ctx.frame.w + 'px', height: _ctx.frame.h + 'px' })
+                style: _normalizeStyle({ left: (_ctx.frame.x - _ctx.frame.padX / 2) + 'px', top: (_ctx.frame.y - _ctx.frame.padY / 2) + 'px',
+                    width: (_ctx.frame.w + _ctx.frame.padX) + 'px', height: (_ctx.frame.h + _ctx.frame.padY) + 'px' })
               }, [
                 _hoisted_247,
                 (_openBlock(), _createElementBlock(_Fragment, null, _renderList(['t','r','b','l'], (e) => {
@@ -9341,7 +9349,7 @@ return function render(_ctx, _cache) {
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [], gx: null, gy: null },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [], gx: null, gy: null },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -10459,6 +10467,12 @@ return function render(_ctx, _cache) {
         this.frame.y = (a.top - b.top) / z;
         this.frame.w = a.width / z;
         this.frame.h = a.height / z;
+        // A rule or a line is a fraction of a millimetre tall. Drawn true, its box
+        // has no room for the bands that move it and the handles that size it, and
+        // the thing cannot be picked up at all. The box is given a little height to
+        // be caught by; what is dragged is still measured from the object itself.
+        this.frame.padX = this.frame.w < 10 ? (10 - this.frame.w) : 0;
+        this.frame.padY = this.frame.h < 10 ? (10 - this.frame.h) : 0;
         this.frame.free = objectFree(el);
         this.frame.kind = objectKind(el);
         this.frame.on = true;
