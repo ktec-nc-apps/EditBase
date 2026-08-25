@@ -11,6 +11,7 @@ return [
 		['name' => 'api#saveSettings', 'url' => '/api/settings', 'verb' => 'POST'],
 		['name' => 'api#getI18n', 'url' => '/api/i18n/{lang}', 'verb' => 'GET'],
 		['name' => 'api#fonts', 'url' => '/api/fonts', 'verb' => 'GET'],
+		['name' => 'api#fetchPage', 'url' => '/api/fetch', 'verb' => 'GET'],
 
 		// pictures, from the user's own Files
 		['name' => 'api#browseFiles', 'url' => '/api/files/browse', 'verb' => 'GET'],

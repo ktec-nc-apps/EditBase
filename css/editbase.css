@@ -709,3 +709,8 @@
 #editbase-root .eb-fsel .bar .sep {
   width: 1px; height: 16px; margin: 0 2px; background: currentColor; opacity: .25; flex: 0 0 auto;
 }
+
+/* The line a frame has caught on while it is being dragged. */
+#editbase-root .eb-snap { position: absolute; background: #e5484d; pointer-events: none; z-index: 7; }
+#editbase-root .eb-snap.v { top: 0; bottom: 0; width: 1px; }
+#editbase-root .eb-snap.h { left: 0; right: 0; height: 1px; }

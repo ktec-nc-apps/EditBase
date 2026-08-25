@@ -3547,8 +3547,9 @@
     if (!data) { return; }
     e.preventDefault();
     const html = plainOnly ? '' : data.getData('text/html');
+    const uri = (data.getData('text/uri-list') || '').split(/\r?\n/).find((l) => /^https?:/i.test(l)) || '';
     history.push(true);
-    if (html) { pasteHtmlAt(html); } else { pasteTextAt(data.getData('text/plain') || ''); }
+    if (html) { pasteHtmlAt(html, uri); } else { pasteTextAt(data.getData('text/plain') || ''); }
     normaliseCanvas();
   }
 
@@ -3567,7 +3568,108 @@
     }
   }
 
-  function pasteHtmlAt(html) {
+  // ---- a page from the web -------------------------------------------------------
+  // What a browser puts on the clipboard from a web page is a page, not a document:
+  // navigation, sidebars, tracking pixels, and a scaffolding of nested divs holding
+  // it all together. None of that belongs in something that is going to be printed.
+  // This pulls the writing out of it and leaves the rest behind.
+  const WEB_DROP = 'script, style, noscript, template, iframe, object, embed, form,'
+    + ' input, select, textarea, button, nav, aside, header, footer, svg, canvas,'
+    + ' video, audio, dialog, [hidden], [aria-hidden="true"], [role="navigation"],'
+    + ' [role="banner"], [role="contentinfo"], [role="complementary"], [role="search"]';
+  const WEB_UNWRAP = 'div, section, article, main, span, font, center, small, big,'
+    + ' tt, label, picture, hgroup, address, time, abbr';
+
+  function absUrl(url, base) {
+    const raw = String(url == null ? '' : url).trim();
+    if (!raw || /^(javascript|data:text\/html)/i.test(raw)) { return ''; }
+    if (/^(https?:|mailto:|tel:|data:image\/)/i.test(raw)) { return raw; }
+    if (!base) { return ''; }
+    try { return new URL(raw, base).href; } catch (e) { return ''; }
+  }
+  function unwrapEl(el) {
+    const parent = el.parentNode;
+    if (!parent) { return; }
+    while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+    parent.removeChild(el);
+  }
+  /** Loose words and inline bits at the top level become paragraphs of their own. */
+  function wrapLoose(root) {
+    let run = null;
+    Array.from(root.childNodes).forEach((n) => {
+      const block = n.nodeType === 1 && isBlock(n);
+      if (block || (n.nodeType === 3 && !n.data.trim())) {
+        run = null;
+        if (n.nodeType === 3 && !n.data.trim()) { root.removeChild(n); }
+        return;
+      }
+      if (!run) {
+        run = document.createElement('p');
+        root.insertBefore(run, n);
+      }
+      run.appendChild(n);
+    });
+  }
+  function webToDocument(root, base) {
+    root.querySelectorAll(WEB_DROP).forEach((el) => el.remove());
+    root.querySelectorAll('a[href]').forEach((a) => {
+      const href = absUrl(a.getAttribute('href'), base);
+      if (href) { a.setAttribute('href', href); } else { unwrapEl(a); }
+    });
+    root.querySelectorAll('img').forEach((img) => {
+      const src = absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', base);
+      const w = Number(img.getAttribute('width') || 0);
+      const h = Number(img.getAttribute('height') || 0);
+      // A pixel that measures two by two is counting readers, not showing them
+      // anything.
+      if (!src || (w && w <= 2) || (h && h <= 2)) { img.remove(); return; }
+      img.setAttribute('src', src);
+      ['srcset', 'sizes', 'loading', 'decoding', 'width', 'height', 'class', 'id'].forEach((a) => img.removeAttribute(a));
+    });
+    // Innermost first, and more than once: a page is divs inside divs.
+    for (let pass = 0; pass < 8; pass += 1) {
+      const found = Array.from(root.querySelectorAll(WEB_UNWRAP));
+      if (!found.length) { break; }
+      found.reverse().forEach(unwrapEl);
+    }
+    root.querySelectorAll('table').forEach((t) => {
+      t.className = 'eb-table';
+      ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align', 'id'].forEach((a) => t.removeAttribute(a));
+      // A table holding one cell is a page's scaffolding, not a table of anything.
+      if (t.querySelectorAll('tr').length <= 1 && t.querySelectorAll('td, th').length <= 1) {
+        const cell = t.querySelector('td, th');
+        if (cell) { t.parentNode.insertBefore(cell, t); unwrapEl(cell); }
+        t.remove();
+      }
+    });
+    root.querySelectorAll('dl').forEach((dl) => {
+      Array.from(dl.children).forEach((kid) => {
+        const p = document.createElement('p');
+        while (kid.firstChild) { p.appendChild(kid.firstChild); }
+        if (kid.nodeName === 'DT') { const b = document.createElement('strong'); while (p.firstChild) { b.appendChild(p.firstChild); } p.appendChild(b); }
+        dl.parentNode.insertBefore(p, dl);
+      });
+      dl.remove();
+    });
+    root.querySelectorAll('img').forEach((img) => {
+      if (img.closest('figure') || img.closest('td') || img.closest('th')) { return; }
+      const fig = document.createElement('figure');
+      fig.className = 'eb-img eb-img-m';
+      img.parentNode.insertBefore(fig, img);
+      fig.appendChild(img);
+      const cap = document.createElement('figcaption');
+      cap.textContent = img.getAttribute('alt') || '';
+      fig.appendChild(cap);
+    });
+    wrapLoose(root);
+    // Anything left holding neither words nor a picture was scaffolding.
+    root.querySelectorAll('p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, figcaption')
+      .forEach((el) => { if (!el.textContent.trim() && !el.querySelector('img')) { el.remove(); } });
+    root.querySelectorAll('ul, ol').forEach((l) => { if (!l.querySelector('li')) { l.remove(); } });
+    return root;
+  }
+
+  function pasteHtmlAt(html, base) {
     const holder = document.createElement('div');
     holder.innerHTML = html;
     sanitiseInto(holder);
@@ -3579,12 +3681,19 @@
         if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
       }
     });
+    webToDocument(holder, base || baseFromHtml(html));
     stripFurniture(holder, true);
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
     insertFragmentAt(frag);
   }
 
+  /** Chrome and Safari put the page's own address in the clipboard markup. */
+  function baseFromHtml(html) {
+    const m = String(html || '').match(/<base[^>]+href=["']([^"']+)["']/i)
+      || String(html || '').match(/<!--\s*(?:StartFragment|SourceURL)\s*:?\s*(https?:\/\/[^\s>-]+)/i);
+    return m ? m[1] : '';
+  }
   function pasteTextAt(text) {
     const frag = document.createDocumentFragment();
     String(text == null ? '' : text).split(/\r?\n/).forEach((line, i) => {
@@ -4088,6 +4197,7 @@
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+          <button class="eb-menu-item" @click="webOpen = true; menu = ''"><span v-html="icons.link"></span>{{ t('Bring in a web page…') }}</button>
           <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
           <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
           <div class="eb-menu-sep"></div>
@@ -4220,6 +4330,10 @@
         <div id="eb-canvas" class="eb-paper eb-doc" :class="numberClass"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
+        <!-- The line a frame has just snapped to, drawn while it is being dragged
+             so the writer can see what it caught on. -->
+        <div class="eb-snap v" v-if="frame.gx !== null" :style="{ left: frame.gx + 'px' }"></div>
+        <div class="eb-snap h" v-if="frame.gy !== null" :style="{ top: frame.gy + 'px' }"></div>
         <!-- Text is an object too, and this is the box round the 文節 the caret is
              standing in, or round whatever is selected. It is a marker and nothing
              more: it takes no pointer and carries no bar, because anything floating
@@ -5217,6 +5331,21 @@
   </div>
 
   <!-- a hyperlink -->
+  <div v-if="webOpen" class="eb-modal-back" @click="webOpen = false">
+    <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
+      <h3>{{ t('Bring in a web page…') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('Address') }}</label>
+          <input type="text" v-model="webUrl" placeholder="https://example.org/page" @keydown.enter.prevent="fetchWebPage"></div>
+        <p class="eb-tip">{{ t('The writing on the page is brought in: headings, paragraphs, lists, tables and pictures. Navigation, sidebars and advertising are left behind. Copying a page and pasting it here does the same thing.') }}</p>
+        <p class="eb-tip" v-if="webBusy">{{ t('Fetching…') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="webOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" :disabled="webBusy || !webUrl" @click="fetchWebPage">{{ t('Bring it in') }}</button>
+      </div>
+    </div>
+  </div>
   <div v-if="linkOpen" class="eb-modal-back" @click="linkOpen = false">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ link.editing ? t('Edit the link…') : t('Hyperlink…') }}</h3>
@@ -5303,7 +5432,7 @@
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [] },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [], gx: null, gy: null },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -5330,6 +5459,7 @@
         tocTitle: '',
         spellcheck: false,
         autolink: true,
+        webOpen: false, webUrl: '', webBusy: false,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
         altOpen: false,
@@ -5848,6 +5978,21 @@
       openMath() {
         if (!this.math.source) { this.math.source = this.mathSnippets[0].code; }
         this.mathOpen = true;
+      },
+      async fetchWebPage() {
+        const url = (this.webUrl || '').trim();
+        if (!url || this.webBusy) { return; }
+        this.webBusy = true;
+        try {
+          const got = await api('fetch?url=' + encodeURIComponent(/^https?:/i.test(url) ? url : 'https://' + url));
+          this.webOpen = false;
+          this.webUrl = '';
+          const c = canvas();
+          if (c) { c.focus(); }
+          this.run(() => pasteHtmlAt(got.html || '', got.url || ''));
+        } catch (e) {
+          this.notify(this.t('Could not read that page: {msg}', { msg: e.message }));
+        } finally { this.webBusy = false; }
       },
       addMath() {
         const src = this.math.source;
@@ -6579,6 +6724,7 @@
         setColumnWidths(frameEl, widths);
         this.syncFrame();
       },
+      frameDragEndGuides() { this.frame.gx = null; this.frame.gy = null; },
       frameDragMove(e) {
         const d = frameDrag;
         if (!d || !frameEl) { return; }
@@ -6590,6 +6736,7 @@
           if (d.free) {
             s.left = round1(d.left + dx) + 'mm';
             s.top = round1(d.top + dy) + 'mm';
+            this.snapFree(frameEl, e.altKey);
             this.keepOnPaper(frameEl);
             this.syncFrame();
           } else if (d.flt) {
@@ -6657,6 +6804,7 @@
         frameDrag = null;
         this.frame.dragging = false;
         this.frame.drop = -1;
+        this.frameDragEndGuides();
         if (!d || !frameEl) { return; }
         if (!d.moved) { return; }
         if (d.mode === 'move' && !d.free && d.ref) { moveObjectTo(frameEl, d.ref, d.after); }
@@ -6707,6 +6855,63 @@
        * entirely -- one in a document here sat 68.7mm off the left edge, where no
        * alignment could reach it and nothing showed but the half that overhung.
        */
+      /**
+       * Dragging a frame catches on the lines a writer actually wants: the two
+       * margins, the middle of the column, and the top of the text. Without it a
+       * frame can be put near the centre but never on it, which is the moment a
+       * page stops feeling like a page. Hold Alt to place it freely.
+       */
+      snapFree(el, off) {
+        this.frame.gx = null;
+        this.frame.gy = null;
+        const box = this.columnBox();
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (off || !box || !wrap || !el || !el.getBoundingClientRect) { return; }
+        const z = this.frameZoom() || 1;
+        const near = 7 * z;
+        const r = el.getBoundingClientRect();
+        const mid = (box.left + box.right) / 2;
+        const lines = [
+          [box.left, r.left], [mid, (r.left + r.right) / 2], [box.right, r.right],
+        ];
+        let best = null;
+        lines.forEach(([want, have]) => {
+          const gap = want - have;
+          if (Math.abs(gap) <= near && (!best || Math.abs(gap) < Math.abs(best[0]))) { best = [gap, want]; }
+        });
+        if (!best) { return; }
+        this.nudgeFree(el, best[0]);
+        const b = wrap.getBoundingClientRect();
+        this.frame.gx = (best[1] - b.left) / z;
+      },
+      duplicateFrame() {
+        const el = frameEl;
+        if (!el || !el.parentNode) { return; }
+        history.push(true);
+        const host = objectFree(el) ? el.parentNode : el;
+        const copy = host.cloneNode(true);
+        host.parentNode.insertBefore(copy, host.nextSibling);
+        const made = objectFree(el) ? copy.firstElementChild : copy;
+        if (made && objectFree(made)) {
+          made.style.left = round1((parseFloat(made.style.left) || 0) + 4) + 'mm';
+          made.style.top = round1((parseFloat(made.style.top) || 0) + 4) + 'mm';
+        }
+        frameEl = made;
+        framePinned = true;
+        frameTaken = true;
+        if (made) { this.keepOnPaper(made); }
+        this.settleFrame();
+      },
+      /** Arrow keys walk a frame about the page, the way they do in a drawing. */
+      nudgeFrameBy(el, dxMm, dyMm) {
+        if (!el || !objectFree(el)) { return false; }
+        history.push(true);
+        el.style.left = round1((parseFloat(el.style.left) || 0) + dxMm) + 'mm';
+        el.style.top = round1((parseFloat(el.style.top) || 0) + dyMm) + 'mm';
+        this.keepOnPaper(el);
+        this.settleFrame();
+        return true;
+      },
       keepOnPaper(el) {
         const box = this.columnBox();
         if (!box || !el || !el.getBoundingClientRect || !objectFree(el)) { return; }
@@ -7616,6 +7821,22 @@
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
+        // Arrow keys walk a parked frame about the page: a millimetre a press, five
+        // with Shift, a fifth with Alt. Anywhere else they belong to the caret.
+        if (frameTaken && frameEl && objectFree(frameEl) && !meta
+          && /^Arrow(Left|Right|Up|Down)$/.test(e.key)) {
+          const step = e.shiftKey ? 5 : (e.altKey ? 0.2 : 1);
+          const dx = (e.key === 'ArrowLeft' ? -step : (e.key === 'ArrowRight' ? step : 0));
+          const dy = (e.key === 'ArrowUp' ? -step : (e.key === 'ArrowDown' ? step : 0));
+          if (this.nudgeFrameBy(frameEl, dx, dy)) { e.preventDefault(); return undefined; }
+        }
+        // Ctrl+D leaves a copy a few millimetres down and across, ready to be
+        // dragged off -- the quickest way to lay out a row of the same thing.
+        if (meta && !e.altKey && e.key.toLowerCase() === 'd' && frameTaken && frameEl) {
+          e.preventDefault();
+          this.duplicateFrame();
+          return undefined;
+        }
         // A picture with its box up goes when Delete is pressed, the way it does
         // in every word processor. Text being written inside a frame does not:
         // there the key deletes a character, as it always has.

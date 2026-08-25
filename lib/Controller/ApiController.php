@@ -17,6 +17,7 @@ use OCP\Files\NotPermittedException;
 use OCP\IConfig;
 use OCP\IRequest;
 use OCP\IUserSession;
+use OCP\Http\Client\IClientService;
 use OCP\L10N\IFactory;
 
 class ApiController extends Controller {
@@ -30,6 +31,7 @@ class ApiController extends Controller {
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
+		private IClientService $clientService,
 	) {
 		parent::__construct(Application::APP_ID, $request);
 	}
@@ -120,6 +122,38 @@ class ApiController extends Controller {
 	 * fetched at run time, so the picker works before anything is loaded from Google
 	 * — and on a server that cannot reach Google at all, the list is still there.
 	 */
+	/**
+	 * Fetch a page from the web so its writing can be brought into a document.
+	 * The browser cannot do this itself -- another site's page is not its to read --
+	 * so the server asks for it and hands back the markup, which the editor then
+	 * strips down to the writing. Only http and https, and only the address the
+	 * user typed: Nextcloud's own client refuses local addresses when the instance
+	 * is configured to.
+	 */
+	#[NoAdminRequired]
+	public function fetchPage(string $url): JSONResponse {
+		return $this->run(function () use ($url) {
+			$clean = trim($url);
+			if (!preg_match('#^https?://#i', $clean) || filter_var($clean, FILTER_VALIDATE_URL) === false) {
+				throw new \InvalidArgumentException('that is not a web address');
+			}
+			$response = $this->clientService->newClient()->get($clean, [
+				'timeout' => 20,
+				'headers' => ['Accept' => 'text/html,application/xhtml+xml'],
+				'nextcloud' => ['allow_local_address' => false],
+			]);
+			$type = $response->getHeader('Content-Type');
+			if ($type !== '' && stripos($type, 'html') === false) {
+				throw new \InvalidArgumentException('that address is not a web page');
+			}
+			$body = (string)$response->getBody();
+			if (strlen($body) > 4 * 1024 * 1024) {
+				$body = substr($body, 0, 4 * 1024 * 1024);
+			}
+			return ['url' => $clean, 'html' => $body];
+		});
+	}
+
 	#[NoAdminRequired]
 	public function fonts(): JSONResponse {
 		return $this->run(function () {
