@@ -4365,6 +4365,28 @@
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span v-html="flow ? icons.screenView : icons.pageView"></span>
       </button>
+      <!-- What is done to the object itself. It goes in the row that is already
+           here rather than in one of its own: a new row appearing pushed the
+           paper down 43 pixels every time an object was picked up, and the
+           thing just clicked jumped out from under the pointer. -->
+      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="openFrameProps">
+      <span class="nm">{{ frameLabel }}</span>
+      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
+      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
+      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
+      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
+      </span>
       <span class="eb-num" :title="t('Zoom')" v-if="!flow">
         <span class="cap">{{ t('Zoom') }}</span>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
@@ -4416,27 +4438,6 @@
       <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
     </div>
 
-    <!-- What is done to the object itself. It used to float over the page beside
-         the object, where it covered whatever else was near it and took the
-         clicks meant for them. It belongs with the other toolbars. -->
-    <div class="eb-toolbar sub" v-if="doc.id && frame.on" @contextmenu.prevent.stop="openFrameProps">
-      <span class="nm">{{ frameLabel }}</span>
-      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
-      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
-      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
-      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
-    </div>
     <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
       <span class="grp">{{ t('Table') }}</span>
       <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
