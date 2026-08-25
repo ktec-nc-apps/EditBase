@@ -2812,6 +2812,9 @@
     return !onText(el, x, y);
   }
   let frameTaken = false;
+  // Objects held alongside the one with the bar on it. Shift adds and removes.
+  let frameMore = [];
+  const frameAll = () => [frameEl].concat(frameMore).filter((el) => el && el.parentNode);
   function deleteObject(el) {
     if (!el) { return; }
     const host = objectFree(el) ? el.parentNode : el;
@@ -4409,6 +4412,27 @@
       <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
     </div>
 
+    <!-- What is done to the object itself. It used to float over the page beside
+         the object, where it covered whatever else was near it and took the
+         clicks meant for them. It belongs with the other toolbars. -->
+    <div class="eb-toolbar sub" v-if="doc.id && frame.on" @contextmenu.prevent.stop="openFrameProps">
+      <span class="nm">{{ frameLabel }}</span>
+      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
+      <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
+      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
+      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
+      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
+    </div>
     <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
       <span class="grp">{{ t('Table') }}</span>
       <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
@@ -4489,6 +4513,8 @@
           <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
             :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
         </div>
+        <div class="eb-fmore" v-for="(b, i) in frame.extras" :key="'m' + i"
+          :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
         <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging }"
           :style="{ left: (frame.x - frame.padX / 2) + 'px', top: (frame.y - frame.padY / 2) + 'px',
                     width: (frame.w + frame.padX) + 'px', height: (frame.h + frame.padY) + 'px' }">
@@ -4502,24 +4528,6 @@
             @pointerdown.prevent.stop="frameGrab($event, h)"></span>
           <span v-for="g in frame.grips" :key="'cg' + g.index" class="cg" :style="{ left: g.x + 'px' }"
             @pointerdown.prevent.stop="colGrab($event, g.index)" :title="t('Drag to set the column width')"></span>
-          <div class="bar" v-if="frame.bar" :class="{ below: frame.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
-            <span class="nm">{{ frameLabel }}</span>
-            <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-            <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
-            <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
-            <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
-            <span class="sep"></span>
-            <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
-            <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
-            <span class="sep"></span>
-            <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
-            <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
-            <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
-            <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
-            <span class="sep"></span>
-            <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
-            <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
-          </div>
         </div>
       </div>
       <div class="eb-empty" v-if="!doc.id">
@@ -5601,7 +5609,7 @@
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -6736,6 +6744,13 @@
           this.frame.mm = mm(a.left - box.left) + ', ' + mm(a.top - box.top)
             + '  ' + mm(a.width) + ' \u00d7 ' + mm(a.height) + ' mm';
         }
+        // The boxes round the ones held with Shift. They carry no bar and no
+        // handles: one of them is in charge and that is the one with the bar.
+        frameMore = frameMore.filter((o) => o && o.parentNode && c.contains(o) && o !== el);
+        this.frame.extras = frameMore.map((o) => {
+          const q = o.getBoundingClientRect();
+          return { x: (q.left - b.left) / z, y: (q.top - b.top) / z, w: q.width / z, h: q.height / z };
+        });
         this.frame.padX = this.frame.w < 10 ? (10 - this.frame.w) : 0;
         this.frame.padY = this.frame.h < 10 ? (10 - this.frame.h) : 0;
         this.frame.free = objectFree(el);
@@ -6832,6 +6847,16 @@
       onCanvasDown(e) {
         if (frameDrag) { return; }
         const at = objectAt(e.target);
+        // Shift takes hold of another one without letting go of the first, which
+        // is how several things are lined up with each other.
+        if (e.shiftKey && at && frameEl && at !== frameEl) {
+          const i = frameMore.indexOf(at);
+          if (i >= 0) { frameMore.splice(i, 1); } else { frameMore.push(at); }
+          frameTaken = true;
+          this.$nextTick(() => this.syncFrame());
+          return;
+        }
+        if (!e.shiftKey) { frameMore = []; }
         frameEl = at;
         // A rule or a picture never holds the caret, so the caret cannot keep it
         // selected either: remember that this one was chosen by hand.
@@ -6843,6 +6868,7 @@
       },
       clearFrame() {
         frameTaken = false;
+        frameMore = [];
         frameEl = null;
         framePinned = false;
         frameBox = null;
@@ -7041,6 +7067,31 @@
         const now = parseFloat(el.style.left) || 0;
         el.style.left = round1(now + dx * MM / z) + 'mm';
       },
+      /**
+       * Several objects held at once are lined up with each other rather than with
+       * the column: left edges together, centres together, right edges together.
+       * It is the one thing a page of boxes always needs and the hardest to do by
+       * eye.
+       */
+      alignGroup(cls) {
+        const each = frameAll().filter((o) => objectFree(o) && o.getBoundingClientRect);
+        if (each.length < 2) { return; }
+        const rects = each.map((o) => o.getBoundingClientRect());
+        const left = Math.min.apply(null, rects.map((r) => r.left));
+        const right = Math.max.apply(null, rects.map((r) => r.right));
+        const mid = (left + right) / 2;
+        history.push(true);
+        each.forEach((o, i) => {
+          const r = rects[i];
+          let want = r.left;
+          if (cls === 'eb-al-l') { want = left; }
+          else if (cls === 'eb-al-c') { want = mid - r.width / 2; }
+          else if (cls === 'eb-al-r') { want = right - r.width; }
+          this.nudgeFree(o, want - r.left);
+          this.keepOnPaper(o);
+        });
+        this.settleFrame();
+      },
       alignFree(el, cls) {
         const box = this.columnBox();
         if (!box || !el.getBoundingClientRect) { return false; }
@@ -7199,19 +7250,23 @@
         if (kind === 'align') {
           framePinned = true;
           frameTaken = true;
+          if (frameMore.length) { this.alignGroup(arg); return; }
           if (!this.alignObject(frameEl, arg)) { this.blockRun(() => setBlockClass('align', arg)); }
           return;
         }
         if (kind === 'fit') {
           const paper = normalisePaper(this.doc.paper);
+          const w = round1(sheet(paper).w - paper.margin.left - paper.margin.right);
           history.push(true);
           framePinned = true;
-          frameEl.style.width = round1(sheet(paper).w - paper.margin.left - paper.margin.right) + 'mm';
-          frameEl.style.maxWidth = 'none';
-          if (objectFree(frameEl)) {
-            const box = this.columnBox();
-            if (box) { this.nudgeFree(frameEl, box.left - frameEl.getBoundingClientRect().left); }
-          }
+          frameAll().forEach((o) => {
+            o.style.width = w + 'mm';
+            o.style.maxWidth = 'none';
+            if (objectFree(o)) {
+              const box = this.columnBox();
+              if (box) { this.nudgeFree(o, box.left - o.getBoundingClientRect().left); }
+            }
+          });
           this.settleFrame();
           return;
         }
@@ -8170,7 +8225,18 @@
           const step = e.shiftKey ? 5 : (e.altKey ? 0.2 : 1);
           const dx = (e.key === 'ArrowLeft' ? -step : (e.key === 'ArrowRight' ? step : 0));
           const dy = (e.key === 'ArrowUp' ? -step : (e.key === 'ArrowDown' ? step : 0));
-          if (this.nudgeFrameBy(frameEl, dx, dy)) { e.preventDefault(); return undefined; }
+          const each = frameAll().filter((o) => objectFree(o));
+          if (each.length) {
+            e.preventDefault();
+            history.push(true);
+            each.forEach((o) => {
+              o.style.left = round1((parseFloat(o.style.left) || 0) + dx) + 'mm';
+              o.style.top = round1((parseFloat(o.style.top) || 0) + dy) + 'mm';
+              this.keepOnPaper(o);
+            });
+            this.settleFrame();
+            return undefined;
+          }
         }
         // Ctrl+D leaves a copy a few millimetres down and across, ready to be
         // dragged off -- the quickest way to lay out a row of the same thing.
@@ -8184,6 +8250,13 @@
         // there the key deletes a character, as it always has.
         if ((e.key === 'Delete' || e.key === 'Backspace') && frameTaken && frameEl) {
           e.preventDefault();
+          if (frameMore.length) {
+            history.push(true);
+            frameAll().forEach((o) => deleteObject(o));
+            this.clearFrame();
+            this.settleFrame();
+            return undefined;
+          }
           this.frameCmd('delete');
           return undefined;
         }
