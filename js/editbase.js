@@ -1288,16 +1288,45 @@
   }
 
   /** Alignment and indentation live as classes, one per group. */
+  const ALIGN_CLASS = { left: 'eb-al-l', center: 'eb-al-c', right: 'eb-al-r', justify: 'eb-al-j' };
+  /** The class for an alignment, whichever of the two names it was asked for by. */
+  function alignClass(cls) {
+    if (!cls) { return ''; }
+    if (ALIGN_CLASS[cls]) { return ALIGN_CLASS[cls]; }
+    return Object.keys(ALIGN_CLASS).some((k) => ALIGN_CLASS[k] === cls) ? cls : '';
+  }
+  /** What a block is aligned to now, whether it was said as a class or a style. */
+  function alignOf(block) {
+    if (!block || !block.classList) { return ''; }
+    const inline = block.style && block.style.textAlign;
+    if (inline) { return ALIGN_CLASS[inline] || ''; }
+    return Object.keys(ALIGN_CLASS).map((k) => ALIGN_CLASS[k]).find((c) => block.classList.contains(c)) || '';
+  }
+
   function setBlockClass(group, cls) {
     const groups = {
       align: ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j'],
       indent: ['eb-in1', 'eb-in2', 'eb-in3'],
     };
     const all = groups[group] || [];
-    selectedBlocks().forEach((b) => {
+    const wanted = group === 'align' ? alignClass(cls) : cls;
+    const blocks = selectedBlocks();
+    // Pressing the same one again takes it off. A button that shows itself as
+    // pressed has to be able to be un-pressed, and the paragraph goes back to
+    // whatever the style says.
+    const already = !!wanted && blocks.length
+      && blocks.every((b) => b.classList && (group === 'align' ? alignOf(b) === wanted : b.classList.contains(wanted)));
+    blocks.forEach((b) => {
       if (!b.classList) { return; }
       all.forEach((c) => b.classList.remove(c));
-      if (cls) { b.classList.add(cls); }
+      if (group === 'align' && b.style) {
+        // An alignment set in the paragraph settings is the same choice said
+        // another way; the button clears that too or it would look stuck.
+        b.style.removeProperty('text-align');
+        if (!b.getAttribute('style')) { b.removeAttribute('style'); }
+      }
+      if (wanted && !already) { b.classList.add(wanted); }
+      if (b.getAttribute('class') === '') { b.removeAttribute('class'); }
     });
   }
   function stepIndent(dir) {
@@ -1665,16 +1694,19 @@
   function setImageSize(cls) {
     const fig = imageAt();
     if (!fig) { return; }
+    // Pressing the same size again takes it off and the picture is its own size.
+    const already = cls && fig.classList.contains(cls);
     ['eb-img-s', 'eb-img-m', 'eb-img-l'].forEach((c) => fig.classList.remove(c));
-    fig.classList.add(cls);
+    if (cls && !already) { fig.classList.add(cls); }
   }
   const IMG_FLOATS = ['eb-img-left', 'eb-img-right'];
   /** Text wrapping is a float in HTML, which is exactly what prints too. */
   function setImageFloat(kind) {
     const fig = imageAt();
     if (!fig) { return; }
+    const already = (kind === 'left' || kind === 'right') && fig.classList.contains('eb-img-' + kind);
     IMG_FLOATS.forEach((c) => fig.classList.remove(c));
-    if (kind === 'left' || kind === 'right') { fig.classList.add('eb-img-' + kind); }
+    if (!already && (kind === 'left' || kind === 'right')) { fig.classList.add('eb-img-' + kind); }
   }
   function imageFloat() {
     const fig = imageAt();
@@ -1988,8 +2020,10 @@
         }
       }
     }
+    // Pressing the same one again takes it off, as everywhere else.
+    const already = align && cells.every((cell) => cell.style.textAlign === align);
     cells.forEach((cell) => {
-      if (align) { cell.style.textAlign = align; } else { cell.style.removeProperty('text-align'); }
+      if (align && !already) { cell.style.textAlign = align; } else { cell.style.removeProperty('text-align'); }
       if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
     });
     return true;
@@ -2044,8 +2078,9 @@
   function setCellVerticalAlign(where) {
     const cells = selectedCells();
     if (!cells.length) { return false; }
+    const already = where && cells.every((cell) => cell.style.verticalAlign === where);
     cells.forEach((cell) => {
-      if (where) { cell.style.verticalAlign = where; } else { cell.style.removeProperty('vertical-align'); }
+      if (where && !already) { cell.style.verticalAlign = where; } else { cell.style.removeProperty('vertical-align'); }
       if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
     });
     return true;
@@ -3136,9 +3171,7 @@
     if (block) {
       state.block = block.nodeName === 'UL' || block.nodeName === 'OL' ? 'P' : block.nodeName;
       state.list = block.nodeName === 'UL' || block.nodeName === 'OL' ? block.nodeName : '';
-      ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j'].forEach((c) => {
-        if (block.classList && block.classList.contains(c)) { state.align = c; }
-      });
+      state.align = alignOf(block);
       if (block.nodeName === 'LI' && block.parentNode) { state.list = block.parentNode.nodeName; }
     }
     // Inside a table cell, a figure or anything else the style menu does not offer,
@@ -6438,6 +6471,8 @@
             el.style.top = '0mm';
           }
         } else if (kind === 'wrap') {
+          // Pressing the side it is already wrapped on takes the wrapping off.
+          if (arg && (el.style.cssFloat || el.style.float) === arg) { arg = ''; }
           setObjectFree(el, false);
           el.style.removeProperty('float');
           el.style.removeProperty('margin-left');
