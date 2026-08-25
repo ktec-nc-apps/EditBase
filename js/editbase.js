@@ -2822,6 +2822,9 @@
     if (objectFree(el)) { place = 'free'; } else if (s.marginLeft === 'auto' && s.marginRight === 'auto') { place = 'center'; } else if (s.marginLeft === 'auto') { place = 'right'; } else if (s.marginRight === 'auto') { place = 'left'; }
     return {
       place,
+      // How the words inside the frame are set, which is a different question
+      // from where the frame itself sits.
+      inner: alignOf(el),
       wrap: (flt === 'left' || flt === 'right') ? flt : '',
       z: Number(s.zIndex) || '',
       x: mmOf(s.left), y: mmOf(s.top),
@@ -2904,6 +2907,13 @@
       el.classList.remove('eb-ink');
     }
     if (v.shadow) { el.classList.add('eb-shadow'); } else { el.classList.remove('eb-shadow'); }
+    // How the words inside are set. Undefined means the caller is not asking about
+    // it -- only an empty string clears what is there.
+    if (v.inner !== undefined) {
+      ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j'].forEach((c) => el.classList.remove(c));
+      s.removeProperty('text-align');
+      if (v.inner) { el.classList.add(v.inner); }
+    }
     if (v.keep) { s.breakInside = 'avoid'; }
     if (!el.getAttribute('style')) { el.removeAttribute('style'); }
     if (el.getAttribute('class') === '') { el.removeAttribute('class'); }
@@ -3875,6 +3885,10 @@
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    boxL: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="2.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
+    boxC: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="5.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
+    boxR: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="8.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
+    boxW: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="2.4" y="5.2" width="11.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
     props: I('<path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h10.8"/><circle cx="5.6" cy="4.4" r="1.5" fill="currentColor" stroke="none"/><circle cx="10.4" cy="8" r="1.5" fill="currentColor" stroke="none"/><circle cx="6.6" cy="11.6" r="1.5" fill="currentColor" stroke="none"/>'),
     save: I('<path d="M3 2.8h7.5L13.2 5.5V13a.8.8 0 0 1-.8.8H3.6a.8.8 0 0 1-.8-.8V3.6a.8.8 0 0 1 .8-.8z"/><path d="M5.5 2.8v3.4h5V2.8M5.5 13.8v-3.6h5v3.6"/>'),
     print: I('<path d="M4.5 6V2.5h7V6"/><rect x="2.2" y="6" width="11.6" height="5" rx="1"/><path d="M4.5 9.5h7v4h-7z"/>'),
@@ -4230,6 +4244,12 @@
             <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
             <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
             <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+            <span class="sep"></span>
+            <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
+            <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
+            <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
+            <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+            <span class="sep"></span>
             <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
             <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
           </div>
@@ -4866,6 +4886,16 @@
               <option value="center">{{ t('In the flow, centred') }}</option>
               <option value="right">{{ t('In the flow, at the right') }}</option>
               <option value="free">{{ t('Placed freely') }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Text inside it') }}</label>
+            <select v-model="fprops.inner">
+              <option value="">{{ t('As the document is set') }}</option>
+              <option value="eb-al-l">{{ t('Ranged left') }}</option>
+              <option value="eb-al-c">{{ t('Centred') }}</option>
+              <option value="eb-al-r">{{ t('Ranged right') }}</option>
+              <option value="eb-al-j">{{ t('Justified') }}</option>
             </select>
           </div>
           <div class="eb-field">
@@ -6735,6 +6765,28 @@
       },
       frameCmd(kind, arg) {
         if (!frameEl) { return; }
+        // Where the frame itself sits in the column, as against what the words
+        // inside it do. These two are the whole of the difference between the
+        // frame's own bar and the alignment buttons above the page.
+        if (kind === 'align') {
+          framePinned = true;
+          frameTaken = true;
+          if (!this.alignObject(frameEl, arg)) { this.blockRun(() => setBlockClass('align', arg)); }
+          return;
+        }
+        if (kind === 'fit') {
+          const paper = normalisePaper(this.doc.paper);
+          history.push(true);
+          framePinned = true;
+          frameEl.style.width = round1(sheet(paper).w - paper.margin.left - paper.margin.right) + 'mm';
+          frameEl.style.maxWidth = 'none';
+          if (objectFree(frameEl)) {
+            const box = this.columnBox();
+            if (box) { this.nudgeFree(frameEl, box.left - frameEl.getBoundingClientRect().left); }
+          }
+          this.settleFrame();
+          return;
+        }
         const el = frameEl;
         framePinned = true;
         history.push(true);
@@ -6811,7 +6863,7 @@
       },
       clearFrameProps() {
         this.fprops = {
-          place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
+          place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
         };
       },
@@ -6963,6 +7015,18 @@
         this.ctx.image = !!imageAt(at);
         // The right button acts on what it is over, so it also picks the frame up.
         const obj = objectAt(e.target) || objectAt(at);
+        // The right button on an object shows that object's settings, whatever the
+        // object is -- not only on the thin band of its border. Inside something
+        // written in, a cell or a caption, the menu for text is what is wanted.
+        if (obj && takesClick(obj, e.target, e.clientX, e.clientY)) {
+          frameEl = obj;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.syncFrame();
+          this.openFrameProps();
+          return;
+        }
         if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
         this.ctx.frame = !!obj;
         this.syncFrame();
