@@ -3130,14 +3130,16 @@
           </div>
           <template v-if="src.collection">
             <p class="eb-note">{{ t('{name}: {c} fields, {r} records', { name: src.collection.name, c: src.fields.length, r: src.records.length }) }}</p>
-            <div class="chips">
-              <button v-for="f in src.fields" :key="f.key" class="chip" @click="insertField(f.key)">{{ fieldTag(f.key) }} {{ f.label }}</button>
-            </div>
             <div class="font-list">
               <button v-for="r in src.records" :key="r.id" class="fp-item" @click="insertRecord(r)">
-                <span class="nm">{{ r.data[src.fields[0] && src.fields[0].key] || '—' }}</span>
-                <span class="meta">{{ t('Insert as a table') }}</span>
+                <span class="nm">{{ recordName(r) }}</span>
+                <span class="meta">{{ recordMeta(r) }}</span>
               </button>
+              <p class="hint" v-if="!src.records.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
+            </div>
+            <p class="eb-note">{{ t('Choosing a record writes it at the cursor as a two-column table, leaving out the fields it has nothing in. For one letter per record, use the merge fields below.') }}</p>
+            <div class="chips">
+              <button v-for="f in src.fields" :key="f.key" class="chip" @click="insertField(f.key)">{{ fieldTag(f.key) }} {{ f.label }}</button>
             </div>
           </template>
         </template>
@@ -3314,14 +3316,14 @@
   </div>
 
   <!-- the file itself -->
-  <div v-if="sourceOpen" class="eb-modal-back" @click="sourceOpen = false">
+  <div v-if="htmlOpen" class="eb-modal-back" @click="htmlOpen = false">
     <div class="eb-modal" style="width:min(860px,100%)" @click.stop>
       <h3>&lt;/&gt; {{ t('View the HTML') }}</h3>
       <div class="body">
         <p class="eb-note">{{ t('This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.') }}</p>
-        <textarea rows="18" spellcheck="false" readonly :value="source" style="width:100%;font-family:monospace;font-size:12px"></textarea>
+        <textarea rows="18" spellcheck="false" readonly :value="htmlText" style="width:100%;font-family:monospace;font-size:12px"></textarea>
       </div>
-      <div class="foot"><button class="eb-btn primary" @click="sourceOpen = false">{{ t('Close') }}</button></div>
+      <div class="foot"><button class="eb-btn primary" @click="htmlOpen = false">{{ t('Close') }}</button></div>
     </div>
   </div>
 
@@ -3692,9 +3694,13 @@
         counts: 0,
         fmt: { block: 'P', align: '', list: '' },
         toast: '',
-        source: '',
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
-        settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
+        settingsOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
+        // The file as text, and the panel that reads another app on this server:
+        // two dialogues, two names. They shared one for a while, and opening either
+        // put both on the screen.
+        htmlOpen: false,
+        htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false },
@@ -4042,8 +4048,8 @@
       printDoc() { printHtml(this.currentHtml()); },
       showSource() {
         this.menuOpen = false;
-        this.source = this.currentHtml();
-        this.sourceOpen = true;
+        this.htmlText = this.currentHtml();
+        this.htmlOpen = true;
       },
 
       // ---- editing ----
@@ -4362,9 +4368,20 @@
         });
         this.run(() => insertHtmlBlock('<ul>' + items.join('') + '</ul>'));
       },
+      /** The first field with something in it is the record's name to a reader. */
+      recordName(record) {
+        const found = this.src.fields.find((f) => record.data[f.key]);
+        return found ? String(record.data[found.key]) : '—';
+      },
+      /** The next two, so a list of contacts says who as well as what. */
+      recordMeta(record) {
+        const filled = this.src.fields.filter((f) => record.data[f.key]);
+        return filled.slice(1, 3).map((f) => String(record.data[f.key])).join(' · ');
+      },
       insertRecord(record) {
         this.sourceOpen = false;
-        const rows = this.src.fields.map((f) => [f.label, record.data[f.key] || '']);
+        // An empty field is not worth a row of its own in a document.
+        const rows = this.src.fields.filter((f) => record.data[f.key]).map((f) => [f.label, String(record.data[f.key])]);
         this.run(() => {
           const table = tableFromRows([], rows, false);
           insertBlockNode(table);
