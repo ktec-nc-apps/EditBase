@@ -380,6 +380,27 @@
 /* frames — the box round anything that was inserted rather than typed. Everything
    a frame can be told to do is written on it as inline CSS, so the file carries its
    own layout and any browser draws it the same. */
+/* Shapes. A shape is a box with nothing in it but its own outline and colour --
+   or with words in it, if the writer puts some there. Everything else about it
+   (picking it up, moving it, its settings) is what every other object does. */
+.eb-doc .eb-shape {
+  display: block; box-sizing: border-box; min-height: 20mm;
+  border: 1pt solid #333333; background: transparent; break-inside: avoid;
+  padding: 2mm; margin: 1.1em 0;
+}
+.eb-doc .eb-shape.eb-sh-round { border-radius: 4mm; }
+.eb-doc .eb-shape.eb-sh-ellipse { border-radius: 50%; }
+.eb-doc .eb-shape.eb-sh-line {
+  min-height: 0; height: 0; padding: 0; border: none; border-top: 1pt solid #333333;
+}
+.eb-doc .eb-shape.eb-sh-arrow {
+  min-height: 0; height: 0; padding: 0; border: none; border-top: 1pt solid #333333;
+  position: relative;
+}
+.eb-doc .eb-shape.eb-sh-arrow::after {
+  content: ''; position: absolute; right: -1px; top: -3.5pt;
+  border: 3.5pt solid transparent; border-left-color: #333333; border-right: none;
+}
 .eb-doc .eb-frame {
   border: .75pt solid #666; padding: .6em .8em; margin: 1.1em 0; break-inside: avoid;
 }
@@ -598,7 +619,7 @@
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin)$/;
 
   function cleanStyle(value) {
     const kept = [];
@@ -2595,7 +2616,7 @@
   // is one: a picture, a table, a callout, a formula, a contents list, a text frame.
   // A frame here is not a new kind of markup -- it is the object itself wearing
   // inline CSS -- so the file stays plain HTML and any browser lays it out the same.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, hr';
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, hr';
   /** Elements that may hold blocks of their own, so a frame can be dropped into them. */
   const BLOCK_HOSTS = 'aside.eb-box, div.eb-frame, div.eb-note, blockquote, li, td, th';
   const BORDER_STYLES = ['none', 'solid', 'dashed', 'dotted', 'double'];
@@ -2698,6 +2719,7 @@
   function objectKind(el) {
     if (!el) { return ''; }
     if (el.nodeName === 'SPAN' && el.classList.contains('eb-frame')) { return 'TEXT'; }
+    if (el.classList && el.classList.contains('eb-shape')) { return 'SHAPE'; }
     if (el.classList && el.classList.contains('eb-frame')) { return 'FRAME'; }
     if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
     if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
@@ -2775,6 +2797,28 @@
     if (near) { placeCaretIn(near); }
   }
   /** A frame with nothing in it but what the writer puts there. */
+  /**
+   * A shape is put down where the caret is and immediately taken out of the flow,
+   * so it can be dragged anywhere the moment it appears. That is the whole point
+   * of it: a page is laid out by putting things on it, not by typing until they
+   * arrive.
+   */
+  function insertShape(kind, wMm, hMm) {
+    const el = document.createElement('div');
+    el.className = 'eb-shape eb-sh-' + kind;
+    el.appendChild(document.createElement('br'));
+    insertBlockNode(el);
+    setObjectFree(el, true);
+    el.style.left = '0mm';
+    el.style.top = '0mm';
+    el.style.width = (wMm || 45) + 'mm';
+    if (kind !== 'line' && kind !== 'arrow') { el.style.minHeight = (hMm || 25) + 'mm'; }
+    // The caret goes inside it, which both keeps the shape selected -- its box and
+    // handles up, ready to be dragged -- and lets a label be typed straight away.
+    placeCaretIn(el);
+    return el;
+  }
+
   function insertFrame() {
     const box = document.createElement('div');
     box.className = 'eb-frame';
@@ -3073,6 +3117,7 @@
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
     'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
+    'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
@@ -4197,6 +4242,10 @@
           <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addFrame(); menu = ''"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
+          <div class="eb-menu-sep"></div>
+          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item" draggable="true"
+            @dragstart="shapeDragStart($event, sh.kind)" @click="addShape(sh.kind); menu = ''">
+            <span class="eb-shape-icon" v-html="sh.icon"></span>{{ sh.label }}</button>
           <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
@@ -5683,8 +5732,20 @@
           FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
           NOTE: this.t('Note'), FRAME: this.t('Frame'), TEXT: this.t('Phrase'),
+          SHAPE: this.t('Shape'),
         };
         return names[kind] || this.t('Frame');
+      },
+      /** The shapes that can be put on a page, drawn in CSS rather than in a font. */
+      shapes() {
+        const box = (extra) => '<span class="sh" style="' + extra + '"></span>';
+        return [
+          { kind: 'rect', label: this.t('Rectangle'), icon: box('border:1.5px solid currentColor') },
+          { kind: 'round', label: this.t('Rounded rectangle'), icon: box('border:1.5px solid currentColor;border-radius:4px') },
+          { kind: 'ellipse', label: this.t('Ellipse'), icon: box('border:1.5px solid currentColor;border-radius:50%') },
+          { kind: 'line', label: this.t('Line'), icon: box('border-top:1.5px solid currentColor;height:0;align-self:center') },
+          { kind: 'arrow', label: this.t('Arrow'), icon: box('border-top:1.5px solid currentColor;height:0;align-self:center;position:relative') },
+        ];
       },
       boxes() {
         return [
@@ -6518,7 +6579,11 @@
         // A click holds on to the object it landed on, so it stays selected while
         // the bar and the handles are used. It lets go when the caret is somewhere
         // else -- unless it is one of the objects a caret can never be inside.
-        if (framePinned && frameEl && !/^(HR|FIGURE|IMG)$/.test(frameEl.nodeName)) {
+        // An object taken by a click stays taken until the writer types or clicks
+        // elsewhere. Reading the caret instead let go of an empty shape the moment
+        // it was put down: a click on a box with nothing in it leaves the caret
+        // where it was, and the box let itself go before it could be dragged.
+        if (!frameTaken && framePinned && frameEl && !/^(HR|FIGURE|IMG)$/.test(frameEl.nodeName)) {
           const at = getRange();
           if (at && inCanvas(at.startContainer) && !frameEl.contains(at.startContainer)) { framePinned = false; }
         }
@@ -7200,6 +7265,22 @@
         this.touchStyles();
       },
       addFrame() { this.run(() => insertFrame()); this.$nextTick(() => this.syncFrame()); },
+      addShape(kind) {
+        let made = null;
+        this.run(() => { made = insertShape(kind); });
+        this.$nextTick(() => {
+          frameEl = made;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.syncFrame();
+        });
+      },
+      /** Dragging one out of the menu drops it where the pointer lets go. */
+      shapeDragStart(e, kind) {
+        try { e.dataTransfer.setData('text/eb-shape', kind); e.dataTransfer.effectAllowed = 'copy'; } catch (err) { /* older browsers */ }
+        this.menu = '';
+      },
 
       // ---- the context menu ----------------------------------------------------
       /**
