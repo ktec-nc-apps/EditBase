@@ -4795,6 +4795,8 @@
           w0: this.frame.w, h0: this.frame.h,
           left: Number(props.x) || 0, top: Number(props.y) || 0,
           free: objectFree(frameEl),
+          flt: frameEl.style.cssFloat || frameEl.style.float || '',
+          mt: Number(props.mt) || 0, ml: Number(props.ml) || 0, mr: Number(props.mr) || 0,
           moved: false, ref: null, after: false,
         };
         const move = (ev) => this.frameDragMove(ev);
@@ -4819,6 +4821,13 @@
           if (d.free) {
             s.left = round1(d.left + dx) + 'mm';
             s.top = round1(d.top + dy) + 'mm';
+            this.syncFrame();
+          } else if (d.flt) {
+            // A floated frame is moved by the space it holds round itself: that is
+            // what a browser lets you move without taking it out of the flow, and
+            // the text still runs round it wherever it lands.
+            s.marginTop = round1(d.mt + dy) + 'mm';
+            if (d.flt === 'left') { s.marginLeft = round1(Math.max(0, d.ml + dx)) + 'mm'; } else { s.marginRight = round1(Math.max(0, d.mr - dx)) + 'mm'; }
             this.syncFrame();
           } else if (d.moved) {
             this.frameDropTarget(e);
@@ -4882,12 +4891,15 @@
         this.settleFrame();
       },
       /** Everything a frame command changes ends the same way. */
-      settleFrame() {
+      settleFrame(fit) {
         normaliseCanvas(this.t('Page break'), this.t('Caption'));
         this.touch();
         this.recount();
         this.refreshState();
-        this.$nextTick(() => this.syncFrame());
+        this.$nextTick(() => {
+          if (fit) { this.fitFrameWidth(fit); }
+          this.syncFrame();
+        });
       },
       frameCmd(kind, arg) {
         if (!frameEl) { return; }
@@ -4898,41 +4910,56 @@
           if (objectFree(el)) {
             setObjectFree(el, false);
           } else {
-            // Keep the width it already has, or it collapses to nothing the moment
-            // it leaves the flow that was giving it one.
-            const w = this.frame.w;
             setObjectFree(el, true);
             el.style.left = '0mm';
             el.style.top = '0mm';
-            if (!el.style.width && w) { el.style.width = round1(w * MM) + 'mm'; el.style.maxWidth = 'none'; }
           }
         } else if (kind === 'wrap') {
           setObjectFree(el, false);
           el.style.removeProperty('float');
           el.style.removeProperty('margin-left');
           el.style.removeProperty('margin-right');
+          el.style.removeProperty('margin-top');
           if (arg) {
             el.style.cssFloat = arg;
             el.style[arg === 'left' ? 'marginRight' : 'marginLeft'] = '6mm';
-            // A block would collapse to nothing without a width; a run of words
-            // floated on its own is exactly as wide as the words are.
-            if (!el.style.width && el.nodeName !== 'SPAN') { el.style.width = '60mm'; el.style.maxWidth = 'none'; }
           }
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
         } else if (kind === 'stack') {
           if (!objectFree(el)) {
-            const w = this.frame.w;
             setObjectFree(el, true);
             el.style.left = '0mm';
             el.style.top = '0mm';
-            if (!el.style.width && w) { el.style.width = round1(w * MM) + 'mm'; el.style.maxWidth = 'none'; }
           }
           restack(el, arg);
         } else if (kind === 'delete') {
           deleteObject(el);
           this.clearFrame();
         }
-        this.settleFrame();
+        this.settleFrame(el);
+      },
+      /**
+       * A frame that still fills the whole column is not floating over anything and
+       * nothing can wrap beside it -- which is what made a formula placed over the
+       * text refuse to take a wrap. Only in that case is a width imposed, and it is
+       * the paper's column that decides it, not whatever the screen happens to be.
+       */
+      fitFrameWidth(el) {
+        const c = canvas();
+        if (!el || !c || el.style.width || !el.getBoundingClientRect) { return; }
+        const free = objectFree(el);
+        const flt = el.style.cssFloat || el.style.float || '';
+        if (!free && !flt) { return; }
+        const z = this.frameZoom() || 1;
+        const cs = window.getComputedStyle(c);
+        const room = c.getBoundingClientRect().width / z
+          - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+        const w = el.getBoundingClientRect().width / z;
+        if (!room || !w || w < room * 0.85) { return; }
+        const paper = normalisePaper(this.doc.paper);
+        const column = sheet(paper).w - paper.margin.left - paper.margin.right;
+        el.style.width = round1(column / 2) + 'mm';
+        el.style.maxWidth = 'none';
       },
       openFrameProps() {
         if (!frameEl && !textRange) { return; }
@@ -4967,7 +4994,7 @@
         framePinned = true;
         history.push(true);
         setObjectProps(frameEl, v);
-        this.settleFrame();
+        this.settleFrame(frameEl);
       },
       /** The two overlap buttons in the dialogue act at once, like a menu item. */
       stackFromProps(where) {
