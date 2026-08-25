@@ -375,6 +375,14 @@
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
 
+/* changes under review. <ins> and <del> are what HTML has for this, so the marks
+   are the document's own markup rather than a layer over it: the file can be sent
+   to anyone and it reads as a marked-up draft in any browser. */
+.eb-doc ins.eb-ins { text-decoration: underline; text-decoration-color: #1a7f37; color: #14683a; }
+.eb-doc del.eb-del { text-decoration: line-through; text-decoration-color: #b42318; color: #9b2c1f; }
+.eb-doc.eb-clean ins.eb-ins { text-decoration: none; color: inherit; }
+.eb-doc.eb-clean del.eb-del { display: none; }
+
 /* 縦書き -- the text runs down the page and the columns run right to left. Every
    rule that says "under" has to say "beside" instead: a heading's rule, a note's
    bar, a caption. The writing mode does the rest, because a browser has had this
@@ -2875,6 +2883,7 @@
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
     'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
+    'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
     'eb-math-block', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
@@ -3179,6 +3188,108 @@
     applyInlineStyle('color', fmt.colour || '');
     applyInlineStyle('fontSize', fmt.fontSize || '');
     applyInlineStyle('fontFamily', fmt.fontFamily || '');
+  }
+
+  // ---- changes under review -------------------------------------------------------
+  // What a word processor calls recording changes. HTML has had <ins> and <del>
+  // since forever, so a marked-up draft is a plain file anyone can open and read;
+  // nothing here is a layer over the document, it is the document.
+  function insAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c) {
+      if (n.nodeName === 'INS' && n.classList && n.classList.contains('eb-ins')) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function delAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c) {
+      if (n.nodeName === 'DEL' && n.classList && n.classList.contains('eb-del')) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  /** Put the caret inside a run marked as added, making one if there is not one. */
+  function ensureIns() {
+    const range = getRange();
+    if (!range) { return null; }
+    const here = insAt(range.startContainer);
+    if (here) { return here; }
+    const ins = document.createElement('ins');
+    ins.className = 'eb-ins';
+    // An empty inline element cannot hold a caret; the zero-width space is the
+    // editor's own and never reaches the file.
+    ins.appendChild(document.createTextNode('​'));
+    range.deleteContents();
+    range.insertNode(ins);
+    const after = document.createRange();
+    after.setStart(ins.firstChild, 1);
+    after.collapse(true);
+    selectRange(after);
+    return ins;
+  }
+  /**
+   * Strike a range out rather than taking it away. One <del> per text node, so a
+   * deletion that runs across two paragraphs leaves two paragraphs, each with its
+   * own mark, and no block ever ends up inside an inline element.
+   */
+  function markDeleted(range) {
+    if (!range || range.collapsed) { return false; }
+    const nodes = textNodesInRange(range);
+    if (!nodes.length) { return false; }
+    let last = null;
+    nodes.forEach((n) => {
+      if (delAt(n)) { last = n; return; }
+      const own = insAt(n);
+      if (own) {
+        // Text added in this pass is simply taken away again.
+        const parent = n.parentNode;
+        n.remove();
+        if (!own.textContent.replace(/​/g, '')) { own.remove(); } else if (!parent.firstChild) { parent.remove(); }
+        return;
+      }
+      const del = document.createElement('del');
+      del.className = 'eb-del';
+      n.parentNode.insertBefore(del, n);
+      del.appendChild(n);
+      last = n;
+    });
+    return !!last;
+  }
+  /** Take the marks off: what was added stays, what was struck out goes. */
+  function acceptChanges(root) {
+    const where = root || canvas();
+    if (!where) { return 0; }
+    let n = 0;
+    Array.from(where.querySelectorAll('del.eb-del')).forEach((el) => { el.remove(); n++; });
+    Array.from(where.querySelectorAll('ins.eb-ins')).forEach((el) => {
+      const parent = el.parentNode;
+      while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+      parent.removeChild(el);
+      n++;
+    });
+    return n;
+  }
+  /** Put it back as it was: what was added goes, what was struck out stays. */
+  function rejectChanges(root) {
+    const where = root || canvas();
+    if (!where) { return 0; }
+    let n = 0;
+    Array.from(where.querySelectorAll('ins.eb-ins')).forEach((el) => { el.remove(); n++; });
+    Array.from(where.querySelectorAll('del.eb-del')).forEach((el) => {
+      const parent = el.parentNode;
+      while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+      parent.removeChild(el);
+      n++;
+    });
+    return n;
+  }
+  function countChanges() {
+    const c = canvas();
+    return c ? c.querySelectorAll('ins.eb-ins, del.eb-del').length : 0;
   }
 
   // ---- paste ---------------------------------------------------------------------
@@ -3496,6 +3607,7 @@
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    review: I('<path d="M2.6 12.4 5 12l7.4-7.4a1.4 1.4 0 0 0-2-2L3 10z"/><path d="M2.6 14.4h10.8"/>'),
     crop: I('<path d="M4.6 1.6v9.8h9.8M1.6 4.6h9.8v9.8"/>'),
     cellBorder: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10M2 8h12" stroke-dasharray="1.6 1.4"/>'),
     vTop: I('<path d="M2.6 2.6h10.8"/><path d="M8 5v7.4M5.6 10 8 12.4 10.4 10"/>'),
@@ -3605,6 +3717,7 @@
             <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
             <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
             <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
+            <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
             <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
             <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
           </div>
@@ -3752,6 +3865,24 @@
       <button class="eb-btn" @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
       <button class="eb-btn" @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
       <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && (review || changes)">
+      <span class="grp">{{ t('Review') }}</span>
+      <button class="eb-tb text" :class="{ on: review }" @mousedown.prevent @click="review = !review" :title="t('Record what is changed from now on')">
+        <span v-html="icons.review"></span><span class="lbl">{{ review ? t('Recording') : t('Not recording') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" :class="{ on: !showChanges }" @mousedown.prevent @click="showChanges = !showChanges">
+        <span class="lbl">{{ showChanges ? t('Showing the marks') : t('As it would read') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptOne')" :disabled="!fmt.change">{{ t('Keep this one') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectOne')" :disabled="!fmt.change">{{ t('Undo this one') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
+      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
     </div>
 
     <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
@@ -4900,6 +5031,7 @@
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
+        review: false, showChanges: true, changes: 0,
         cropOpen: false, cropSrc: '',
         crop: { ratio: '', x: 50, y: 50 },
         cellBorderOpen: false,
@@ -5075,6 +5207,7 @@
         if (n === 'decimal') { out.push('eb-hn'); }
         if (n === 'japanese') { out.push('eb-hn', 'eb-hn-ja'); }
         if (this.doc.paper.vertical) { out.push('eb-tategaki'); }
+        if (!this.showChanges) { out.push('eb-clean'); }
         return out.join(' ');
       },
       tategaki() { return !!this.doc.paper.vertical; },
@@ -5373,6 +5506,8 @@
           first: Number(numberIn(block.style.getPropertyValue('text-indent'), 'mm')) || 0,
         } : { left: 0, right: 0, first: 0 };
         s.ruby = !!(at && rubyAt(at.startContainer));
+        s.change = !!(at && (insAt(at.startContainer) || delAt(at.startContainer)));
+        this.changes = countChanges();
         this.fmt = s;
         this.syncFrame();
         const range = getRange();
@@ -6408,6 +6543,18 @@
         this.touch();
         this.$nextTick(() => { this.fitZoom(); this.repaginate(); });
       },
+      reviewCmd(kind) {
+        const at = getRange();
+        const one = at ? (insAt(at.startContainer) || delAt(at.startContainer)) : null;
+        if ((kind === 'acceptOne' || kind === 'rejectOne') && !one) { return; }
+        this.run(() => {
+          if (kind === 'acceptAll') { acceptChanges(); }
+          if (kind === 'rejectAll') { rejectChanges(); }
+          if (kind === 'acceptOne') { acceptChanges(one.parentNode === canvas() ? one : one.parentNode); }
+          if (kind === 'rejectOne') { rejectChanges(one.parentNode === canvas() ? one : one.parentNode); }
+        });
+        this.changes = countChanges();
+      },
       openCrop() {
         const fig = imageAt(getRange() ? getRange().startContainer : null);
         if (!fig) { this.notify(this.t('Put the cursor on a picture first.')); return; }
@@ -7024,6 +7171,60 @@
         this.$forceUpdate();
       },
 
+      /**
+       * With changes being recorded, typing goes into a run marked as added and a
+       * deletion strikes the text out instead of taking it away. The browser tells
+       * us exactly what it is about to remove, which is what makes this workable:
+       * getTargetRanges is the whole trick.
+       */
+      onBeforeInput(e) {
+        history.push(false);
+        if (!this.review || !this.doc.id) { return; }
+        const type = String(e.inputType || '');
+        if (/^delete/.test(type)) {
+          const ranges = (e.getTargetRanges && e.getTargetRanges()) || [];
+          const target = ranges.length ? ranges[0] : null;
+          const range = target ? (function () {
+            const r = document.createRange();
+            r.setStart(target.startContainer, target.startOffset);
+            r.setEnd(target.endContainer, target.endOffset);
+            return r;
+          }()) : null;
+          if (!range || range.collapsed || !inCanvas(range.startContainer)) { return; }
+          e.preventDefault();
+          history.push(true);
+          const back = /Backward|ByCut|SoftLineBackward|WordBackward/.test(type);
+          const at = document.createRange();
+          at.setStart(back ? range.startContainer : range.endContainer, back ? range.startOffset : range.endOffset);
+          at.collapse(true);
+          markDeleted(range);
+          try { selectRange(at); } catch (err) { /* the text moved under us */ }
+          this.settleReview();
+          return;
+        }
+        if (/^insert/.test(type) && type !== 'insertCompositionText') {
+          const sel = getRange();
+          if (sel && !sel.collapsed) {
+            e.preventDefault();
+            history.push(true);
+            const end = document.createRange();
+            end.setStart(sel.endContainer, sel.endOffset);
+            end.collapse(true);
+            markDeleted(sel);
+            try { selectRange(end); } catch (err) { /* the text moved under us */ }
+            ensureIns();
+            if (type === 'insertText' && e.data) { insertText(e.data); }
+            this.settleReview();
+            return;
+          }
+          ensureIns();
+        }
+      },
+      settleReview() {
+        this.touch();
+        this.recount();
+        this.$nextTick(() => this.refreshState());
+      },
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
@@ -7098,6 +7299,7 @@
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
+      review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
@@ -7120,6 +7322,8 @@
       if (g != null) { this.guides = g === '1'; }
       const rl = window.localStorage.getItem('eb-ruler');
       if (rl != null) { this.ruler = rl === '1'; }
+      const rv = window.localStorage.getItem('eb-review');
+      if (rv != null) { this.review = rv === '1'; }
       const z = Number(window.localStorage.getItem('eb-zoom') || 0);
       if (z >= 50 && z <= 200) { this.zoom = z; }
       document.addEventListener('click', (e) => {
@@ -7142,7 +7346,8 @@
       });
 
       const c = canvasEl;
-      c.addEventListener('beforeinput', () => history.push(false));
+      c.addEventListener('beforeinput', (e) => this.onBeforeInput(e));
+      c.addEventListener('compositionstart', () => { if (this.review) { ensureIns(); } });
       c.addEventListener('input', () => { this.touch(); this.recount(); this.keepCaretVisible(); });
       c.addEventListener('paste', (e) => {
         const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
@@ -7386,6 +7591,7 @@
   window.__eb_width = { wide: toWide, narrow: toNarrow };
   window.__eb_moveBlock = moveBlock;
   window.__eb_setCrop = setCrop;
+  window.__eb_review = { markDeleted, ensureIns, accept: acceptChanges, reject: rejectChanges, count: countChanges };
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');
