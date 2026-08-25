@@ -339,6 +339,24 @@
 .eb-doc .eb-in2 { margin-left: 4em; }
 .eb-doc .eb-in3 { margin-left: 6em; }
 
+/* frames — the box round anything that was inserted rather than typed. Everything
+   a frame can be told to do is written on it as inline CSS, so the file carries its
+   own layout and any browser draws it the same. */
+.eb-doc .eb-frame {
+  border: .75pt solid #666; padding: .6em .8em; margin: 1.1em 0; break-inside: avoid;
+}
+.eb-doc .eb-frame > *:first-child { margin-top: 0; }
+.eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
+/* An object placed by hand is parked in a zero-height anchor left at the point in
+   the text it belongs to. That is what makes it print on the page its text is on:
+   HTML has no coordinate system that spans pages, but a box positioned against a
+   paragraph goes wherever that paragraph goes. */
+.eb-doc .eb-anchor { position: relative; height: 0; margin: 0; }
+.eb-doc .eb-anchor > * { position: absolute; margin: 0; }
+/* Browsers leave background colours out of a printout unless the page insists. */
+.eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
+
 /* mathematics — native MathML, no images and no renderer to install */
 .eb-doc math { font-size: 1.06em; }
 .eb-doc .eb-math-block { display: block; text-align: center; margin: 1em 0; break-inside: avoid; }
@@ -381,7 +399,7 @@
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin-left|margin-right|margin-top|margin-bottom|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-radius|border-color|border-width|border-style|border-collapse|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-radius|border-color|border-width|border-style|border-collapse|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y)$/;
 
   function cleanStyle(value) {
     const kept = [];
@@ -392,6 +410,9 @@
       const val = decl.slice(i + 1).trim();
       if (!STYLE_OK.test(prop)) { return; }
       if (/url\s*\(|expression|javascript:/i.test(val)) { return; }
+      // A document may lay its own frames out; it may not pin anything to the
+      // window, which in the editor means over the app's own chrome.
+      if (prop === 'position' && !/^(static|relative|absolute)$/i.test(val)) { return; }
       kept.push(prop + ': ' + val);
     });
     return kept.join('; ');
@@ -520,6 +541,12 @@
   let canvasEl = null;
   // The selection a dialog interrupted, so that applying it lands where it was.
   let ctxRange = null;
+  // The object the bounding box is drawn round. It is not Vue state: the canvas is
+  // plain DOM, and this is a node in it.
+  let frameEl = null;
+  let framePinned = false;
+  let frameDrag = null;
+  let frameBox = null;
   // When the menu opened, so that the tap that opened it cannot also close it.
   let ctxAt = 0;
   function canvas() { return canvasEl; }
@@ -1601,6 +1628,175 @@
     if (canvas()) { canvas().focus(); }
   }
 
+  // ---- frames -------------------------------------------------------------------
+  // LibreOffice calls them frames, and everything that is inserted rather than typed
+  // is one: a picture, a table, a callout, a formula, a contents list, a text frame.
+  // A frame here is not a new kind of markup -- it is the object itself wearing
+  // inline CSS -- so the file stays plain HTML and any browser lays it out the same.
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, hr';
+  const BORDER_STYLES = ['none', 'solid', 'dashed', 'dotted', 'double'];
+  /** One CSS pixel in millimetres: the whole app measures paper, not screens. */
+  const MM = 25.4 / 96;
+  const round1 = (n) => Math.round(n * 10) / 10;
+
+  function objectAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c && n.nodeType === 1) {
+      if (n.matches && n.matches(OBJECT_SEL)) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  /** Free means: taken out of the flow and parked in an anchor of its own. */
+  function objectKind(el) {
+    if (!el) { return ''; }
+    if (el.classList && el.classList.contains('eb-frame')) { return 'FRAME'; }
+    if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
+    if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
+    return el.nodeName;
+  }
+  function objectFree(el) {
+    const p = el && el.parentNode;
+    return !!(p && p.nodeType === 1 && p.classList && p.classList.contains('eb-anchor'));
+  }
+  function setObjectFree(el, free) {
+    if (!el || free === objectFree(el)) { return; }
+    if (free) {
+      const anchor = document.createElement('div');
+      anchor.className = 'eb-anchor';
+      el.parentNode.insertBefore(anchor, el);
+      anchor.appendChild(el);
+      el.style.removeProperty('float');
+    } else {
+      const anchor = el.parentNode;
+      anchor.parentNode.insertBefore(el, anchor);
+      anchor.remove();
+      el.style.removeProperty('left');
+      el.style.removeProperty('top');
+    }
+    if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+  }
+  /** Move a frame to another place in the text, anchor and all. */
+  function moveObjectTo(el, ref, after) {
+    if (!el || !ref || !ref.parentNode) { return false; }
+    const host = objectFree(el) ? el.parentNode : el;
+    if (host === ref || host.contains(ref)) { return false; }
+    ref.parentNode.insertBefore(host, after ? ref.nextSibling : ref);
+    return true;
+  }
+  function deleteObject(el) {
+    if (!el) { return; }
+    const host = objectFree(el) ? el.parentNode : el;
+    const near = host.nextElementSibling || host.previousElementSibling;
+    host.remove();
+    if (near) { placeCaretIn(near); }
+  }
+  /** A frame with nothing in it but what the writer puts there. */
+  function insertFrame() {
+    const box = document.createElement('div');
+    box.className = 'eb-frame';
+    const p = document.createElement('p');
+    const range = getRange();
+    if (range && !range.collapsed) { p.appendChild(range.extractContents()); } else { p.appendChild(document.createElement('br')); }
+    box.appendChild(p);
+    insertBlockNode(box);
+    placeCaretIn(p);
+    return box;
+  }
+
+  function unitOf(value, unit) {
+    const m = /^(-?[\d.]+)([a-z%]*)$/.exec(String(value == null ? '' : value).trim());
+    return m && m[2] === unit ? Number(m[1]) : '';
+  }
+  const mmOf = (v) => unitOf(v, 'mm');
+  const ptOf = (v) => unitOf(v, 'pt');
+
+  /** What the properties dialogue shows: the frame read back off the element. */
+  function objectProps(el) {
+    if (!el) { return null; }
+    const s = el.style;
+    let place = '';
+    if (objectFree(el)) { place = 'free'; } else if (s.cssFloat === 'left' || s.float === 'left') { place = 'float-left'; } else if (s.cssFloat === 'right' || s.float === 'right') { place = 'float-right'; } else if (s.marginLeft === 'auto' && s.marginRight === 'auto') { place = 'center'; } else if (s.marginLeft === 'auto') { place = 'right'; } else if (s.marginRight === 'auto') { place = 'left'; }
+    return {
+      place,
+      x: mmOf(s.left), y: mmOf(s.top),
+      width: mmOf(s.width), height: mmOf(s.minHeight) === '' ? mmOf(s.height) : mmOf(s.minHeight),
+      mt: mmOf(s.marginTop), mb: mmOf(s.marginBottom),
+      ml: mmOf(s.marginLeft), mr: mmOf(s.marginRight),
+      pad: mmOf(s.paddingTop),
+      border: BORDER_STYLES.indexOf(s.borderTopStyle) >= 0 ? s.borderTopStyle : '',
+      borderWidth: ptOf(s.borderTopWidth),
+      borderColour: rgbToHex(s.borderTopColor) || '#666666',
+      radius: ptOf(s.borderRadius) === '' ? ptOf(s.borderTopLeftRadius) : ptOf(s.borderRadius),
+      fill: rgbToHex(s.backgroundColor) || '',
+      shadow: !!(el.classList && el.classList.contains('eb-shadow')),
+      keep: s.breakInside === 'avoid',
+    };
+  }
+
+  const FRAME_PROPS = ['left', 'top', 'float', 'width', 'max-width', 'height', 'min-height',
+    'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
+    'padding-top', 'padding-bottom', 'padding-left', 'padding-right',
+    'border', 'border-radius', 'background-color', 'break-inside'];
+
+  /** Write the dialogue back on to the element, as CSS the file carries with it. */
+  function setObjectProps(el, v) {
+    if (!el) { return; }
+    const s = el.style;
+    const num = (x) => (x === '' || x == null || isNaN(Number(x)) ? null : Number(x));
+    setObjectFree(el, v.place === 'free');
+    FRAME_PROPS.forEach((p) => s.removeProperty(p));
+    const w = num(v.width);
+    if (w) { s.width = w + 'mm'; s.maxWidth = 'none'; }
+    const h = num(v.height);
+    if (h) { if (el.nodeName === 'HR') { s.height = h + 'mm'; } else { s.minHeight = h + 'mm'; } }
+    const mt = num(v.mt); const mb = num(v.mb); const ml = num(v.ml); const mr = num(v.mr);
+    if (mt != null) { s.marginTop = mt + 'mm'; }
+    if (mb != null) { s.marginBottom = mb + 'mm'; }
+    if (v.place === 'free') {
+      s.left = (num(v.x) || 0) + 'mm';
+      s.top = (num(v.y) || 0) + 'mm';
+    } else if (v.place === 'float-left') {
+      s.cssFloat = 'left'; s.marginRight = (mr == null ? 6 : mr) + 'mm';
+      if (ml != null) { s.marginLeft = ml + 'mm'; }
+    } else if (v.place === 'float-right') {
+      s.cssFloat = 'right'; s.marginLeft = (ml == null ? 6 : ml) + 'mm';
+      if (mr != null) { s.marginRight = mr + 'mm'; }
+    } else if (v.place === 'center') {
+      s.marginLeft = 'auto'; s.marginRight = 'auto';
+    } else if (v.place === 'left') {
+      s.marginLeft = (ml || 0) + 'mm'; s.marginRight = 'auto';
+    } else if (v.place === 'right') {
+      s.marginLeft = 'auto'; s.marginRight = (mr || 0) + 'mm';
+    } else {
+      if (ml != null) { s.marginLeft = ml + 'mm'; }
+      if (mr != null) { s.marginRight = mr + 'mm'; }
+    }
+    const pad = num(v.pad);
+    if (pad != null) {
+      s.paddingTop = pad + 'mm'; s.paddingBottom = pad + 'mm';
+      s.paddingLeft = pad + 'mm'; s.paddingRight = pad + 'mm';
+    }
+    if (v.border === 'none') {
+      s.border = 'none';
+    } else if (v.border) {
+      s.border = (num(v.borderWidth) || 0.75) + 'pt ' + v.border + ' ' + (/^#[0-9a-f]{6}$/i.test(v.borderColour || '') ? v.borderColour : '#666666');
+    }
+    const rad = num(v.radius);
+    if (rad != null) { s.borderRadius = rad + 'pt'; }
+    if (/^#[0-9a-f]{6}$/i.test(v.fill || '')) {
+      s.backgroundColor = v.fill;
+      el.classList.add('eb-ink');
+    } else {
+      el.classList.remove('eb-ink');
+    }
+    if (v.shadow) { el.classList.add('eb-shadow'); } else { el.classList.remove('eb-shadow'); }
+    if (v.keep) { s.breakInside = 'avoid'; }
+    if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+    if (el.getAttribute('class') === '') { el.removeAttribute('class'); }
+  }
+
   // ---- pagination ----------------------------------------------------------------
   // The editing surface used to be one continuous sheet that simply grew with the
   // text, with a dashed line where a page would end. That is not what a page looks
@@ -1739,7 +1935,8 @@
    */
   const DOC_CLASSES = new Set([
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
-    'eb-box', 'eb-box-title', 'sq', 'dashed', 'tint', 'note', 'borderless', 'rows',
+    'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
+    'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
     'eb-math-block', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
@@ -1787,6 +1984,8 @@
     // themselves; a paragraph or a bare div may not.
     Array.from(c.querySelectorAll('[style]')).forEach((el) => {
       if (/^(IMG|FIGURE|TABLE|TD|TH|COL|COLGROUP)$/.test(el.nodeName)) { return; }
+      // A frame is allowed its own size: that is the whole point of a frame.
+      if (el.matches && el.matches(OBJECT_SEL)) { return; }
       el.style.removeProperty('width');
       el.style.removeProperty('height');
       if (!el.getAttribute('style')) { el.removeAttribute('style'); }
@@ -1816,6 +2015,14 @@
       });
       if (!moved) { break; }
     }
+    // An anchor holds exactly one frame. Anything else that ends up inside one --
+    // a paragraph the browser put there during a drag, say -- goes back to the flow,
+    // where it can be read, and an anchor with nothing left in it goes entirely.
+    Array.from(c.querySelectorAll('.eb-anchor')).forEach((a) => {
+      while (a.children.length > 1) { a.parentNode.insertBefore(a.lastElementChild, a.nextSibling); }
+      Array.from(a.childNodes).forEach((n) => { if (n.nodeType === 3) { a.parentNode.insertBefore(n, a.nextSibling); } });
+      if (!a.firstElementChild) { a.remove(); }
+    });
     // Only a host this pass emptied is removed: an empty figcaption, say, is the
     // placeholder a caption is typed into and has to stay.
     lifted.forEach((host) => {
@@ -2311,7 +2518,13 @@
     clear: I('<path d="M6 3h7M9.5 3 7 13M3 13h6"/><path d="M11 9.5 14.5 13M14.5 9.5 11 13"/>'),
     undo: I('<path d="M3 8h7.5a3 3 0 0 1 0 6H7"/><path d="M5.5 5.5 3 8l2.5 2.5"/>'),
     redo: I('<path d="M13 8H5.5a3 3 0 0 0 0 6H9"/><path d="M10.5 5.5 13 8l-2.5 2.5"/>'),
-    guides: I('<rect x="2.5" y="1.8" width="11" height="12.4" rx="1"/><path d="M2.5 8h11" stroke-dasharray="2 1.6"/>'),
+    guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
+    frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
+    free: I('<path d="M8 1.8v12.4M1.8 8h12.4M8 1.8 6 4M8 1.8 10 4M8 14.2 6 12M8 14.2 10 12M1.8 8 4 6M1.8 8 4 10M14.2 8 12 6M14.2 8 12 10"/>'),
+    wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
+    wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
+    wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    props: I('<path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h10.8"/><circle cx="5.6" cy="4.4" r="1.5" fill="currentColor" stroke="none"/><circle cx="10.4" cy="8" r="1.5" fill="currentColor" stroke="none"/><circle cx="6.6" cy="11.6" r="1.5" fill="currentColor" stroke="none"/>'),
     save: I('<path d="M3 2.8h7.5L13.2 5.5V13a.8.8 0 0 1-.8.8H3.6a.8.8 0 0 1-.8-.8V3.6a.8.8 0 0 1 .8-.8z"/><path d="M5.5 2.8v3.4h5V2.8M5.5 13.8v-3.6h5v3.6"/>'),
     print: I('<path d="M4.5 6V2.5h7V6"/><rect x="2.2" y="6" width="11.6" height="5" rx="1"/><path d="M4.5 9.5h7v4h-7z"/>'),
     more: I('<circle cx="3.2" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.8" cy="8" r="1.1" fill="currentColor" stroke="none"/>'),
@@ -2471,6 +2684,7 @@
           <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
           <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="addFrame(); menu = ''"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
           <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
@@ -2490,7 +2704,7 @@
       <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')"><span v-html="icons.guides"></span></button>
+      <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb text" :class="{ on: flow }" @mousedown.prevent @click="toggleFlow" :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span class="lbl">{{ flow ? t('Screen') : t('Page') }}</span>
       </button>
@@ -2551,6 +2765,23 @@
         <div class="eb-sheets" aria-hidden="true" v-if="!flow"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
         <div id="eb-canvas" class="eb-paper eb-doc"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
+        <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
+        <div class="eb-fsel" v-if="frame.on" :style="{ left: frame.x + 'px', top: frame.y + 'px', width: frame.w + 'px', height: frame.h + 'px' }">
+          <div class="box"></div>
+          <div v-for="e in ['t','r','b','l']" :key="'e' + e" class="ed" :class="e"
+            @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="openFrameProps"></div>
+          <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
+            @pointerdown.prevent.stop="frameGrab($event, h)"></span>
+          <div class="bar" v-if="frame.bar" :class="{ below: frame.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
+            <span class="nm">{{ frameLabel }}</span>
+            <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
+            <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
+            <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
+            <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+            <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
+            <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
+          </div>
+        </div>
       </div>
       <div class="eb-empty" v-if="!doc.id">
         <span class="mark" v-html="logo"></span>
@@ -2944,6 +3175,80 @@
   </div>
 
   <!-- the right button, as a word processor uses it -->
+  <!-- frame properties: everything here is written on the object as inline CSS,
+       so the saved file carries its own layout and needs nothing to read it -->
+  <div v-if="fpropsOpen" class="eb-modal-back" @click="fpropsOpen = false">
+    <div class="eb-modal" @click.stop>
+      <h3>{{ t('{name} properties', { name: frameLabel }) }}</h3>
+      <div class="body">
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Placement') }}</label>
+            <select v-model="fprops.place">
+              <option value="">{{ t('In the flow of the text') }}</option>
+              <option value="left">{{ t('In the flow, at the left') }}</option>
+              <option value="center">{{ t('In the flow, centred') }}</option>
+              <option value="right">{{ t('In the flow, at the right') }}</option>
+              <option value="float-left">{{ t('Text wraps on the right') }}</option>
+              <option value="float-right">{{ t('Text wraps on the left') }}</option>
+              <option value="free">{{ t('Placed freely') }}</option>
+            </select>
+          </div>
+          <div class="eb-field" v-if="fprops.place === 'free'"><label>{{ t('From the left (mm)') }}</label><input type="number" step="1" v-model="fprops.x"></div>
+          <div class="eb-field" v-if="fprops.place === 'free'"><label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y"></div>
+        </div>
+        <p class="eb-note" v-if="fprops.place === 'free'">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed.') }}</p>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')"></div>
+          <div class="eb-field"><label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')"></div>
+          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" :placeholder="t('auto')"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Space above (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mt"></div>
+          <div class="eb-field"><label>{{ t('Space below (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mb"></div>
+          <div class="eb-field"><label>{{ t('Space left (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.ml"></div>
+          <div class="eb-field"><label>{{ t('Space right (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mr"></div>
+        </div>
+        <div class="eb-row eb-frow">
+          <div class="eb-field b-style">
+            <label>{{ t('Border') }}</label>
+            <select v-model="fprops.border">
+              <option value="">{{ t('As the style says') }}</option>
+              <option value="none">{{ t('None') }}</option>
+              <option value="solid">{{ t('Solid') }}</option>
+              <option value="dashed">{{ t('Dashed') }}</option>
+              <option value="dotted">{{ t('Dotted') }}</option>
+              <option value="double">{{ t('Double') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="fprops.borderWidth"></div>
+          <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="fprops.borderColour"></div>
+          <div class="eb-field"><label>{{ t('Corners (pt)') }}</label><input type="number" min="0" step="1" v-model="fprops.radius"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Fill colour') }}</label>
+            <div class="colour-pair">
+              <input type="color" :value="fprops.fill || '#ffffff'" @input="fprops.fill = $event.target.value">
+              <button class="eb-btn ghost" @click="fprops.fill = ''">{{ t('None') }}</button>
+            </div>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Effects') }}</label>
+            <label class="opt"><input type="checkbox" v-model="fprops.shadow"> {{ t('Drop shadow') }}</label>
+            <label class="opt"><input type="checkbox" v-model="fprops.keep"> {{ t('Do not split across pages') }}</label>
+          </div>
+        </div>
+        <p class="eb-note">{{ t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="clearFrameProps">{{ t('Clear') }}</button>
+        <button class="eb-btn" @click="fpropsOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyFrameProps">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
   <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
     <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
@@ -3052,7 +3357,25 @@
       </div>
     </template>
 
+    <template v-if="ctx.frame">
+      <div class="sep"></div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Frame') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('frameProps')">{{ t('Frame properties…') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('frameFree')">{{ t('Place it freely') }}</button>
+          <button class="ci" @click="ctxDo('frameWrap','')">{{ t('No text wrap') }}</button>
+          <button class="ci" @click="ctxDo('frameWrap','left')">{{ t('Wrap text on the right') }}</button>
+          <button class="ci" @click="ctxDo('frameWrap','right')">{{ t('Wrap text on the left') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+        </div>
+      </div>
+    </template>
+
     <div class="sep"></div>
+    <button class="ci" v-if="!flow" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
     <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
   </div>
 
@@ -3203,7 +3526,14 @@
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false },
+        coarse: false,
+        fpropsOpen: false,
+        fprops: {
+          place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
+        },
         paraOpen: false,
         para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false },
         charsOpen: false,
@@ -3353,6 +3683,17 @@
           { cls: 'eb-al-r', icon: bars([[0, 16], [6, 10], [2, 14], [8, 8]]), label: this.t('Align right') },
           { cls: 'eb-al-j', icon: bars([[0, 16], [0, 16], [0, 16], [0, 16]]), label: this.t('Justify') },
         ];
+      },
+      frameHandles() { return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']; },
+      /** What the frame is, in the writer's words, for the bar and the dialogue. */
+      frameLabel() {
+        const kind = this.frame.kind;
+        const names = {
+          FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
+          NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
+          NOTE: this.t('Note'), FRAME: this.t('Frame'),
+        };
+        return names[kind] || this.t('Frame');
       },
       boxes() {
         return [
@@ -3566,12 +3907,14 @@
             this.pageCount = pages;
             this.$nextTick(() => { this.pageCount = paginate(); });
           }
+          this.syncFrame();
         }, 60);
       },
       refreshState() {
         if (!canvas()) { return; }
         const s = activeFormats();
         this.fmt = s;
+        this.syncFrame();
         const range = getRange();
         if (range) {
           const owner = ancestorWithStyle(range.startContainer.nodeType === 3 ? range.startContainer : (range.startContainer.firstChild || range.startContainer), 'color');
@@ -4075,6 +4418,231 @@
         if (ops[kind]) { this.run(ops[kind]); }
       },
 
+      // ---- the bounding box round an object -------------------------------------
+      /** The page is drawn at a zoom; every measurement here is in unzoomed pixels. */
+      frameZoom() { return this.flow ? 1 : ((this.zoom || 100) / 100); },
+      /** Which object the box is round, and where to draw it. */
+      syncFrame() {
+        const c = canvas();
+        if (!c || !this.doc.id) { this.frame.on = false; frameEl = null; return; }
+        if (frameEl && !c.contains(frameEl)) { frameEl = null; framePinned = false; }
+        if (!framePinned) {
+          const range = getRange();
+          const at = range && inCanvas(range.startContainer) ? objectAt(range.startContainer) : null;
+          if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
+        }
+        const el = frameEl;
+        if (!el) { this.frame.on = false; return; }
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!wrap || !el.getBoundingClientRect) { this.frame.on = false; return; }
+        const z = this.frameZoom() || 1;
+        const a = el.getBoundingClientRect();
+        const b = wrap.getBoundingClientRect();
+        // No layout to measure (a document not yet shown, or the test harness).
+        if (!a.width && !a.height) { this.frame.on = false; return; }
+        this.frame.x = (a.left - b.left) / z;
+        this.frame.y = (a.top - b.top) / z;
+        this.frame.w = a.width / z;
+        this.frame.h = a.height / z;
+        this.frame.free = objectFree(el);
+        this.frame.kind = objectKind(el);
+        this.frame.on = true;
+        frameBox = a;
+        if (this.coarse) { this.frame.bar = true; }
+      },
+      /**
+       * The little bar would sit over the line above the frame and hide it, so it
+       * only comes out when the pointer is near the frame -- which is when it is
+       * wanted. A finger has no hover, so on a touch screen it simply stays out.
+       */
+      frameHover(e) {
+        if (!this.frame.on || this.coarse) { return; }
+        if (frameDrag) { this.frame.bar = true; return; }
+        const r = frameBox;
+        if (!r) { return; }
+        const near = e.clientX > r.left - 40 && e.clientX < r.right + 40
+          && e.clientY > r.top - 52 && e.clientY < r.bottom + 40;
+        if (near !== this.frame.bar) { this.frame.bar = near; }
+      },
+      /** A click on an object picks it up, including the ones a caret cannot enter. */
+      onCanvasDown(e) {
+        if (frameDrag) { return; }
+        const at = objectAt(e.target);
+        frameEl = at;
+        // A rule or a picture never holds the caret, so the caret cannot keep it
+        // selected either: remember that this one was chosen by hand.
+        framePinned = !!(at && (at.nodeName === 'HR' || at.nodeName === 'FIGURE' || at.nodeName === 'IMG'));
+        if (at) { this.frame.bar = true; }
+        this.$nextTick(() => this.syncFrame());
+      },
+      clearFrame() {
+        frameEl = null;
+        framePinned = false;
+        frameBox = null;
+        this.frame.on = false;
+        this.frame.bar = false;
+        this.frame.drop = -1;
+      },
+      /** Take hold of the border to move it, or of a handle to size it. */
+      frameGrab(e, mode) {
+        if (!frameEl) { return; }
+        framePinned = true;
+        const props = objectProps(frameEl) || {};
+        history.push(true);
+        frameDrag = {
+          mode,
+          z: this.frameZoom() || 1,
+          x0: e.clientX, y0: e.clientY,
+          w0: this.frame.w, h0: this.frame.h,
+          left: Number(props.x) || 0, top: Number(props.y) || 0,
+          free: objectFree(frameEl),
+          moved: false, ref: null, after: false,
+        };
+        const move = (ev) => this.frameDragMove(ev);
+        const up = (ev) => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          window.removeEventListener('pointercancel', up);
+          this.frameDragEnd(ev);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+      },
+      frameDragMove(e) {
+        const d = frameDrag;
+        if (!d || !frameEl) { return; }
+        if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 3) { d.moved = true; }
+        const dx = (e.clientX - d.x0) / d.z * MM;
+        const dy = (e.clientY - d.y0) / d.z * MM;
+        const s = frameEl.style;
+        if (d.mode === 'move') {
+          if (d.free) {
+            s.left = round1(d.left + dx) + 'mm';
+            s.top = round1(d.top + dy) + 'mm';
+            this.syncFrame();
+          } else if (d.moved) {
+            this.frameDropTarget(e);
+          }
+          return;
+        }
+        const w0 = d.w0 * MM;
+        const h0 = d.h0 * MM;
+        let w = w0; let h = h0; let left = d.left; let top = d.top;
+        if (d.mode.indexOf('e') >= 0) { w = w0 + dx; }
+        if (d.mode.indexOf('w') >= 0) { w = w0 - dx; if (d.free) { left = d.left + dx; } }
+        if (d.mode.indexOf('s') >= 0) { h = h0 + dy; }
+        if (d.mode.indexOf('n') >= 0) { h = h0 - dy; if (d.free) { top = d.top + dy; } }
+        w = Math.max(8, w);
+        h = Math.max(5, h);
+        if (d.mode !== 'n' && d.mode !== 's') { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
+        // A picture keeps its proportions: its height follows its width.
+        if (d.mode !== 'e' && d.mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
+          if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; } else { s.minHeight = round1(h) + 'mm'; }
+        }
+        if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; }
+        this.syncFrame();
+      },
+      /** Dragging a frame that is in the flow moves it to another place in the text. */
+      frameDropTarget(e) {
+        const c = canvas();
+        const d = frameDrag;
+        if (!c || !d || !frameEl) { return; }
+        const host = objectFree(frameEl) ? frameEl.parentNode : frameEl;
+        let node = document.elementFromPoint(e.clientX, e.clientY);
+        let block = null;
+        while (node && node !== c) {
+          if (node.parentNode === c) { block = node; break; }
+          node = node.parentNode;
+        }
+        if (!block || block === host || block.classList.contains('eb-pagespacer')) {
+          d.ref = null;
+          this.frame.drop = -1;
+          return;
+        }
+        const r = block.getBoundingClientRect();
+        const after = e.clientY > r.top + r.height / 2;
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        const b = wrap.getBoundingClientRect();
+        d.ref = block;
+        d.after = after;
+        this.frame.drop = ((after ? r.bottom : r.top) - b.top) / (this.frameZoom() || 1);
+      },
+      frameDragEnd() {
+        const d = frameDrag;
+        frameDrag = null;
+        this.frame.drop = -1;
+        if (!d || !frameEl) { return; }
+        if (!d.moved) { return; }
+        if (d.mode === 'move' && !d.free && d.ref) { moveObjectTo(frameEl, d.ref, d.after); }
+        this.settleFrame();
+      },
+      /** Everything a frame command changes ends the same way. */
+      settleFrame() {
+        normaliseCanvas(this.t('Page break'), this.t('Caption'));
+        this.touch();
+        this.recount();
+        this.refreshState();
+        this.$nextTick(() => this.syncFrame());
+      },
+      frameCmd(kind, arg) {
+        if (!frameEl) { return; }
+        const el = frameEl;
+        framePinned = true;
+        history.push(true);
+        if (kind === 'free') {
+          if (objectFree(el)) {
+            setObjectFree(el, false);
+          } else {
+            // Keep the width it already has, or it collapses to nothing the moment
+            // it leaves the flow that was giving it one.
+            const w = this.frame.w;
+            setObjectFree(el, true);
+            el.style.left = '0mm';
+            el.style.top = '0mm';
+            if (!el.style.width && w) { el.style.width = round1(w * MM) + 'mm'; el.style.maxWidth = 'none'; }
+          }
+        } else if (kind === 'wrap') {
+          setObjectFree(el, false);
+          el.style.removeProperty('float');
+          el.style.removeProperty('margin-left');
+          el.style.removeProperty('margin-right');
+          if (arg) {
+            el.style.cssFloat = arg;
+            el.style[arg === 'left' ? 'marginRight' : 'marginLeft'] = '6mm';
+            if (!el.style.width) { el.style.width = '60mm'; el.style.maxWidth = 'none'; }
+          }
+          if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+        } else if (kind === 'delete') {
+          deleteObject(el);
+          this.clearFrame();
+        }
+        this.settleFrame();
+      },
+      openFrameProps() {
+        if (!frameEl) { return; }
+        this.closeCtx();
+        const props = objectProps(frameEl);
+        if (props) { this.fprops = Object.assign({}, this.fprops, props); }
+        this.fpropsOpen = true;
+      },
+      clearFrameProps() {
+        this.fprops = {
+          place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
+        };
+      },
+      applyFrameProps() {
+        const v = Object.assign({}, this.fprops);
+        this.fpropsOpen = false;
+        if (!frameEl) { return; }
+        framePinned = true;
+        history.push(true);
+        setObjectProps(frameEl, v);
+        this.settleFrame();
+      },
+      addFrame() { this.run(() => insertFrame()); this.$nextTick(() => this.syncFrame()); },
+
       // ---- the context menu ----------------------------------------------------
       /**
        * LibreOffice puts its own menu on the right button, and so does this: the
@@ -4098,6 +4666,10 @@
         const range = getRange();
         this.ctx.table = !!cellAt(at);
         this.ctx.image = !!imageAt(at);
+        // The right button acts on what it is over, so it also picks the frame up.
+        const obj = objectAt(e.target) || objectAt(at);
+        if (obj) { frameEl = obj; framePinned = true; }
+        this.ctx.frame = !!obj;
         this.ctx.link = !!linkAt(at);
         this.ctx.list = !!(topBlockOf(at) && closestMatching(at, { tag: 'LI' }));
         this.ctx.selection = !!(range && !range.collapsed);
@@ -4191,6 +4763,11 @@
           float: () => this.run(() => setImageFloat(arg)),
           alt: () => this.openAlt(),
           imageDel: () => this.imageCmd('delete'),
+          frameProps: () => this.openFrameProps(),
+          frameFree: () => this.frameCmd('free'),
+          frameWrap: () => this.frameCmd('wrap', arg),
+          frameDel: () => this.frameCmd('delete'),
+          guides: () => { this.guides = !this.guides; },
         };
         if (acts[kind]) { acts[kind](); }
       },
@@ -4283,7 +4860,8 @@
         // Width alone is not enough: a phone asked for "desktop site" reports about
         // 980px, and then none of this would apply on the very device that needs it.
         // A coarse pointer is a finger, whatever the browser claims about width.
-        const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        this.coarse = coarse;
         const narrow = window.innerWidth <= 860 || (coarse && window.innerWidth <= 1100);
         const became = narrow && !this.narrow;
         this.narrow = narrow;
@@ -4488,6 +5066,7 @@
 
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
+        if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
         if (meta && !e.altKey) {
           const k = e.key.toLowerCase();
           if (k === 'b') { e.preventDefault(); return this.inline('bold'); }
@@ -4547,9 +5126,9 @@
       'doc.paper.size'() { this.$nextTick(() => this.repaginate()); },
       'doc.paper.orientation'() { this.$nextTick(() => this.repaginate()); },
       'doc.paper.margin': { deep: true, handler() { this.$nextTick(() => this.repaginate()); } },
-      guides() { this.$nextTick(() => this.repaginate()); },
       fontPageItems() { this.loadPreviewFonts(); },
-      zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); },
+      zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); this.$nextTick(() => this.syncFrame()); },
+      flow() { this.$nextTick(() => this.syncFrame()); },
       'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
@@ -4610,6 +5189,8 @@
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
+      c.addEventListener('pointerdown', (e) => this.onCanvasDown(e));
+      c.addEventListener('pointermove', (e) => this.frameHover(e), { passive: true });
       // Safari on a phone does not always raise contextmenu, so a long press on
       // the page opens the same menu: half a second, without the finger moving.
       let holdTimer = null;
@@ -4818,6 +5399,8 @@
   window.__eb_planPages = planPages;
   // the paste path, so the tests can drive it without a clipboard event
   window.__eb_pasteHtmlAt = pasteHtmlAt;
+  // moving a frame is driven by the pointer, which jsdom has no layout for
+  window.__eb_moveObjectTo = moveObjectTo;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');

@@ -163,7 +163,7 @@
   height: var(--eb-paper-h); flex: 0 0 auto; background: #ffffff;
   box-shadow: 0 2px 6px rgba(0,0,0,.25), 0 16px 40px rgba(0,0,0,.2);
 }
-.eb-sheet + .eb-sheet { position: relative; }
+.eb-sheet { position: relative; }
 .eb-pagespacer { display: block; }
 /* Nextcloud's server.css styles every div[contenteditable] as a 130px form
    field (width, padding, margin, min-height).  That selector out-specifies a
@@ -180,11 +180,14 @@
   font-size: inherit; line-height: inherit;
   outline: none;
 }
-/* A hairline where the text area of each page ends, drawn on the sheet itself. */
+/* The margin boundaries: the rectangle the text of each page sits inside, drawn
+   on the sheet itself. It is a guide for the writer, never part of the file and
+   never printed -- which is why it is on the sheet and not in the document. */
 .eb-sheet::after {
-  content: ""; display: block; position: relative;
-  height: var(--eb-mb); margin-top: calc(var(--eb-paper-h) - var(--eb-mb));
-  border-top: 1px dashed rgba(37, 99, 235, .35);
+  content: ""; position: absolute;
+  top: var(--eb-mt); right: var(--eb-mr); bottom: var(--eb-mb); left: var(--eb-ml);
+  border: 1px dashed rgba(37, 99, 235, .38);
+  pointer-events: none;
 }
 .eb-paperwrap.noguides .eb-sheet::after { display: none; }
 .eb-paper:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
@@ -479,4 +482,72 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
   .font-row .fam { grid-column: 1; min-width: 0; }
   .font-row .tag { grid-column: 2; white-space: nowrap; }
   .font-row .caret { grid-column: 3; }
+}
+
+/* ---------- the bounding box round an inserted object ----------
+   Every picture, table, box, formula and frame is handled the same way: a box with
+   a border you can take hold of and eight handles you can pull. The box itself
+   passes the pointer straight through, so the text under it stays editable; only
+   the border band, the handles and the little bar take the mouse. That border band
+   is also what the right button opens the properties on. */
+.eb-fsel { position: absolute; z-index: 20; pointer-events: none; }
+.eb-fsel .box { position: absolute; inset: 0; border: 1px dashed var(--primary); }
+.eb-fsel .ed { position: absolute; pointer-events: auto; cursor: move; touch-action: none; }
+.eb-fsel .ed.t { left: -5px; right: -5px; top: -5px; height: 10px; }
+.eb-fsel .ed.b { left: -5px; right: -5px; bottom: -5px; height: 10px; }
+.eb-fsel .ed.l { top: -5px; bottom: -5px; left: -5px; width: 10px; }
+.eb-fsel .ed.r { top: -5px; bottom: -5px; right: -5px; width: 10px; }
+.eb-fsel .hd {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  background: var(--surface); border: 1.5px solid var(--primary); border-radius: 2px;
+  pointer-events: auto; touch-action: none; z-index: 2;
+}
+.eb-fsel .hd.nw { left: 0; top: 0; cursor: nwse-resize; }
+.eb-fsel .hd.n { left: 50%; top: 0; cursor: ns-resize; }
+.eb-fsel .hd.ne { left: 100%; top: 0; cursor: nesw-resize; }
+.eb-fsel .hd.e { left: 100%; top: 50%; cursor: ew-resize; }
+.eb-fsel .hd.se { left: 100%; top: 100%; cursor: nwse-resize; }
+.eb-fsel .hd.s { left: 50%; top: 100%; cursor: ns-resize; }
+.eb-fsel .hd.sw { left: 0; top: 100%; cursor: nesw-resize; }
+.eb-fsel .hd.w { left: 0; top: 50%; cursor: ew-resize; }
+.eb-fsel .bar {
+  position: absolute; left: -1px; bottom: 100%; margin-bottom: 9px;
+  display: flex; align-items: center; gap: 2px; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 3px; box-shadow: var(--shadow); pointer-events: auto;
+}
+.eb-fsel .bar.below { bottom: auto; top: 100%; margin: 9px 0 0; }
+.eb-fsel .bar .nm { font-size: 12px; color: var(--muted); padding: 0 6px; }
+.eb-fsel .bar .eb-tb { height: 26px; min-width: 26px; }
+.eb-fdrop { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--primary); z-index: 21; pointer-events: none; }
+.eb-fdrop::before {
+  content: ""; position: absolute; left: -4px; top: -5px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--primary);
+}
+
+@media print {
+  .eb-fsel, .eb-fdrop { display: none !important; }
+}
+
+/* Colour wells in a dialogue: a browser draws a bare colour input as a big empty
+   field, which reads as something to type in rather than a colour to pick. */
+.eb-field input[type=color] {
+  width: 100%; height: 38px; padding: 2px; border: 1px solid var(--border);
+  border-radius: 9px; background: var(--surface-2); cursor: pointer;
+}
+.eb-field .colour-pair { display: flex; gap: 8px; align-items: center; }
+.eb-field .colour-pair input[type=color] { flex: 1 1 auto; min-width: 0; }
+.eb-field .colour-pair .eb-btn { flex: 0 0 auto; white-space: nowrap; }
+/* The frame dialogue's border row: the words in it are longer than a number field. */
+.eb-frow .b-style { flex: 1.6 1 0; }
+
+/* A finger is not a mouse pointer: the border band and the handles have to be
+   big enough to take hold of without a magnifier. */
+@media (hover: none) {
+  .eb-fsel .ed.t { left: -9px; right: -9px; top: -9px; height: 18px; }
+  .eb-fsel .ed.b { left: -9px; right: -9px; bottom: -9px; height: 18px; }
+  .eb-fsel .ed.l { top: -9px; bottom: -9px; left: -9px; width: 18px; }
+  .eb-fsel .ed.r { top: -9px; bottom: -9px; right: -9px; width: 18px; }
+  .eb-fsel .hd { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+  .eb-fsel .bar .eb-tb { height: 32px; min-width: 32px; }
 }
