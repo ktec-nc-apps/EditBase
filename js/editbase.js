@@ -6169,18 +6169,27 @@
         if (!c || !wrap || !this.doc.id) { this.tsel.on = false; return; }
         const sel = getRange();
         if (!sel || !inCanvas(sel.startContainer)) { this.tsel.on = false; return; }
-        let range = null;
-        if (!sel.collapsed) {
-          range = sel.cloneRange();
-        } else if (blockBoxed) {
-          const block = selectedBlocks()[0];
-          if (block) { range = document.createRange(); range.selectNode(block); }
+        // After a paragraph command the box goes round the paragraphs, whether or
+        // not any words are selected: a paragraph does not move when it is
+        // aligned, and a run of words does.
+        let ranges = [];
+        if (blockBoxed) {
+          selectedBlocks().forEach((block) => {
+            if (!block || !block.parentNode) { return; }
+            const r2 = document.createRange();
+            r2.selectNode(block);
+            ranges.push(r2);
+          });
         }
-        if (!range) { range = bunsetsuAt(sel.startContainer, sel.startOffset); }
-        if (!range || range.collapsed) { this.tsel.on = false; return; }
+        if (!ranges.length) {
+          const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
+          if (range && !range.collapsed) { ranges = [range]; }
+        }
+        if (!ranges.length) { this.tsel.on = false; return; }
         // No layout to measure (a document not yet shown, or the test harness).
-        if (typeof range.getClientRects !== 'function') { this.tsel.on = false; return; }
-        const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+        if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
+        const rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), [])
+          .filter((r2) => r2.width > 0.5 && r2.height > 0.5);
         if (!rects.length) { this.tsel.on = false; return; }
         const z = this.frameZoom() || 1;
         const b = wrap.getBoundingClientRect();
@@ -6189,7 +6198,7 @@
         const top = Math.min.apply(null, boxes.map((r) => r.y));
         const right = Math.max.apply(null, boxes.map((r) => r.x + r.w));
         const bottom = Math.max.apply(null, boxes.map((r) => r.y + r.h));
-        textRange = blockBoxed && sel.collapsed ? null : range;
+        textRange = blockBoxed ? null : ranges[0];
         textBox = { left: Math.min.apply(null, rects.map((r) => r.left)), right: Math.max.apply(null, rects.map((r) => r.right)),
           top: Math.min.apply(null, rects.map((r) => r.top)), bottom: Math.max.apply(null, rects.map((r) => r.bottom)) };
         this.tsel.boxes = boxes;
