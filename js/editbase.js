@@ -4093,6 +4093,8 @@
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    toFront: I('<rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="none"/><rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
+    toBack: I('<rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="none"/><rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     boxL: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="2.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
     boxC: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="5.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
     boxR: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="8.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
@@ -4463,6 +4465,9 @@
             <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
             <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
             <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+            <span class="sep"></span>
+            <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
+            <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
             <span class="sep"></span>
             <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
             <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
