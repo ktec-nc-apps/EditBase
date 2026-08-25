@@ -2901,6 +2901,7 @@
       radius: ptOf(s.borderRadius) === '' ? ptOf(s.borderTopLeftRadius) : ptOf(s.borderRadius),
       fill: rgbToHex(s.backgroundColor) || '',
       opacity: s.opacity === '' ? '' : Math.round(parseFloat(s.opacity) * 100),
+      rotate: (() => { const m = /rotate\(([-\d.]+)deg\)/.exec(s.transform || ''); return m ? Number(m[1]) : ''; })(),
       shadow: !!(el.classList && el.classList.contains('eb-shadow')),
       keep: s.breakInside === 'avoid',
     };
@@ -2972,6 +2973,16 @@
       // keeps the fill it was given and nothing shows through it.
       s.removeProperty('background-color');
       el.classList.remove('eb-ink');
+    }
+    // Turning it. The box drawn round a turned object is the upright box that
+    // contains it, which is what a browser measures and what a reader sees.
+    const rot = num(v.rotate);
+    if (rot != null && Math.abs(rot) > 0.01) {
+      s.transform = 'rotate(' + round1(rot) + 'deg)';
+      s.transformOrigin = 'center';
+    } else {
+      s.removeProperty('transform');
+      s.removeProperty('transform-origin');
     }
     const op = num(v.opacity);
     if (op != null && op >= 0 && op < 100) { s.opacity = String(Math.round(op) / 100); } else { s.removeProperty('opacity'); }
@@ -5148,6 +5159,10 @@
             <input type="number" min="10" max="100" step="5" v-model="fprops.opacity" placeholder="100">
           </div>
           <div class="eb-field">
+            <label>{{ t('Turn (degrees)') }}</label>
+            <input type="number" min="-180" max="180" step="5" v-model="fprops.rotate" placeholder="0">
+          </div>
+          <div class="eb-field">
             <label>{{ t('Effects') }}</label>
             <label class="opt"><input type="checkbox" v-model="fprops.shadow"> {{ t('Drop shadow') }}</label>
             <label class="opt"><input type="checkbox" v-model="fprops.keep"> {{ t('Do not split across pages') }}</label>
@@ -5525,7 +5540,7 @@
         fpropsRange: null,
         fprops: {
           place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', shadow: false, keep: false,
         },
         paraOpen: false,
         para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
@@ -7023,6 +7038,18 @@
         }
         if (r.left < box.paperLeft) { this.nudgeFree(el, box.paperLeft - r.left); }
         else if (r.right > box.paperRight) { this.nudgeFree(el, box.paperRight - r.right); }
+        // And it stays on the paper the other way too: dragged up hard, a shape
+        // used to sit above the top edge of the first sheet, where it is drawn on
+        // the desk rather than on the page and prints nowhere at all.
+        const c = canvas();
+        if (!c || !c.getBoundingClientRect) { return; }
+        const paper = c.getBoundingClientRect();
+        const now = el.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        let dy = 0;
+        if (now.top < paper.top) { dy = paper.top - now.top; }
+        else if (now.bottom > paper.bottom) { dy = Math.min(0, paper.bottom - now.bottom); }
+        if (dy) { el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm'; }
       },
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
@@ -7189,7 +7216,7 @@
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', shadow: false, keep: false,
         };
       },
       applyFrameProps() {
