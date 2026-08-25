@@ -6986,41 +6986,47 @@
         this.frame.gy = null;
         const box = this.columnBox();
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
-        if (off || !box || !wrap || !el || !el.getBoundingClientRect) { return; }
+        const c = canvas();
+        if (off || !box || !wrap || !c || !el || !el.getBoundingClientRect) { return; }
         const z = this.frameZoom() || 1;
         const near = 7 * z;
-        const r = el.getBoundingClientRect();
-        const mid = (box.left + box.right) / 2;
-        const lines = [
-          [box.left, r.left], [mid, (r.left + r.right) / 2], [box.right, r.right],
-        ];
-        let best = null;
-        lines.forEach(([want, have]) => {
-          const gap = want - have;
-          if (Math.abs(gap) <= near && (!best || Math.abs(gap) < Math.abs(best[0]))) { best = [gap, want]; }
-        });
-        if (!best) { return; }
-        this.nudgeFree(el, best[0]);
         const b = wrap.getBoundingClientRect();
-        this.frame.gx = (best[1] - b.left) / z;
-      },
-      duplicateFrame() {
-        const el = frameEl;
-        if (!el || !el.parentNode) { return; }
-        history.push(true);
-        const host = objectFree(el) ? el.parentNode : el;
-        const copy = host.cloneNode(true);
-        host.parentNode.insertBefore(copy, host.nextSibling);
-        const made = objectFree(el) ? copy.firstElementChild : copy;
-        if (made && objectFree(made)) {
-          made.style.left = round1((parseFloat(made.style.left) || 0) + 4) + 'mm';
-          made.style.top = round1((parseFloat(made.style.top) || 0) + 4) + 'mm';
+        const cs = window.getComputedStyle(c);
+        const cr = c.getBoundingClientRect();
+        // The lines worth catching on: the margins and the middle of the column,
+        // the top of the text, and the edges and middles of everything else
+        // already on the page. Laying a page out is mostly lining things up.
+        const xs = [box.left, (box.left + box.right) / 2, box.right];
+        const ys = [cr.top + (parseFloat(cs.paddingTop) || 0) * z];
+        Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((o) => {
+          if (o === el || !o.getBoundingClientRect) { return; }
+          const q = o.getBoundingClientRect();
+          if (!q.width && !q.height) { return; }
+          xs.push(q.left, (q.left + q.right) / 2, q.right);
+          ys.push(q.top, (q.top + q.bottom) / 2, q.bottom);
+        });
+        const pick = (lines, have) => {
+          let best = null;
+          lines.forEach((want) => {
+            have.forEach((h) => {
+              const gap = want - h;
+              if (Math.abs(gap) <= near && (!best || Math.abs(gap) < Math.abs(best[0]))) { best = [gap, want]; }
+            });
+          });
+          return best;
+        };
+        const r = el.getBoundingClientRect();
+        const bx = pick(xs, [r.left, (r.left + r.right) / 2, r.right]);
+        if (bx) {
+          this.nudgeFree(el, bx[0]);
+          this.frame.gx = (bx[1] - b.left) / z;
         }
-        frameEl = made;
-        framePinned = true;
-        frameTaken = true;
-        if (made) { this.keepOnPaper(made); }
-        this.settleFrame();
+        const r2 = el.getBoundingClientRect();
+        const by = pick(ys, [r2.top, (r2.top + r2.bottom) / 2, r2.bottom]);
+        if (by) {
+          el.style.top = round1((parseFloat(el.style.top) || 0) + by[0] * MM / z) + 'mm';
+          this.frame.gy = (by[1] - b.top) / z;
+        }
       },
       /** Arrow keys walk a frame about the page, the way they do in a drawing. */
       nudgeFrameBy(el, dxMm, dyMm) {
