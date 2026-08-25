@@ -61,6 +61,7 @@
   const DEFAULT_PAPER = {
     size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 },
     font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
+    header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
   };
 
   function normalisePaper(p) {
@@ -83,6 +84,15 @@
     ['top', 'right', 'bottom', 'left'].forEach((k) => {
       const v = Number(p.margin && p.margin[k]);
       if (v >= 0 && v <= 100) { out.margin[k] = v; }
+    });
+    // Plain text only: these go into the file as markup, and a running header is
+    // not a place anyone needs to write markup.
+    ['header', 'footer'].forEach((which) => {
+      const src = p[which];
+      if (!src || typeof src !== 'object') { return; }
+      ['l', 'c', 'r'].forEach((k) => {
+        if (typeof src[k] === 'string') { out[which][k] = src[k].replace(/[<>]/g, '').slice(0, 120); }
+      });
     });
     return out;
   }
@@ -361,6 +371,42 @@
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
 
+/* a reading over a word: Japanese typesetting expects it at half size */
+.eb-doc ruby { ruby-position: over; ruby-align: center; }
+.eb-doc ruby rt { font-size: .5em; font-weight: normal; letter-spacing: 0; text-emphasis: none; }
+
+/* notes — gathered at the end of the document and numbered by the file itself.
+   A browser cannot put a note at the foot of the page it is cited on: nothing in
+   CSS can move content between pages. Kept together at the end, they print. */
+.eb-doc .eb-fnref { font-size: .72em; vertical-align: super; line-height: 0; }
+.eb-doc .eb-fnref a { color: #14509b; text-decoration: none; }
+.eb-doc .eb-notes { margin: 2em 0 0; border-top: .75pt solid #999; padding-top: .6em; font-size: .92em; }
+.eb-doc .eb-notes .eb-notes-title { font-weight: 700; margin: 0 0 .4em; }
+.eb-doc .eb-notes ol { margin: 0; padding-left: 1.8em; }
+.eb-doc .eb-notes li { margin: .15em 0; }
+.eb-doc .eb-notes li p { margin: 0; }
+
+/* columns */
+.eb-doc .eb-cols { column-gap: 8mm; column-rule: none; }
+.eb-doc .eb-cols > *:first-child { margin-top: 0; }
+
+/* a running header and footer, repeated on every printed page. On screen the
+   file is a single flow and there are no pages to repeat them on, so they are
+   only drawn when it is printed -- and the editor draws its own on each sheet. */
+.eb-doc .eb-runhead, .eb-doc .eb-runfoot {
+  display: none; font-size: .85em; color: #444;
+}
+.eb-doc .eb-runhead .l, .eb-doc .eb-runfoot .l,
+.eb-doc .eb-runhead .c, .eb-doc .eb-runfoot .c,
+.eb-doc .eb-runhead .r, .eb-doc .eb-runfoot .r { flex: 1 1 0; min-width: 0; }
+.eb-doc .eb-runhead .c, .eb-doc .eb-runfoot .c { text-align: center; }
+.eb-doc .eb-runhead .r, .eb-doc .eb-runfoot .r { text-align: right; }
+@media print {
+  .eb-doc .eb-runhead, .eb-doc .eb-runfoot { display: flex; gap: 1em; position: fixed; left: 0; right: 0; }
+  .eb-doc .eb-runhead { top: -9mm; }
+  .eb-doc .eb-runfoot { bottom: -9mm; }
+}
+
 /* mathematics — native MathML, no images and no renderer to install */
 .eb-doc math { font-size: 1.06em; }
 .eb-doc .eb-math-block { display: block; text-align: center; margin: 1em 0; break-inside: avoid; }
@@ -482,6 +528,17 @@
    * The whole artefact: one file, styles inside it, no scripts, nothing to install.
    * This exact string is what gets written to Files and what gets printed.
    */
+  /** The header or the footer as three slots, or nothing at all if it is empty. */
+  function runningBlock(cls, slots) {
+    const s = slots || {};
+    if (!(s.l || s.c || s.r)) { return ''; }
+    return '<div class="' + cls + '" aria-hidden="true">'
+      + '<span class="l">' + escapeAttr(s.l || '') + '</span>'
+      + '<span class="c">' + escapeAttr(s.c || '') + '</span>'
+      + '<span class="r">' + escapeAttr(s.r || '') + '</span>'
+      + '</div>\n';
+  }
+
   function buildHtml(doc) {
     const paper = normalisePaper(doc.paper);
     const lang = doc.lang || (document.documentElement.lang || 'ja');
@@ -515,7 +572,10 @@
       + fontLinks
       + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS + '</style>\n'
       + '</head>\n<body class="eb-doc">\n'
-      + body + '\n</body>\n</html>\n';
+      + runningBlock('eb-runhead', paper.header)
+      + body + '\n'
+      + runningBlock('eb-runfoot', paper.footer)
+      + '</body>\n</html>\n';
   }
 
   /** Read a file back. Anything not written by EditBase still opens; it just
@@ -527,6 +587,9 @@
     let paper = null;
     if (meta) { try { paper = JSON.parse(meta.getAttribute('content') || '{}'); } catch (e) { paper = null; } }
     const body = dom.body || dom.createElement('body');
+    // The running header and footer are written out of the paper setup, so they
+    // are not part of the text and must not come back into the canvas as blocks.
+    Array.from(body.querySelectorAll('.eb-runhead, .eb-runfoot')).forEach((n) => n.remove());
     sanitiseInto(body);
     return {
       title: (dom.title || '').trim(),
@@ -1611,6 +1674,215 @@
     return false;
   }
 
+  // ---- readings, notes, columns and list markers ---------------------------------
+  /** A reading over a word. HTML has had an element for this since 2010. */
+  function applyRuby(reading) {
+    const range = getRange();
+    if (!range || range.collapsed) { return false; }
+    if (!String(range.toString()).trim()) { return false; }
+    const ruby = document.createElement('ruby');
+    ruby.appendChild(range.extractContents());
+    const rt = document.createElement('rt');
+    rt.textContent = String(reading == null ? '' : reading);
+    ruby.appendChild(rt);
+    range.insertNode(ruby);
+    const after = document.createRange();
+    after.setStartAfter(ruby);
+    after.collapse(true);
+    selectRange(after);
+    return true;
+  }
+  function rubyAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c) {
+      if (n.nodeName === 'RUBY') { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function removeRuby() {
+    const r = getRange();
+    const ruby = r ? rubyAt(r.startContainer) : null;
+    if (!ruby || !ruby.parentNode) { return false; }
+    Array.from(ruby.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+    const parent = ruby.parentNode;
+    while (ruby.firstChild) { parent.insertBefore(ruby.firstChild, ruby); }
+    parent.removeChild(ruby);
+    return true;
+  }
+
+  // A browser cannot put a note at the foot of the page that cites it: nothing in
+  // CSS moves content between pages. They are gathered at the end instead, which is
+  // what a printed report does with endnotes anyway, and the file numbers itself.
+  let noteSeq = 0;
+  function noteId() {
+    noteSeq += 1;
+    return 'ebn' + noteSeq + '-' + Math.floor(noteSeq * 7919 % 997);
+  }
+  function notesBox(title) {
+    const c = canvas();
+    let box = c.querySelector('section.eb-notes');
+    if (box) { return box; }
+    box = document.createElement('section');
+    box.className = 'eb-notes';
+    const head = document.createElement('p');
+    head.className = 'eb-notes-title';
+    head.textContent = title || 'Notes';
+    box.appendChild(head);
+    box.appendChild(document.createElement('ol'));
+    c.appendChild(box);
+    return box;
+  }
+  function insertFootnote(text, title) {
+    const range = getRange();
+    const c = canvas();
+    if (!range || !c) { return false; }
+    const id = noteId();
+    const sup = document.createElement('sup');
+    sup.className = 'eb-fnref';
+    sup.setAttribute('id', 'r' + id);
+    const a = document.createElement('a');
+    a.setAttribute('href', '#' + id);
+    a.textContent = '*';
+    sup.appendChild(a);
+    range.deleteContents();
+    range.insertNode(sup);
+    const li = document.createElement('li');
+    li.setAttribute('id', id);
+    const p = document.createElement('p');
+    p.textContent = String(text == null ? '' : text);
+    li.appendChild(p);
+    notesBox(title).querySelector('ol').appendChild(li);
+    const after = document.createRange();
+    after.setStartAfter(sup);
+    after.collapse(true);
+    selectRange(after);
+    return true;
+  }
+  /**
+   * The notes follow the order they are cited in, are numbered from one, and a
+   * note whose citation has been deleted goes with it.
+   */
+  function renumberNotes() {
+    const c = canvas();
+    if (!c) { return; }
+    const box = c.querySelector('section.eb-notes');
+    const refs = Array.from(c.querySelectorAll('sup.eb-fnref'));
+    if (!box) { return; }
+    const list = box.querySelector('ol');
+    if (!list) { box.remove(); return; }
+    const byId = {};
+    Array.from(list.children).forEach((li) => { byId[li.getAttribute('id') || ''] = li; });
+    const used = {};
+    refs.forEach((sup, i) => {
+      const a = sup.querySelector('a');
+      const id = a ? String(a.getAttribute('href') || '').replace(/^#/, '') : '';
+      const li = byId[id];
+      if (!li) { sup.remove(); return; }
+      used[id] = true;
+      if (a) { a.textContent = String(i + 1); }
+      list.appendChild(li);
+    });
+    Array.from(list.children).forEach((li) => {
+      if (!used[li.getAttribute('id') || '']) { li.remove(); }
+    });
+    if (!list.children.length) { box.remove(); return; }
+    // The notes belong at the end, whatever has been typed after them.
+    if (box.parentNode === c && c.lastElementChild !== box) { c.appendChild(box); }
+  }
+
+  /** Lay a passage out in columns, or take the columns off it. */
+  function setColumns(count, gapMm) {
+    const blocks = selectedBlocks().filter((b) => b && b.parentNode);
+    if (!blocks.length) { return false; }
+    // The box may be the top-level block itself, so look for it from the caret up
+    // rather than at the parent of whatever selectedBlocks came back with.
+    const host = columnsBoxAt();
+    if (host) {
+      if (!count || count < 2) {
+        const parent = host.parentNode;
+        const first = host.firstElementChild;
+        while (host.firstChild) { parent.insertBefore(host.firstChild, host); }
+        parent.removeChild(host);
+        placeCaretIn(first);
+        return true;
+      }
+      host.style.columnCount = String(count);
+      if (gapMm) { host.style.columnGap = gapMm + 'mm'; }
+      return true;
+    }
+    if (!count || count < 2) { return false; }
+    const box = document.createElement('div');
+    box.className = 'eb-cols';
+    box.style.columnCount = String(count);
+    if (gapMm) { box.style.columnGap = gapMm + 'mm'; }
+    blocks[0].parentNode.insertBefore(box, blocks[0]);
+    blocks.forEach((b) => box.appendChild(b));
+    placeCaretIn(box.firstElementChild);
+    return true;
+  }
+  function columnsBoxAt() {
+    const r = getRange();
+    if (!r) { return null; }
+    let n = r.startContainer;
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    const c = canvas();
+    while (n && n !== c) {
+      if (n.nodeType === 1 && n.classList && n.classList.contains('eb-cols')) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function columnsAt() {
+    const box = columnsBoxAt();
+    return box ? (Number(box.style.columnCount) || 2) : 0;
+  }
+
+  // The markers a list can be numbered or bulleted with. The ordered ones make a
+  // bulleted list into a numbered one and the other way round, because that is
+  // what a person means by choosing them.
+  const LIST_MARKERS = [
+    { type: 'disc', tag: 'UL' }, { type: 'circle', tag: 'UL' }, { type: 'square', tag: 'UL' },
+    { type: 'none', tag: 'UL' },
+    { type: 'decimal', tag: 'OL' }, { type: 'decimal-leading-zero', tag: 'OL' },
+    { type: 'lower-alpha', tag: 'OL' }, { type: 'upper-alpha', tag: 'OL' },
+    { type: 'lower-roman', tag: 'OL' }, { type: 'upper-roman', tag: 'OL' },
+    { type: 'cjk-decimal', tag: 'OL' }, { type: 'cjk-ideographic', tag: 'OL' },
+    { type: 'katakana-iroha', tag: 'OL' }, { type: 'hiragana-iroha', tag: 'OL' },
+  ];
+  function listAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c) {
+      if (n.nodeName === 'UL' || n.nodeName === 'OL') { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function setListMarker(type) {
+    const r = getRange();
+    let list = r ? listAt(r.startContainer) : null;
+    if (!list) {
+      toggleList(LIST_MARKERS.some((m) => m.type === type && m.tag === 'OL') ? 'OL' : 'UL');
+      const again = getRange();
+      list = again ? listAt(again.startContainer) : null;
+      if (!list) { return false; }
+    }
+    const spec = LIST_MARKERS.find((m) => m.type === type);
+    if (spec && list.nodeName !== spec.tag) {
+      const swap = document.createElement(spec.tag);
+      if (list.className) { swap.className = list.className; }
+      while (list.firstChild) { swap.appendChild(list.firstChild); }
+      list.parentNode.insertBefore(swap, list);
+      list.remove();
+      list = swap;
+    }
+    if (type) { list.style.listStyleType = type; } else { list.style.removeProperty('list-style-type'); }
+    if (!list.getAttribute('style')) { list.removeAttribute('style'); }
+    return true;
+  }
+
   function insertPageBreak(label) {
     const div = document.createElement('div');
     div.className = 'eb-pagebreak';
@@ -2148,6 +2420,7 @@
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
     'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
+    'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
     'eb-math-block', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
@@ -2250,6 +2523,7 @@
     const c = canvas();
     if (!c) { return; }
     repairNesting();
+    renumberNotes();
     let stray = null;
     Array.from(c.childNodes).forEach((n) => {
       if (n.nodeType === 3) {
@@ -2415,6 +2689,41 @@
       n = n.parentNode;
     }
     return null;
+  }
+
+  /**
+   * The format under the caret, as a thing that can be carried and put down
+   * somewhere else -- what LibreOffice calls the paintbrush.
+   */
+  function pickFormat() {
+    const state = activeFormats();
+    const r = getRange();
+    let n = r ? r.startContainer : null;
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    const style = (n && n.nodeType === 1 && window.getComputedStyle) ? window.getComputedStyle(n) : null;
+    const inline = {};
+    Object.keys(INLINE_SPECS).forEach((k) => { inline[k] = !!state[k]; });
+    // The size and the typeface are taken as they are computed, so a heading hands
+    // on the size its style gives it rather than nothing at all.
+    return {
+      inline,
+      colour: rgbToHex(style ? style.color : '') || '',
+      fontSize: style ? style.fontSize : '',
+      fontFamily: style ? style.fontFamily : '',
+    };
+  }
+  /** Put that format on whatever is selected now. */
+  function paintFormat(fmt) {
+    if (!fmt) { return; }
+    const range = getRange();
+    if (!range || range.collapsed) { return; }
+    const now = activeFormats();
+    Object.keys(INLINE_SPECS).forEach((k) => {
+      if (!!fmt.inline[k] !== !!now[k]) { toggleInline(k); }
+    });
+    applyInlineStyle('color', fmt.colour || '');
+    applyInlineStyle('fontSize', fmt.fontSize || '');
+    applyInlineStyle('fontFamily', fmt.fontFamily || '');
   }
 
   // ---- paste ---------------------------------------------------------------------
@@ -2732,6 +3041,11 @@
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    ruby: I('<path d="M3 12.6h10M4.6 9.6 8 3.4l3.4 6.2"/><path d="M4.4 2.2h7.2" stroke-width="1"/>'),
+    note: I('<path d="M3 3.6h10M3 7h10M3 10.4h6"/><circle cx="12.6" cy="11" r="2.2"/>'),
+    columns: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10" stroke-dasharray="2 1.6"/>'),
+    brush: I('<path d="M4.4 9.6 10.8 3.2a1.7 1.7 0 0 1 2.4 2.4L6.8 12"/><path d="M4.4 9.6 6.8 12l-1.6 1.4a2 2 0 0 1-2.8-2.8z"/>'),
+    header: I('<rect x="2" y="2.4" width="12" height="11.2" rx="1"/><path d="M2 5.6h12" stroke-dasharray="2 1.6"/><path d="M2 10.8h12" stroke-dasharray="2 1.6"/>'),
     grip: I('<circle cx="6" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="12.4" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="12.4" r=".95" fill="currentColor" stroke="none"/>'),
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
@@ -2906,6 +3220,14 @@
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.list === 'UL' }" @mousedown.prevent @click="list('UL')" :title="t('Bulleted list')"><span v-html="icons.ul"></span></button>
       <button class="eb-tb" :class="{ on: fmt.list === 'OL' }" @mousedown.prevent @click="list('OL')" :title="t('Numbered list')"><span v-html="icons.ol"></span></button>
+      <span class="eb-pop">
+        <button class="eb-tb caret" :class="{ on: menu === 'marker' }" @mousedown.prevent @click="toggleMenu('marker')" :title="t('Kind of marker')" v-html="icons.down"></button>
+        <div class="eb-menu markers" v-if="menu === 'marker'" @mousedown.prevent>
+          <button v-for="m in listMarkers" :key="m.type" class="eb-menu-item" :class="{ on: fmt.marker === m.type }" @click="setMarker(m.type); menu = ''">
+            <span class="mk">{{ m.sample }}</span><span>{{ m.label }}</span>
+          </button>
+        </div>
+      </span>
       <button class="eb-tb" v-for="a in aligns" :key="a.cls" :class="{ on: fmt.align === a.cls }" @mousedown.prevent @click="align(a.cls)" :title="a.label" v-html="a.icon"></button>
       <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')"><span v-html="icons.indent"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')"><span v-html="icons.outdent"></span></button>
@@ -2927,12 +3249,18 @@
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
           <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
           <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
+          <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="openRuby()"><span v-html="icons.ruby"></span>{{ t('Reading over the word…') }}</button>
+          <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
+          <button class="eb-menu-item" @click="openCols()"><span v-html="icons.columns"></span>{{ t('Columns…') }}</button>
+          <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
           <div class="eb-menu-sep" v-if="anySource"></div>
           <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
             <span v-html="icons.link"></span>{{ sourceLabel(key) }}
           </button>
         </div>
       </span>
+      <button class="eb-tb" :class="{ on: !!brush }" @mousedown.prevent @click="useBrush" :title="brush ? t('Put this format on the selection') : t('Copy the format at the cursor')"><span v-html="icons.brush"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
       <span class="sep"></span>
       <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
@@ -2996,7 +3324,16 @@
 
     <div class="eb-desk" :class="{ empty: !doc.id }">
       <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
-        <div class="eb-sheets" aria-hidden="true" v-if="!flow"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
+        <div class="eb-sheets" aria-hidden="true" v-if="!flow">
+          <div class="eb-sheet" v-for="n in pageCount" :key="n">
+            <div class="run head" v-if="hasRunning">
+              <span class="l">{{ doc.paper.header.l }}</span><span class="c">{{ doc.paper.header.c }}</span><span class="r">{{ doc.paper.header.r }}</span>
+            </div>
+            <div class="run foot" v-if="hasRunning">
+              <span class="l">{{ doc.paper.footer.l }}</span><span class="c">{{ doc.paper.footer.c }}</span><span class="r">{{ doc.paper.footer.r }}</span>
+            </div>
+          </div>
+        </div>
         <div id="eb-canvas" class="eb-paper eb-doc"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
@@ -3430,6 +3767,90 @@
   </div>
 
   <!-- the right button, as a word processor uses it -->
+  <!-- a reading over a word -->
+  <div v-if="rubyOpen" class="eb-modal-back" @click="rubyOpen = false">
+    <div class="eb-modal" style="width:min(420px,100%)" @click.stop>
+      <h3>{{ t('Reading') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('Word') }}</label><input type="text" :value="rubyWord" readonly></div>
+        <div class="eb-field"><label>{{ t('Reading') }}</label><input ref="rubyInput" type="text" v-model="rubyText" @keydown.enter.prevent="applyRubyText"></div>
+        <p class="eb-note">{{ t('The reading is written above the word, at half its size, using the element HTML has for exactly this.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" v-if="fmt.ruby" @click="dropRuby">{{ t('Remove the reading') }}</button>
+        <button class="eb-btn" @click="rubyOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyRubyText">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- a note -->
+  <div v-if="noteOpen" class="eb-modal-back" @click="noteOpen = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Note') }}</h3>
+      <div class="body">
+        <div class="eb-field"><label>{{ t('The note') }}</label><textarea ref="noteInput" rows="4" v-model="noteText"></textarea></div>
+        <p class="eb-note">{{ t('A number goes in at the cursor and the note is added to the list at the end of the document. The numbers follow the order the notes are cited in and look after themselves. A browser cannot put a note at the foot of the page that cites it: nothing in CSS moves text from one page to another.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn" @click="noteOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyNote">{{ t('Insert') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- columns -->
+  <div v-if="colsOpen" class="eb-modal-back" @click="colsOpen = false">
+    <div class="eb-modal" style="width:min(460px,100%)" @click.stop>
+      <h3>{{ t('Columns') }}</h3>
+      <div class="body">
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Columns') }}</label>
+            <select v-model.number="cols.count">
+              <option :value="1">{{ t('One (no columns)') }}</option>
+              <option :value="2">{{ t('Two') }}</option>
+              <option :value="3">{{ t('Three') }}</option>
+              <option :value="4">{{ t('Four') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Gap (mm)') }}</label><input type="number" min="0" max="40" step="1" v-model.number="cols.gap"></div>
+        </div>
+        <p class="eb-note">{{ t('The paragraphs you have selected are laid out in columns. Select a paragraph inside them and choose one column to take the columns off again.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn" @click="colsOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyCols">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- the running header and footer -->
+  <div v-if="runOpen" class="eb-modal-back" @click="runOpen = false">
+    <div class="eb-modal" @click.stop>
+      <h3>{{ t('Header and footer') }}</h3>
+      <div class="body">
+        <label>{{ t('Header') }}</label>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.l" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.c" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.r" @input="touch"></div>
+        </div>
+        <label>{{ t('Footer') }}</label>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.l" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.c" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.r" @input="touch"></div>
+        </div>
+        <p class="eb-note">{{ t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="clearRunning">{{ t('Clear') }}</button>
+        <button class="eb-btn primary" @click="runOpen = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- frame properties: everything here is written on the object as inline CSS,
        so the saved file carries its own layout and needs nothing to read it -->
   <div v-if="fpropsOpen" class="eb-modal-back" @click="fpropsOpen = false">
@@ -3794,7 +4215,12 @@
         guides: true,
         colour: '#111111',
         counts: 0,
-        fmt: { block: 'P', align: '', list: '', size: null, family: '' },
+        fmt: { block: 'P', align: '', list: '', size: null, family: '', marker: '', ruby: false },
+        rubyOpen: false, rubyWord: '', rubyText: '',
+        noteOpen: false, noteText: '',
+        colsOpen: false, cols: { count: 2, gap: 8 },
+        runOpen: false,
+        brush: null,
         toast: '',
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
@@ -3966,6 +4392,29 @@
         ];
       },
       fontSizes() { return FONT_SIZES; },
+      hasRunning() {
+        const h = this.doc.paper.header || {};
+        const f = this.doc.paper.footer || {};
+        return !!(h.l || h.c || h.r || f.l || f.c || f.r);
+      },
+      listMarkers() {
+        return [
+          { type: 'disc', sample: '•', label: this.t('Disc') },
+          { type: 'circle', sample: '◦', label: this.t('Circle') },
+          { type: 'square', sample: '▪', label: this.t('Square') },
+          { type: 'none', sample: '　', label: this.t('No marker') },
+          { type: 'decimal', sample: '1.', label: this.t('1, 2, 3') },
+          { type: 'decimal-leading-zero', sample: '01.', label: this.t('01, 02, 03') },
+          { type: 'lower-alpha', sample: 'a.', label: this.t('a, b, c') },
+          { type: 'upper-alpha', sample: 'A.', label: this.t('A, B, C') },
+          { type: 'lower-roman', sample: 'i.', label: this.t('i, ii, iii') },
+          { type: 'upper-roman', sample: 'I.', label: this.t('I, II, III') },
+          { type: 'cjk-decimal', sample: '一、', label: this.t('One, two, three in kanji') },
+          { type: 'cjk-ideographic', sample: '一、', label: this.t('Formal kanji numerals') },
+          { type: 'katakana-iroha', sample: 'イ、', label: this.t('I, ro, ha in katakana') },
+          { type: 'hiragana-iroha', sample: 'い、', label: this.t('I, ro, ha in hiragana') },
+        ];
+      },
       frameHandles() { return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']; },
       /** Wrapping and free placement cannot both be true: CSS has only one answer. */
       freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
@@ -4199,6 +4648,10 @@
         const s = activeFormats();
         s.size = sizeAt(normalisePaper(this.doc.paper).fontSize);
         s.family = familyAt();
+        const at = getRange();
+        const list = at ? listAt(at.startContainer) : null;
+        s.marker = list ? (list.style.listStyleType || (list.nodeName === 'OL' ? 'decimal' : 'disc')) : '';
+        s.ruby = !!(at && rubyAt(at.startContainer));
         this.fmt = s;
         this.syncFrame();
         const range = getRange();
@@ -5301,6 +5754,88 @@
           guides: () => { this.guides = !this.guides; },
         };
         if (acts[kind]) { acts[kind](); }
+      },
+
+      // ---- readings, notes, columns, markers and the paintbrush -------------------
+      openRuby() {
+        this.menu = '';
+        const r = getRange();
+        const existing = r ? rubyAt(r.startContainer) : null;
+        if (existing) {
+          const rt = existing.querySelector('rt');
+          this.rubyWord = String(existing.textContent || '').replace(String(rt ? rt.textContent : ''), '');
+          this.rubyText = rt ? rt.textContent : '';
+          ctxRange = r.cloneRange();
+        } else {
+          if (!r || r.collapsed) { this.notify(this.t('Choose the word first.')); return; }
+          this.rubyWord = r.toString();
+          this.rubyText = '';
+          ctxRange = r.cloneRange();
+        }
+        this.rubyOpen = true;
+        this.$nextTick(() => { if (this.$refs.rubyInput) { this.$refs.rubyInput.focus(); } });
+      },
+      applyRubyText() {
+        const reading = this.rubyText;
+        this.rubyOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => {
+          if (rubyAt(getRange() ? getRange().startContainer : null)) { removeRuby(); }
+          applyRuby(reading);
+        });
+      },
+      dropRuby() {
+        this.rubyOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => removeRuby());
+      },
+      openNote() {
+        this.menu = '';
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.noteText = '';
+        this.noteOpen = true;
+        this.$nextTick(() => { if (this.$refs.noteInput) { this.$refs.noteInput.focus(); } });
+      },
+      applyNote() {
+        const text = this.noteText;
+        this.noteOpen = false;
+        if (!String(text).trim()) { return; }
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => insertFootnote(text, this.t('Notes')));
+      },
+      openCols() {
+        this.menu = '';
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        const now = columnsAt();
+        this.cols.count = now || 2;
+        this.colsOpen = true;
+      },
+      applyCols() {
+        const v = { count: Number(this.cols.count) || 1, gap: Number(this.cols.gap) || 0 };
+        this.colsOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => setColumns(v.count, v.gap));
+        this.repaginate();
+      },
+      openRunning() { this.menu = ''; this.runOpen = true; },
+      clearRunning() {
+        this.doc.paper.header = { l: '', c: '', r: '' };
+        this.doc.paper.footer = { l: '', c: '', r: '' };
+        this.touch();
+      },
+      setMarker(type) { this.run(() => setListMarker(type)); },
+      /** The paintbrush: pick a format up with one press, put it down with the next. */
+      useBrush() {
+        if (!this.brush) {
+          this.brush = pickFormat();
+          this.notify(this.t('Format copied. Choose the text to put it on.'));
+          return;
+        }
+        const fmt = this.brush;
+        this.brush = null;
+        const r = getRange();
+        if (!r || r.collapsed) { this.notify(this.t('Choose the text first.')); return; }
+        this.run(() => paintFormat(fmt));
       },
 
       // ---- paragraph, contents, characters --------------------------------------
