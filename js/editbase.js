@@ -4148,6 +4148,8 @@
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
     grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
     palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
+    spread: I('<rect x="1" y="4" width="3.4" height="8" rx=".8"/><rect x="6.3" y="4" width="3.4" height="8" rx=".8"/><rect x="11.6" y="4" width="3.4" height="8" rx=".8"/>'),
+    sameSize: I('<rect x="1.2" y="3" width="6" height="10" rx="1"/><rect x="8.8" y="3" width="6" height="10" rx="1" stroke-dasharray="2 1.6"/>'),
     toFront: I('<rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="none"/><rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     toBack: I('<rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="none"/><rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     boxL: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="2.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
@@ -4403,6 +4405,9 @@
       <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
       <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
       <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+      <span class="sep" v-if="frame.extras.length"></span>
+      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('spread')" :title="t('Space them evenly')"><span v-html="icons.spread"></span></button>
+      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('sameSize')" :title="t('Make them the same size')"><span v-html="icons.sameSize"></span></button>
       <span class="sep"></span>
       <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
       <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
@@ -7191,6 +7196,55 @@
         });
         this.settleFrame();
       },
+      /** Even gaps between three or more, left to right or top to bottom. */
+      spreadGroup() {
+        const each = frameAll().filter((o) => objectFree(o) && o.getBoundingClientRect);
+        if (each.length < 3) { return; }
+        const rects = each.map((o) => o.getBoundingClientRect());
+        const wide = Math.max.apply(null, rects.map((r) => r.right)) - Math.min.apply(null, rects.map((r) => r.left));
+        const tall = Math.max.apply(null, rects.map((r) => r.bottom)) - Math.min.apply(null, rects.map((r) => r.top));
+        const across = wide >= tall;
+        const order = each.map((o, i) => ({ el: o, r: rects[i] }))
+          .sort((a, b) => (across ? a.r.left - b.r.left : a.r.top - b.r.top));
+        const first = order[0].r;
+        const last = order[order.length - 1].r;
+        const room = across
+          ? (last.left - first.left)
+          : (last.top - first.top);
+        const step = room / (order.length - 1);
+        history.push(true);
+        order.forEach((o, i) => {
+          if (i === 0 || i === order.length - 1) { return; }
+          const want = (across ? first.left : first.top) + step * i;
+          if (across) { this.nudgeFree(o.el, want - o.r.left); }
+          else {
+            const z = this.frameZoom() || 1;
+            o.el.style.top = round1((parseFloat(o.el.style.top) || 0) + (want - o.r.top) * MM / z) + 'mm';
+          }
+          this.keepOnPaper(o.el);
+        });
+        this.settleFrame();
+      },
+      /** The rest take the size of the one with the bar on it. */
+      sameSizeGroup() {
+        const each = frameAll();
+        if (each.length < 2 || !frameEl || !frameEl.getBoundingClientRect) { return; }
+        const z = this.frameZoom() || 1;
+        const r = frameEl.getBoundingClientRect();
+        const w = round1(r.width * MM / z);
+        const h = round1(r.height * MM / z);
+        history.push(true);
+        each.forEach((o) => {
+          if (o === frameEl) { return; }
+          o.style.width = w + 'mm';
+          o.style.maxWidth = 'none';
+          if (o.nodeName !== 'FIGURE' && !(o.classList && (o.classList.contains('eb-sh-line') || o.classList.contains('eb-sh-arrow')))) {
+            o.style.minHeight = h + 'mm';
+          }
+          this.keepOnPaper(o);
+        });
+        this.settleFrame();
+      },
       alignFree(el, cls) {
         const box = this.columnBox();
         if (!box || !el.getBoundingClientRect) { return false; }
@@ -7273,6 +7327,36 @@
           el.style.top = round1((parseFloat(el.style.top) || 0) + by[0] * MM / z) + 'mm';
           this.frame.gy = (by[1] - b.top) / z;
         }
+      },
+      /**
+       * Ctrl+D leaves a copy four millimetres down and across, ready to be dragged
+       * off. Several held at once are all copied, or the key would do something
+       * different from everything else on the toolbar.
+       */
+      duplicateFrame() {
+        const all = frameAll();
+        if (!all.length) { return; }
+        history.push(true);
+        const copies = all.map((o) => {
+          const host = objectFree(o) ? o.parentNode : o;
+          if (!host || !host.parentNode) { return null; }
+          const copy = host.cloneNode(true);
+          host.parentNode.insertBefore(copy, host.nextSibling);
+          const made = objectFree(o) ? copy.firstElementChild : copy;
+          if (made && objectFree(made)) {
+            made.style.left = round1((parseFloat(made.style.left) || 0) + 4) + 'mm';
+            made.style.top = round1((parseFloat(made.style.top) || 0) + 4) + 'mm';
+            this.keepOnPaper(made);
+          }
+          return made;
+        }).filter(Boolean);
+        if (!copies.length) { return; }
+        frameEl = copies[0];
+        frameMore = copies.slice(1);
+        framePinned = true;
+        frameTaken = true;
+        this.frame.bar = true;
+        this.settleFrame();
       },
       /** Arrow keys walk a frame about the page, the way they do in a drawing. */
       nudgeFrameBy(el, dxMm, dyMm) {
@@ -7362,6 +7446,10 @@
           frameTaken = true;
           if (frameMore.length) { this.alignGroup(arg); return; }
           if (!this.alignObject(frameEl, arg)) { this.blockRun(() => setBlockClass('align', arg)); }
+          return;
+        }
+        if (kind === 'spread' || kind === 'sameSize') {
+          this[kind === 'spread' ? 'spreadGroup' : 'sameSizeGroup']();
           return;
         }
         if (kind === 'fit') {

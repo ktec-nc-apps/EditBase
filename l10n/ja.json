@@ -91,6 +91,8 @@
         "Centre the frame in the column": "枠を段の中央に置く",
         "Put the frame at the right margin": "枠を右余白に寄せる",
         "Make the frame the width of the column": "枠を段の幅いっぱいにする",
+        "Space them evenly": "等間隔に並べる",
+        "Make them the same size": "同じ大きさにする",
         "Frame properties…": "枠のプロパティ…",
         "Zoom": "ズーム",
         "Find": "検索",

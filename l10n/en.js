@@ -92,6 +92,8 @@ OC.L10N.register(
     "Centre the frame in the column": "Centre the frame in the column",
     "Put the frame at the right margin": "Put the frame at the right margin",
     "Make the frame the width of the column": "Make the frame the width of the column",
+    "Space them evenly": "Space them evenly",
+    "Make them the same size": "Make them the same size",
     "Frame properties…": "Frame properties…",
     "Zoom": "Zoom",
     "Find": "Find",
