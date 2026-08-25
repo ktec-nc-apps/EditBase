@@ -4133,6 +4133,7 @@
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
     palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
     toFront: I('<rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="none"/><rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     toBack: I('<rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="none"/><rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
@@ -4366,6 +4367,7 @@
       <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
+      <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
       <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span v-html="flow ? icons.screenView : icons.pageView"></span>
@@ -4486,7 +4488,7 @@
           <span v-html="it.icon"></span>
         </button>
       </div>
-      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
+      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, grid: grid && !flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
         <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
           <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
           <span class="tick" v-for="n in rulerMm.ticks" :key="n" :style="{ left: ((n - 1) * 10) + 'mm' }">{{ (n - 1) * 10 }}</span>
@@ -5646,7 +5648,7 @@
         tocTitle: '',
         spellcheck: false,
         autolink: true,
-        palette: true, pendingDrop: null,
+        palette: true, grid: false, pendingDrop: null,
         webOpen: false, webUrl: '', webBusy: false,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
@@ -7235,6 +7237,17 @@
           });
           return best;
         };
+        // With the grid on, everything lands on it. A grid that only catches when
+        // you are nearly on it is not a grid, it is a hint.
+        if (this.grid) {
+          const now = el.getBoundingClientRect();
+          const snap5 = (v) => Math.round(v / 5) * 5;
+          const dx = snap5((now.left - cr.left) * MM / z) - (now.left - cr.left) * MM / z;
+          const dy = snap5((now.top - cr.top) * MM / z) - (now.top - cr.top) * MM / z;
+          el.style.left = round1((parseFloat(el.style.left) || 0) + dx) + 'mm';
+          el.style.top = round1((parseFloat(el.style.top) || 0) + dy) + 'mm';
+          return;
+        }
         const r = el.getBoundingClientRect();
         const bx = pick(xs, [r.left, (r.left + r.right) / 2, r.right]);
         if (bx) {
