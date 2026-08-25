@@ -2357,11 +2357,13 @@
 
   const TEMPLATE = `
 <div class="eb-shell">
+  <div v-if="narrow && sideOpen" class="eb-backdrop" @click="sideOpen = false"></div>
   <aside class="eb-side" :class="{ hidden: !sideOpen }">
     <div class="brand">
       <span class="logo" v-html="logo"></span>
       <span class="name">EditBase</span>
-      <span class="ver">{{ version }}</span>
+      <span class="ver" v-if="!narrow">{{ version }}</span>
+      <button v-if="narrow" class="eb-tb side-close" @click="sideOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
     </div>
     <div class="side-actions">
       <button class="eb-btn primary wide" @click="newDoc">＋ {{ t('New document') }}</button>
@@ -2381,11 +2383,11 @@
 
   <section class="eb-main">
     <div class="eb-topbar">
-      <button class="eb-tb" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
+      <button class="eb-tb menu-btn" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
       <input class="title-input" v-model="doc.title" :placeholder="t('Untitled document')" @change="applyTitle" :disabled="!doc.id">
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
-      <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 {{ t('Save') }}</button>
-      <button class="eb-btn" @click="printDoc" :disabled="!doc.id">🖨 {{ t('Print / PDF') }}</button>
+      <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
+      <button class="eb-btn" @click="printDoc" :disabled="!doc.id">🖨 <span class="lbl">{{ t('Print / PDF') }}</span></button>
       <button class="eb-btn ghost" @click="menuOpen = !menuOpen" :title="t('More')">⋯</button>
       <div v-if="menuOpen" class="eb-modal-back" @click="menuOpen = false">
         <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
@@ -2482,7 +2484,7 @@
       <button class="eb-tb" :class="{ on: guides }" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')"><span v-html="icons.guides"></span></button>
       <span class="eb-num" :title="t('Zoom')">
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
-        <button class="eb-tb text zoomv" @mousedown.prevent @click="zoom = 100">{{ zoom }}%</button>
+        <button class="eb-tb text zoomv" @mousedown.prevent @click="zoomSetByHand = true; zoom = 100">{{ zoom }}%</button>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
       </span>
     </div>
@@ -2946,7 +2948,7 @@
     <button v-else class="ci" @click="ctxDo('link')"><span>{{ t('Hyperlink…') }}</span><span class="s">Ctrl+K</span></button>
     <div class="sep"></div>
 
-    <div class="ci has-sub" @mouseenter="placeFly">
+    <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('Paragraph style') }}</span><span class="s">›</span>
       <div class="fly">
         <button class="ci" @click="ctxDo('block','P')">{{ t('Body text') }}</button>
@@ -2958,7 +2960,7 @@
         <button class="ci" @click="ctxDo('block','PRE')">{{ t('Preformatted') }}</button>
       </div>
     </div>
-    <div class="ci has-sub" @mouseenter="placeFly">
+    <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('Character') }}</span><span class="s">›</span>
       <div class="fly">
         <button class="ci" @click="ctxDo('inline','bold')"><span>{{ t('Bold') }}</span><span class="s">Ctrl+B</span></button>
@@ -2971,7 +2973,7 @@
         <button class="ci" @click="ctxDo('inline','code')">{{ t('Monospaced') }}</button>
       </div>
     </div>
-    <div class="ci has-sub" @mouseenter="placeFly">
+    <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('Alignment') }}</span><span class="s">›</span>
       <div class="fly">
         <button class="ci" @click="ctxDo('align','left')">{{ t('Left') }}</button>
@@ -2980,7 +2982,7 @@
         <button class="ci" @click="ctxDo('align','justify')">{{ t('Justified') }}</button>
       </div>
     </div>
-    <div class="ci has-sub" @mouseenter="placeFly">
+    <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('List') }}</span><span class="s">›</span>
       <div class="fly">
         <button class="ci" @click="ctxDo('list','UL')">{{ t('Bulleted list') }}</button>
@@ -2995,7 +2997,7 @@
 
     <template v-if="ctx.table">
       <div class="sep"></div>
-      <div class="ci has-sub" @mouseenter="placeFly">
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Table') }}</span><span class="s">›</span>
         <div class="fly">
           <button class="ci" @click="ctxDo('table','rowAbove')">{{ t('Insert a row above') }}</button>
@@ -3021,7 +3023,7 @@
 
     <template v-if="ctx.image">
       <div class="sep"></div>
-      <div class="ci has-sub" @mouseenter="placeFly">
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Picture') }}</span><span class="s">›</span>
         <div class="fly">
           <button class="ci" @click="ctxDo('image','eb-img-s')">{{ t('Small') }}</button>
@@ -3157,6 +3159,8 @@
         logo: LOGO,
         icons: ICONS,
         sideOpen: true,
+        narrow: false,
+        zoomSetByHand: false,
         zoom: 100,
         menu: '',
         pageCount: 1,
@@ -3401,6 +3405,7 @@
         } catch (e) { this.notify(this.t('Could not create the document: {msg}', { msg: e.message })); }
       },
       async openDoc(id) {
+        if (this.narrow) { this.sideOpen = false; }
         if (this.dirty && this.doc.id && this.doc.id !== id) { await this.save(); }
         try {
           const d = await api('documents/' + id);
@@ -3670,7 +3675,7 @@
         const next = Math.min(36, Math.max(6, Math.round((Number(this.doc.paper.fontSize) + d) * 2) / 2));
         this.doc.paper.fontSize = next;
       },
-      stepZoom(d) { this.zoom = Math.min(200, Math.max(50, this.zoom + d)); },
+      stepZoom(d) { this.zoomSetByHand = true; this.zoom = Math.min(200, Math.max(25, this.zoom + d)); },
       clearHighlight() { this.run(() => clearMarks()); },
       // ---- the other apps on this server ----
       async loadSources() {
@@ -4081,8 +4086,25 @@
         this.ctx.y = Math.max(6, Math.min(e.clientY, window.innerHeight - 430));
         this.ctx.open = true;
         this.refreshState();
+        // The estimate above keeps it roughly on screen; measuring it settles the rest.
+        this.$nextTick(() => {
+          const el = document.querySelector('.eb-ctxmenu');
+          if (!el) { return; }
+          const r = el.getBoundingClientRect();
+          if (r.right > window.innerWidth - 6) { this.ctx.x = Math.max(6, window.innerWidth - r.width - 6); }
+          if (r.bottom > window.innerHeight - 6) { this.ctx.y = Math.max(6, window.innerHeight - r.height - 6); }
+        });
       },
       closeCtx() { this.ctx.open = false; },
+      /** Touch has no hover, so the row itself opens and closes its submenu. */
+      toggleFly(e) {
+        if (e.target.closest && e.target.closest('.fly')) { return; }
+        const row = e.currentTarget;
+        const was = row.classList.contains('open');
+        const menu = row.closest('.eb-ctxmenu');
+        if (menu) { Array.from(menu.querySelectorAll('.has-sub.open')).forEach((n) => n.classList.remove('open')); }
+        if (!was) { row.classList.add('open'); }
+      },
       /**
        * A submenu opens beside its row, which near the foot of the window would
        * run off the bottom. Measure it once it is up and pull it back inside.
@@ -4090,6 +4112,8 @@
       placeFly(e) {
         const fly = e.currentTarget.querySelector('.fly');
         if (!fly) { return; }
+        // On a narrow screen the submenu is stacked under its row, not floated.
+        if (window.innerWidth <= 620) { fly.style.top = ''; fly.style.bottom = ''; fly.style.maxHeight = ''; return; }
         fly.style.top = '-6px';
         fly.style.bottom = 'auto';
         fly.style.maxHeight = '';
@@ -4191,6 +4215,32 @@
       toggleAutolink() {
         this.autolink = !this.autolink;
         window.localStorage.setItem('eb-autolink', this.autolink ? '1' : '0');
+      },
+
+      // ---- narrow screens ------------------------------------------------------
+      /**
+       * A phone has no room for a sidebar beside the page, so it becomes a drawer
+       * that starts closed; and an A4 page is wider than the screen, so the zoom
+       * starts at whatever makes it fit.
+       */
+      measureWidth() {
+        const narrow = window.innerWidth <= 860;
+        const became = narrow && !this.narrow;
+        this.narrow = narrow;
+        if (became) { this.sideOpen = false; }
+        if (!narrow && !this.sideOpen && window.innerWidth > 1100) { this.sideOpen = true; }
+        this.fitZoom();
+      },
+      fitZoom() {
+        if (!this.narrow || this.zoomSetByHand) { return; }
+        const desk = document.querySelector('.eb-desk');
+        if (!desk) { return; }
+        const room = desk.clientWidth - 12;
+        // sheet() speaks millimetres; the desk speaks CSS pixels.
+        const paper = sheet(this.doc.paper).w * 96 / 25.4;
+        if (!room || !paper) { return; }
+        const fit = Math.floor((room / paper) * 100);
+        this.zoom = Math.min(100, Math.max(25, fit));
       },
 
       // ---- dragging ------------------------------------------------------------
@@ -4474,11 +4524,38 @@
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
+      // Safari on a phone does not always raise contextmenu, so a long press on
+      // the page opens the same menu: half a second, without the finger moving.
+      let holdTimer = null;
+      let holdAt = null;
+      const cancelHold = () => { window.clearTimeout(holdTimer); holdTimer = null; };
+      c.addEventListener('touchstart', (e) => {
+        if (!e.touches || e.touches.length !== 1) { return cancelHold(); }
+        const t = e.touches[0];
+        holdAt = { x: t.clientX, y: t.clientY };
+        cancelHold();
+        holdTimer = window.setTimeout(() => {
+          this.openCtx({
+            clientX: holdAt.x, clientY: holdAt.y, shiftKey: false,
+            target: document.elementFromPoint(holdAt.x, holdAt.y),
+            preventDefault() { /* nothing to cancel: the browser has not acted yet */ },
+          });
+        }, 550);
+        return undefined;
+      }, { passive: true });
+      c.addEventListener('touchmove', (e) => {
+        const t = e.touches && e.touches[0];
+        if (!t || !holdAt) { return; }
+        if (Math.abs(t.clientX - holdAt.x) > 8 || Math.abs(t.clientY - holdAt.y) > 8) { cancelHold(); }
+      }, { passive: true });
+      c.addEventListener('touchend', cancelHold, { passive: true });
+      c.addEventListener('touchcancel', cancelHold, { passive: true });
       c.addEventListener('dragstart', () => this.onDragStart());
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
-      window.addEventListener('resize', () => this.closeCtx());
+      window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
+      this.measureWidth();
       document.addEventListener('scroll', () => this.closeCtx(), true);
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
       window.addEventListener('beforeunload', (e) => {

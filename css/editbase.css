@@ -88,7 +88,7 @@
 #editbase-root .login-card p { margin-top: 14px; }
 
 /* ---------- shell ---------- */
-.eb-shell { flex: 1 1 auto; display: flex; min-height: 0; }
+.eb-shell { flex: 1 1 auto; display: flex; min-height: 0; position: relative; }
 .eb-side {
   width: var(--sidebar-w); flex: 0 0 auto; background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; min-height: 0;
@@ -208,10 +208,67 @@
 .eb-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 9px 16px; z-index: 4000; font-size: 14px; }
 
+/* ---------- phones and narrow windows ---------- */
 @media (max-width: 860px) {
-  .eb-side { position: absolute; z-index: 20; height: 100%; box-shadow: var(--shadow); }
+  /* The sidebar becomes a drawer over the page, with something to tap to close it. */
+  /* Inside the app's own area, so it never covers Nextcloud's header. */
+  .eb-side {
+    position: absolute; top: 0; left: 0; bottom: 0; z-index: 60; height: auto;
+    width: min(86vw, var(--sidebar-w)); box-shadow: var(--shadow);
+  }
   .eb-side.hidden { display: none; }
-  .eb-desk { padding: 14px 8px 40px; }
+  .eb-backdrop { position: absolute; inset: 0; z-index: 55; background: rgba(15, 23, 42, .45); }
+  .eb-side .brand { padding: 14px 12px 10px; }
+  .eb-side .brand .side-close { margin-left: auto; }
+
+  .eb-desk { padding: 12px 6px 40px; }
+  .eb-topbar { gap: 6px; padding: 6px 8px; }
+  .eb-topbar .state { display: none; }
+  .eb-topbar .eb-btn { padding: 8px 10px; }
+
+  /* Room for a finger, and no accidental zoom from a 13px field on iOS. */
+  .eb-tb { min-width: 38px; height: 38px; }
+  .eb-modal .eb-row { flex-wrap: wrap; }
+  .eb-field input[type=text], .eb-field input[type=number], .eb-field select, .eb-field textarea { font-size: 16px; }
+  .eb-ctxmenu { min-width: 210px; font-size: 15px; }
+  .eb-ctxmenu .ci { padding: 9px 10px; }
+  .eb-status .grow { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+@media (max-width: 620px) {
+  /* Below this the toolbar cannot wrap into anything readable, so it becomes one
+     strip that scrolls sideways under a finger. */
+  .eb-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .eb-toolbar::-webkit-scrollbar { display: none; }
+  .eb-toolbar > * { flex: 0 0 auto; }
+  .eb-toolbar .sep { align-self: center; height: 22px; }
+}
+
+@media (max-width: 560px) {
+  .eb-topbar .eb-btn .lbl { display: none; }
+  .eb-topbar .title-input { font-size: 15px; padding: 6px; }
+  .eb-status span:nth-child(4) { display: none; }
+  .eb-modal { border-radius: 14px; }
+  .eb-modal .foot { flex-wrap: wrap; }
+}
+
+/* A pointer that cannot hover needs the submenu on a tap, not on the way past. */
+@media (hover: none) {
+  .eb-ctxmenu .has-sub > .fly { display: none; }
+  .eb-ctxmenu .has-sub:focus-within > .fly, .eb-ctxmenu .has-sub.open > .fly { display: block; }
+}
+
+/* On a phone there is no room beside the menu, so a submenu opens under its own
+   row instead of flying out to a side that is off the screen either way. */
+@media (max-width: 620px) {
+  .eb-ctxmenu { max-height: 72vh; overflow-y: auto; width: min(320px, calc(100vw - 16px)); }
+  .eb-ctxmenu .has-sub { flex-wrap: wrap; }
+  .eb-ctxmenu .fly, .eb-ctxmenu.flip .fly {
+    position: static; flex: 1 0 100%; min-width: 0; margin: 4px 0 2px;
+    border: 0; border-left: 2px solid var(--border); border-radius: 0;
+    box-shadow: none; padding: 0 0 0 8px; max-height: none;
+  }
+  .eb-ctxmenu .has-sub > .s { margin-left: auto; }
 }
 
 /* Printing is done from a self-contained iframe holding the exported file, so
