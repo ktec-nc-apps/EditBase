@@ -389,6 +389,9 @@
   padding: 2mm; margin: 1.1em 0;
 }
 .eb-doc .eb-shape.eb-sh-round { border-radius: 4mm; }
+.eb-doc .eb-v-mid, .eb-doc .eb-v-bot { display: flex; flex-direction: column; }
+.eb-doc .eb-v-mid { justify-content: center; }
+.eb-doc .eb-v-bot { justify-content: flex-end; }
 .eb-doc .eb-shape.eb-sh-ellipse { border-radius: 50%; }
 .eb-doc .eb-shape.eb-sh-line {
   min-height: 0; height: 0; padding: 0; border: none; border-top: 1pt solid #333333;
@@ -2920,6 +2923,8 @@
       fill: rgbToHex(s.backgroundColor) || '',
       opacity: s.opacity === '' ? '' : Math.round(parseFloat(s.opacity) * 100),
       rotate: (() => { const m = /rotate\(([-\d.]+)deg\)/.exec(s.transform || ''); return m ? Number(m[1]) : ''; })(),
+      vpos: (el.classList && el.classList.contains('eb-v-mid')) ? 'eb-v-mid'
+        : ((el.classList && el.classList.contains('eb-v-bot')) ? 'eb-v-bot' : ''),
       shadow: !!(el.classList && el.classList.contains('eb-shadow')),
       keep: s.breakInside === 'avoid',
     };
@@ -2976,10 +2981,15 @@
       s.paddingTop = pad + 'mm'; s.paddingBottom = pad + 'mm';
       s.paddingLeft = pad + 'mm'; s.paddingRight = pad + 'mm';
     }
+    // A line and an arrow are drawn with a top border and nothing else. Writing
+    // the shorthand on one puts a box round it instead of a line through it.
+    const rule = el.classList && (el.classList.contains('eb-sh-line') || el.classList.contains('eb-sh-arrow'));
     if (v.border === 'none') {
       s.border = 'none';
     } else if (v.border) {
-      s.border = (num(v.borderWidth) || 0.75) + 'pt ' + v.border + ' ' + (/^#[0-9a-f]{6}$/i.test(v.borderColour || '') ? v.borderColour : '#666666');
+      const edge = (num(v.borderWidth) || 0.75) + 'pt ' + v.border + ' '
+        + (/^#[0-9a-f]{6}$/i.test(v.borderColour || '') ? v.borderColour : '#666666');
+      if (rule) { s.border = 'none'; s.borderTop = edge; } else { s.border = edge; }
     }
     const rad = num(v.radius);
     if (rad != null) { s.borderRadius = rad + 'pt'; }
@@ -3001,6 +3011,12 @@
     } else {
       s.removeProperty('transform');
       s.removeProperty('transform-origin');
+    }
+    // Where the words sit in the box. A label in a shape belongs in the middle
+    // of it more often than not, and there is nowhere else to say so.
+    if (v.vpos !== undefined) {
+      ['eb-v-mid', 'eb-v-bot'].forEach((cx) => el.classList.remove(cx));
+      if (v.vpos) { el.classList.add(v.vpos); }
     }
     const op = num(v.opacity);
     if (op != null && op >= 0 && op < 100) { s.opacity = String(Math.round(op) / 100); } else { s.removeProperty('opacity'); }
@@ -3166,6 +3182,7 @@
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
     'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
+    'eb-v-mid', 'eb-v-bot',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
@@ -5128,6 +5145,14 @@
             </select>
           </div>
           <div class="eb-field">
+            <label>{{ t('Text down the box') }}</label>
+            <select v-model="fprops.vpos">
+              <option value="">{{ t('At the top') }}</option>
+              <option value="eb-v-mid">{{ t('In the middle') }}</option>
+              <option value="eb-v-bot">{{ t('At the bottom') }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
             <label>{{ t('Text inside it') }}</label>
             <select v-model="fprops.inner">
               <option value="">{{ t('As the document is set') }}</option>
@@ -5580,7 +5605,7 @@
         fpropsRange: null,
         fprops: {
           place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
         },
         paraOpen: false,
         para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
@@ -7281,7 +7306,7 @@
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
         };
       },
       applyFrameProps() {
