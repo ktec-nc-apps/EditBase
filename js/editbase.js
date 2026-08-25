@@ -4465,6 +4465,9 @@
           :style="{ left: (frame.x - frame.padX / 2) + 'px', top: (frame.y - frame.padY / 2) + 'px',
                     width: (frame.w + frame.padX) + 'px', height: (frame.h + frame.padY) + 'px' }">
           <div class="box"></div>
+          <!-- What a draughtsman needs while moving something: where it is and how
+               big it is, in the units the paper is measured in. -->
+          <div class="mm" v-if="frame.dragging">{{ frame.mm }}</div>
           <div v-for="e in ['t','r','b','l']" :key="'e' + e" class="ed" :class="e"
             @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="openFrameProps"></div>
           <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
@@ -5562,7 +5565,7 @@
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [], gx: null, gy: null },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -6690,6 +6693,12 @@
         // has no room for the bands that move it and the handles that size it, and
         // the thing cannot be picked up at all. The box is given a little height to
         // be caught by; what is dragged is still measured from the object itself.
+        const box = this.columnBox();
+        if (box) {
+          const mm = (n) => (Math.round(n * MM / z * 10) / 10).toFixed(1);
+          this.frame.mm = mm(a.left - box.left) + ', ' + mm(a.top - box.top)
+            + '  ' + mm(a.width) + ' \u00d7 ' + mm(a.height) + ' mm';
+        }
         this.frame.padX = this.frame.w < 10 ? (10 - this.frame.w) : 0;
         this.frame.padY = this.frame.h < 10 ? (10 - this.frame.h) : 0;
         this.frame.free = objectFree(el);
@@ -6985,6 +6994,7 @@
         const r = c.getBoundingClientRect();
         return { left: r.left + (parseFloat(cs.paddingLeft) || 0) * z,
           right: r.right - (parseFloat(cs.paddingRight) || 0) * z,
+          top: r.top + (parseFloat(cs.paddingTop) || 0) * z,
           paperLeft: r.left, paperRight: r.right, z };
       },
       /** Shift a parked frame sideways by so many client pixels. */

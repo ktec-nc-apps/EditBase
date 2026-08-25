@@ -751,3 +751,10 @@
   #editbase-root .eb-palette { display: none; }
   #editbase-root .eb-desk.withpal { padding-left: 0; }
 }
+
+/* The measurements shown while an object is being moved or sized. */
+#editbase-root .eb-fsel .mm {
+  position: absolute; left: 0; top: -22px; white-space: nowrap;
+  font: 11px/1.6 var(--font-face, sans-serif); padding: 0 6px; border-radius: 4px;
+  background: #2563eb; color: #fff; pointer-events: none;
+}
