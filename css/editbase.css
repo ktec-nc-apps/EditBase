@@ -279,6 +279,8 @@
 @media (hover: none) {
   .eb-ctxmenu .has-sub > .fly { display: none; }
   .eb-ctxmenu .has-sub:focus-within > .fly, .eb-ctxmenu .has-sub.open > .fly { display: block; }
+  /* There is no Ctrl key on a phone, so the shortcut is only noise. */
+  .eb-ctxmenu .ci .k { display: none; }
 }
 
 /* On a phone there is no room beside the menu, so a submenu opens under its own
@@ -463,3 +465,14 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
   background: var(--surface-2); color: var(--text);
 }
 .eb-charcell:hover { border-color: var(--primary); background: var(--surface); }
+
+/* The typeface rows in the paper dialog: on a narrow screen the role goes on its
+   own line rather than squeezing the family name into nothing. This has to come
+   after the rules it overrides, which is why it is down here. */
+@media (max-width: 620px) {
+  .font-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; column-gap: 8px; row-gap: 2px; }
+  .font-row .role { grid-column: 1 / -1; flex: none; }
+  .font-row .fam { grid-column: 1; min-width: 0; }
+  .font-row .tag { grid-column: 2; white-space: nowrap; }
+  .font-row .caret { grid-column: 3; }
+}

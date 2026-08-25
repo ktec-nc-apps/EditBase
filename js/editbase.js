@@ -520,6 +520,8 @@
   let canvasEl = null;
   // The selection a dialog interrupted, so that applying it lands where it was.
   let ctxRange = null;
+  // When the menu opened, so that the tap that opened it cannot also close it.
+  let ctxAt = 0;
   function canvas() { return canvasEl; }
 
   const INLINE_SPECS = {
@@ -2935,12 +2937,12 @@
   </div>
 
   <!-- the right button, as a word processor uses it -->
-  <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtx" @contextmenu.prevent="closeCtx"></div>
+  <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
   <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
-    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s">Ctrl+X</span></button>
-    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s">Ctrl+C</span></button>
-    <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s">Ctrl+V</span></button>
-    <button class="ci" @click="ctxDo('pasteText')"><span>{{ t('Paste as plain text') }}</span><span class="s">Ctrl+Shift+V</span></button>
+    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
+    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s k">Ctrl+C</span></button>
+    <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s k">Ctrl+V</span></button>
+    <button class="ci" @click="ctxDo('pasteText')"><span>{{ t('Paste as plain text') }}</span><span class="s k">Ctrl+Shift+V</span></button>
     <div class="sep"></div>
 
     <template v-if="ctx.link">
@@ -2948,7 +2950,7 @@
       <button class="ci" @click="ctxDo('link')">{{ t('Edit the link…') }}</button>
       <button class="ci" @click="ctxDo('linkDel')">{{ t('Remove the link') }}</button>
     </template>
-    <button v-else class="ci" @click="ctxDo('link')"><span>{{ t('Hyperlink…') }}</span><span class="s">Ctrl+K</span></button>
+    <button v-else class="ci" @click="ctxDo('link')"><span>{{ t('Hyperlink…') }}</span><span class="s k">Ctrl+K</span></button>
     <div class="sep"></div>
 
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -2966,9 +2968,9 @@
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('Character') }}</span><span class="s">›</span>
       <div class="fly">
-        <button class="ci" @click="ctxDo('inline','bold')"><span>{{ t('Bold') }}</span><span class="s">Ctrl+B</span></button>
-        <button class="ci" @click="ctxDo('inline','italic')"><span>{{ t('Italic') }}</span><span class="s">Ctrl+I</span></button>
-        <button class="ci" @click="ctxDo('inline','underline')"><span>{{ t('Underline') }}</span><span class="s">Ctrl+U</span></button>
+        <button class="ci" @click="ctxDo('inline','bold')"><span>{{ t('Bold') }}</span><span class="s k">Ctrl+B</span></button>
+        <button class="ci" @click="ctxDo('inline','italic')"><span>{{ t('Italic') }}</span><span class="s k">Ctrl+I</span></button>
+        <button class="ci" @click="ctxDo('inline','underline')"><span>{{ t('Underline') }}</span><span class="s k">Ctrl+U</span></button>
         <button class="ci" @click="ctxDo('inline','strike')">{{ t('Strikethrough') }}</button>
         <button class="ci" @click="ctxDo('inline','kenten')">{{ t('Emphasis dots') }}</button>
         <button class="ci" @click="ctxDo('inline','sup')">{{ t('Superscript') }}</button>
@@ -2990,8 +2992,8 @@
       <div class="fly">
         <button class="ci" @click="ctxDo('list','UL')">{{ t('Bulleted list') }}</button>
         <button class="ci" @click="ctxDo('list','OL')">{{ t('Numbered list') }}</button>
-        <button class="ci" @click="ctxDo('indent',1)"><span>{{ t('Increase indent') }}</span><span class="s">Tab</span></button>
-        <button class="ci" @click="ctxDo('indent',-1)"><span>{{ t('Decrease indent') }}</span><span class="s">Shift+Tab</span></button>
+        <button class="ci" @click="ctxDo('indent',1)"><span>{{ t('Increase indent') }}</span><span class="s k">Tab</span></button>
+        <button class="ci" @click="ctxDo('indent',-1)"><span>{{ t('Decrease indent') }}</span><span class="s k">Shift+Tab</span></button>
       </div>
     </div>
 
@@ -4096,6 +4098,7 @@
         this.ctx.flip = e.clientX > window.innerWidth - 500;
         this.ctx.x = Math.max(6, Math.min(e.clientX, window.innerWidth - 250));
         this.ctx.y = Math.max(6, Math.min(e.clientY, window.innerHeight - 430));
+        ctxAt = window.performance ? window.performance.now() : 0;
         this.ctx.open = true;
         this.refreshState();
         // The estimate above keeps it roughly on screen; measuring it settles the rest.
@@ -4108,6 +4111,15 @@
         });
       },
       closeCtx() { this.ctx.open = false; },
+      /**
+       * Lifting the finger after a long press sends a click at the same spot, which
+       * lands on the backdrop and would shut the menu the press just opened.
+       */
+      closeCtxIfSettled() {
+        const now = window.performance ? window.performance.now() : 0;
+        if (now - ctxAt < 400) { return; }
+        this.closeCtx();
+      },
       /** Touch has no hover, so the row itself opens and closes its submenu. */
       toggleFly(e) {
         if (e.target.closest && e.target.closest('.fly')) { return; }
@@ -4227,6 +4239,31 @@
       toggleAutolink() {
         this.autolink = !this.autolink;
         window.localStorage.setItem('eb-autolink', this.autolink ? '1' : '0');
+      },
+
+      /**
+       * A software keyboard covers the bottom of the window without resizing the
+       * page, so the line being typed can end up behind it. visualViewport is what
+       * knows where the keyboard starts.
+       */
+      keepCaretVisible() {
+        if (!this.narrow) { return; }
+        const c = canvas();
+        if (!c || document.activeElement !== c) { return; }
+        const r = getRange();
+        if (!r) { return; }
+        let rect = r.getBoundingClientRect();
+        if (!rect || (!rect.height && !rect.width)) {
+          const block = topBlockOf(r.startContainer);
+          rect = block ? block.getBoundingClientRect() : null;
+        }
+        if (!rect) { return; }
+        const vv = window.visualViewport;
+        const bottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+        const desk = document.querySelector('.eb-desk');
+        if (!desk) { return; }
+        if (rect.bottom > bottom - 16) { desk.scrollTop += rect.bottom - bottom + 72; }
+        else if (rect.top < desk.getBoundingClientRect().top + 8) { desk.scrollTop -= (desk.getBoundingClientRect().top + 8 - rect.top); }
       },
 
       // ---- narrow screens ------------------------------------------------------
@@ -4548,7 +4585,7 @@
 
       const c = canvasEl;
       c.addEventListener('beforeinput', () => history.push(false));
-      c.addEventListener('input', () => { this.touch(); this.recount(); });
+      c.addEventListener('input', () => { this.touch(); this.recount(); this.keepCaretVisible(); });
       c.addEventListener('paste', (e) => {
         const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
         if (files.some((f) => /^image\//.test(f.type))) {
@@ -4593,6 +4630,9 @@
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
       window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => this.keepCaretVisible());
+      }
       this.measureWidth();
       document.addEventListener('scroll', () => this.closeCtx(), true);
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
