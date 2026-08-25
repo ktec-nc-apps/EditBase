@@ -56,6 +56,10 @@
     B5: { w: 182, h: 257 },
     Letter: { w: 215.9, h: 279.4 },
     Legal: { w: 215.9, h: 355.6 },
+    // Japanese postcards. A word processor here is asked for these as often as
+    // for a letter, and they are the size a printer's own tray expects.
+    Postcard: { w: 100, h: 148 },
+    Postcard2: { w: 148, h: 200 },
   };
   // fonts: '' on any of the three means "whatever suits the document's language".
   const DEFAULT_PAPER = {
@@ -4553,7 +4557,7 @@
         <div class="eb-row">
           <div class="eb-field">
             <label>{{ t('Paper size') }}</label>
-            <select v-model="doc.paper.size" @change="touchSettings"><option v-for="p in paperSizes" :key="p" :value="p">{{ p }}</option></select>
+            <select :value="doc.paper.size" @change="setPaperSize($event.target.value)"><option v-for="p in paperSizes" :key="p" :value="p">{{ paperName(p) }}</option></select>
           </div>
           <div class="eb-field">
             <label>{{ t('Orientation') }}</label>
@@ -6160,6 +6164,32 @@
       clearFmt() { this.run(() => clearFormatting()); },
       setColour(value) { this.colour = value; this.run(() => applyInlineStyle('color', value)); },
       clearColour() { this.run(() => applyInlineStyle('color', '')); },
+      /**
+       * Changing to a smaller paper keeps the margins it had, and 25mm of margin
+       * on a 100mm postcard leaves 50mm to write in. No margin is allowed to eat
+       * more than a quarter of the paper it is on.
+       */
+      setPaperSize(size) {
+        this.doc.paper.size = size;
+        const s2 = sheet(normalisePaper(this.doc.paper));
+        const m = this.doc.paper.margin;
+        // A card is not a letter: 20mm of margin on a 100mm postcard leaves 60mm
+        // to write in, which is not what anyone means by a postcard.
+        const small = s2.w < 150 || s2.h < 150;
+        const capW = small ? 10 : Math.floor(s2.w / 4);
+        const capH = small ? 10 : Math.floor(s2.h / 4);
+        m.left = Math.min(m.left, capW);
+        m.right = Math.min(m.right, capW);
+        m.top = Math.min(m.top, capH);
+        m.bottom = Math.min(m.bottom, capH);
+        this.touchSettings();
+      },
+      /** A postcard has no letter to name it, so it is named in words. */
+      paperName(key) {
+        if (key === 'Postcard') { return this.t('Postcard (100 x 148)'); }
+        if (key === 'Postcard2') { return this.t('Reply postcard (148 x 200)'); }
+        return key;
+      },
       addTable() {
         const rows = Math.min(60, Math.max(1, this.table.rows || 1));
         const cols = Math.min(16, Math.max(1, this.table.cols || 1));
