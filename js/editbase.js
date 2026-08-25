@@ -4093,6 +4093,7 @@
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
     toFront: I('<rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="none"/><rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     toBack: I('<rect x="5.8" y="5.8" width="9" height="9" rx="1" fill="none"/><rect x="1.2" y="1.2" width="9" height="9" rx="1" fill="currentColor" stroke="none"/>'),
     boxL: I('<rect x="1" y="2.2" width="14" height="11.6" rx="1"/><rect x="2.4" y="5.2" width="5.2" height="5.6" rx=".6" fill="currentColor" stroke="none"/>'),
@@ -4324,6 +4325,7 @@
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
+      <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
       <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span v-html="flow ? icons.screenView : icons.pageView"></span>
@@ -4411,7 +4413,17 @@
       <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
     </div>
 
-    <div class="eb-desk" :class="{ empty: !doc.id }">
+    <div class="eb-desk" :class="{ empty: !doc.id, withpal: palette && doc.id }">
+      <!-- The palette. A page is laid out by taking things off a shelf and putting
+           them on the paper, so the shelf stands beside the paper rather than
+           hiding in a menu. Press one to put it in the flow of the text; drag one
+           on to the page to put it down where it lands. -->
+      <div class="eb-palette" v-if="doc.id && palette">
+        <button v-for="it in paletteItems" :key="it.kind" class="pal"
+          @pointerdown.prevent="shapeGrab($event, it.kind)" :title="it.label">
+          <span v-html="it.icon"></span>
+        </button>
+      </div>
       <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
         <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
           <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
@@ -5577,6 +5589,7 @@
         tocTitle: '',
         spellcheck: false,
         autolink: true,
+        palette: true,
         webOpen: false, webUrl: '', webBusy: false,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
@@ -5798,6 +5811,11 @@
           SHAPE: this.t('Shape'),
         };
         return names[kind] || this.t('Frame');
+      },
+      /** What stands on the shelf beside the paper. */
+      paletteItems() {
+        return [{ kind: 'frame', label: this.t('Text frame'), icon: this.icons.frame }]
+          .concat(this.shapes.map((sh) => ({ kind: sh.kind, label: sh.label, icon: '<span class="eb-shape-icon">' + sh.icon + '</span>' })));
       },
       /** The shapes that can be put on a page, drawn in CSS rather than in a font. */
       shapes() {
