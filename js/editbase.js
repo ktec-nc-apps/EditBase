@@ -2832,6 +2832,17 @@
     return el;
   }
 
+  /** A frame of words put down where it is dropped, not where the text is. */
+  function insertFreeFrame() {
+    const box = insertFrame();
+    setObjectFree(box, true);
+    box.style.left = '0mm';
+    box.style.top = '0mm';
+    box.style.width = '60mm';
+    box.style.minHeight = '20mm';
+    return box;
+  }
+
   function insertFrame() {
     const box = document.createElement('div');
     box.className = 'eb-frame';
@@ -4271,7 +4282,7 @@
           <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
           <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
-          <button class="eb-menu-item" @click="addFrame(); menu = ''"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
+          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'frame')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item"
             @pointerdown.prevent="shapeGrab($event, sh.kind)">
@@ -7400,12 +7411,17 @@
       dropShape(kind, ev) {
         const c = canvas();
         if (!c) { return; }
+        // Pressed rather than dragged, a frame of words goes into the flow where
+        // the caret is, which is what someone writing a letter wants. Dragged, it
+        // is put down where it lands, which is what someone laying out a page
+        // wants. Both are one gesture apart.
+        if (kind === 'frame' && !ev) { this.addFrame(); return; }
         if (ev) {
           const at2 = caretFromPoint(ev.clientX, ev.clientY);
           if (at2) { selectRange(at2); }
         }
         let made = null;
-        this.run(() => { made = insertShape(kind); });
+        this.run(() => { made = kind === 'frame' ? insertFreeFrame() : insertShape(kind); });
         this.$nextTick(() => {
           if (made && made.parentNode && ev) {
             this.moveFreeTo(made, ev.clientX, ev.clientY);
