@@ -2748,6 +2748,19 @@
     }
     if (!el.getAttribute('style')) { el.removeAttribute('style'); }
   }
+  /** The block of the document that this height on the page falls in. */
+  function blockAtY(y) {
+    const c = canvas();
+    if (!c) { return null; }
+    let found = null;
+    Array.from(c.children).forEach((el) => {
+      if (found) { return; }
+      if (el.classList && (el.classList.contains('eb-pagespacer') || el.classList.contains('eb-anchor'))) { return; }
+      if (!el.getBoundingClientRect) { return; }
+      if (el.getBoundingClientRect().bottom > y) { found = el; }
+    });
+    return found;
+  }
   /** Move a frame to another place in the text, anchor and all. */
   function moveObjectTo(el, ref, after) {
     if (!el || !ref || !ref.parentNode) { return false; }
@@ -2887,6 +2900,7 @@
       borderColour: rgbToHex(s.borderTopColor) || '#666666',
       radius: ptOf(s.borderRadius) === '' ? ptOf(s.borderTopLeftRadius) : ptOf(s.borderRadius),
       fill: rgbToHex(s.backgroundColor) || '',
+      opacity: s.opacity === '' ? '' : Math.round(parseFloat(s.opacity) * 100),
       shadow: !!(el.classList && el.classList.contains('eb-shadow')),
       keep: s.breakInside === 'avoid',
     };
@@ -2954,8 +2968,13 @@
       s.backgroundColor = v.fill;
       el.classList.add('eb-ink');
     } else {
+      // Transparent means transparent: the colour has to come off, or the box
+      // keeps the fill it was given and nothing shows through it.
+      s.removeProperty('background-color');
       el.classList.remove('eb-ink');
     }
+    const op = num(v.opacity);
+    if (op != null && op >= 0 && op < 100) { s.opacity = String(Math.round(op) / 100); } else { s.removeProperty('opacity'); }
     if (v.shadow) { el.classList.add('eb-shadow'); } else { el.classList.remove('eb-shadow'); }
     // How the words inside are set. Undefined means the caller is not asking about
     // it -- only an empty string clears what is there.
@@ -5121,8 +5140,12 @@
             <label>{{ t('Fill colour') }}</label>
             <div class="colour-pair">
               <input type="color" :value="fprops.fill || '#ffffff'" @input="fprops.fill = $event.target.value">
-              <button class="eb-btn ghost" @click="fprops.fill = ''">{{ t('None') }}</button>
+              <button class="eb-btn ghost" :class="{ on: !fprops.fill }" @click="fprops.fill = ''">{{ t('Transparent') }}</button>
             </div>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Opacity (%)') }}</label>
+            <input type="number" min="10" max="100" step="5" v-model="fprops.opacity" placeholder="100">
           </div>
           <div class="eb-field">
             <label>{{ t('Effects') }}</label>
@@ -5502,7 +5525,7 @@
         fpropsRange: null,
         fprops: {
           place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', shadow: false, keep: false,
         },
         paraOpen: false,
         para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
@@ -7077,6 +7100,15 @@
         } else if (kind === 'wrap') {
           // Pressing the side it is already wrapped on takes the wrapping off.
           if (arg && (el.style.cssFloat || el.style.float) === arg) { arg = ''; }
+          // Where it looks like it is now. Text can only run round something that
+          // is in the flow -- a browser runs its words under anything parked with
+          // position, and there is no way round that -- so asking for a wrap turns
+          // a parked object into a floated one. The offsets it was parked with are
+          // carried over as margins, so it stays as near to where it was as the
+          // flow allows instead of jumping back to its anchor.
+          const was = this.columnBox();
+          const before = (objectFree(el) && was && el.getBoundingClientRect)
+            ? el.getBoundingClientRect() : null;
           setObjectFree(el, false);
           el.style.removeProperty('float');
           el.style.removeProperty('margin-left');
@@ -7085,6 +7117,23 @@
           if (arg) {
             el.style.cssFloat = arg;
             el.style[arg === 'left' ? 'marginRight' : 'marginLeft'] = '6mm';
+            if (before && was) {
+              const z = this.frameZoom() || 1;
+              const gap = arg === 'left'
+                ? (before.left - was.left)
+                : (was.right - before.right);
+              if (gap > 1) {
+                el.style[arg === 'left' ? 'marginLeft' : 'marginRight'] = round1(gap * MM / z) + 'mm';
+              }
+              // A float only pushes the words that come after it. Parked over a
+              // paragraph it sat after that paragraph in the markup, so asking for
+              // a wrap changed nothing at all on screen. It moves to just before
+              // the paragraph it was lying on.
+              const target = blockAtY(before.top + 1);
+              if (target && target !== el && target !== el.parentNode) {
+                moveObjectTo(el, target, false);
+              }
+            }
           }
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
         } else if (kind === 'stack') {
@@ -7140,7 +7189,7 @@
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
+          border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', shadow: false, keep: false,
         };
       },
       applyFrameProps() {
