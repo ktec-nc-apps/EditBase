@@ -2481,8 +2481,11 @@
       <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
       <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: guides }" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')"><span v-html="icons.guides"></span></button>
-      <span class="eb-num" :title="t('Zoom')">
+      <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="t('Show page guides')"><span v-html="icons.guides"></span></button>
+      <button class="eb-tb text" :class="{ on: flow }" @mousedown.prevent @click="toggleFlow" :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
+        <span class="lbl">{{ flow ? t('Screen') : t('Page') }}</span>
+      </button>
+      <span class="eb-num" :title="t('Zoom')" v-if="!flow">
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
         <button class="eb-tb text zoomv" @mousedown.prevent @click="zoomSetByHand = true; zoom = 100">{{ zoom }}%</button>
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
@@ -2535,8 +2538,8 @@
     </div>
 
     <div class="eb-desk" :class="{ empty: !doc.id }">
-      <div class="eb-paperwrap" :class="{ noguides: !guides }" v-show="doc.id" :style="[paperStyle, { zoom: zoom / 100 }]">
-        <div class="eb-sheets" aria-hidden="true"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
+      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
+        <div class="eb-sheets" aria-hidden="true" v-if="!flow"><div class="eb-sheet" v-for="n in pageCount" :key="n"></div></div>
         <div id="eb-canvas" class="eb-paper eb-doc"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
       </div>
@@ -3161,6 +3164,8 @@
         sideOpen: true,
         narrow: false,
         zoomSetByHand: false,
+        flow: false,
+        flowPref: {},
         zoom: 100,
         menu: '',
         pageCount: 1,
@@ -3243,7 +3248,8 @@
           '--eb-font-body': fontStack(f.body, 'serif'),
           '--eb-font-head': fontStack(f.head, 'sans'),
           '--eb-font-mono': fontStack(f.mono, 'mono'),
-          fontSize: p.fontSize + 'pt',
+          // Reading size on screen only; the file keeps the paper's own size.
+          fontSize: this.flow ? Math.max(16, Math.round(p.fontSize * 4 / 3)) + 'px' : p.fontSize + 'pt',
           lineHeight: String(p.lineHeight),
         };
       },
@@ -3538,6 +3544,12 @@
        */
       repaginate() {
         if (!canvas()) { return; }
+        if (this.flow) {
+          // Take out the spacers the page view left behind, and stop measuring.
+          Array.from(canvas().querySelectorAll('.eb-pagespacer')).forEach((n) => n.remove());
+          this.pageCount = 1;
+          return;
+        }
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
           const pages = paginate();
@@ -4229,9 +4241,31 @@
         this.narrow = narrow;
         if (became) { this.sideOpen = false; }
         if (!narrow && !this.sideOpen && window.innerWidth > 1100) { this.sideOpen = true; }
+        // An A4 page shrunk to a phone renders 10.5pt text at about six pixels,
+        // which can be looked at but not read or written. So on a narrow screen
+        // the text flows to the screen instead, at a size a person can read; the
+        // document itself is untouched and still prints as A4.
+        // The choice is remembered per screen class: what suits a phone is not what
+        // suits a desktop, and one browser profile may see both.
+        const pref = this.flowPref[narrow ? 'narrow' : 'wide'];
+        // A tablet still shows a whole A4 page at a readable size; a phone does not.
+        this.setFlow(pref == null ? window.innerWidth <= 700 : pref);
         this.fitZoom();
       },
+      setFlow(on) {
+        if (this.flow === on) { return; }
+        this.flow = on;
+        this.$nextTick(() => {
+          if (on) { this.repaginate(); } else { this.zoomSetByHand = false; this.fitZoom(); this.repaginate(); }
+        });
+      },
+      toggleFlow() {
+        this.setFlow(!this.flow);
+        this.flowPref[this.narrow ? 'narrow' : 'wide'] = this.flow;
+        try { window.localStorage.setItem('eb-flow', JSON.stringify(this.flowPref)); } catch (e) { /* private mode */ }
+      },
       fitZoom() {
+        if (this.flow) { this.zoom = 100; return; }
         if (!this.narrow || this.zoomSetByHand) { return; }
         const desk = document.querySelector('.eb-desk');
         if (!desk) { return; }
@@ -4481,6 +4515,10 @@
 
       const stored = window.localStorage.getItem('eb-autosave');
       if (stored != null) { this.autosave = stored === '1'; }
+      try {
+        const fl = JSON.parse(window.localStorage.getItem('eb-flow') || '{}');
+        if (fl && typeof fl === 'object') { this.flowPref = fl; }
+      } catch (e) { /* nothing remembered */ }
       const sp = window.localStorage.getItem('eb-spellcheck');
       if (sp != null) { this.spellcheck = sp === '1'; }
       const al = window.localStorage.getItem('eb-autolink');

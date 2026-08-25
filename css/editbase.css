@@ -208,6 +208,24 @@
 .eb-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 9px 16px; z-index: 4000; font-size: 14px; }
 
+/* ---------- text flowed to the screen ----------
+   The page view is right in front of a keyboard, and useless on a phone: an A4
+   sheet scaled to fit renders body text at about six pixels. In this view the
+   same document lays itself out to the width of the screen at a size a person
+   can read. Nothing about the file changes -- it still carries its own @page
+   rule and prints as A4. */
+.eb-paperwrap.flow { width: 100%; max-width: 100%; }
+.eb-paperwrap.flow .eb-sheets { display: none; }
+.eb-paperwrap.flow .eb-paper,
+#editbase-root .eb-paperwrap.flow div.eb-paper[contenteditable="true"] {
+  position: static; width: auto; max-width: 42em; margin: 0 auto;
+  min-height: 60vh; padding: 16px 14px 40vh;
+  background: #ffffff; color: #111111;
+  border-radius: 12px; box-shadow: var(--shadow);
+}
+.eb-paperwrap.flow .eb-sheet::after { display: none; }
+.eb-paperwrap.flow .eb-pagespacer { display: none; }
+
 /* ---------- phones and narrow windows ---------- */
 @media (max-width: 860px) {
   /* The sidebar becomes a drawer over the page, with something to tap to close it. */
@@ -242,6 +260,11 @@
   .eb-toolbar::-webkit-scrollbar { display: none; }
   .eb-toolbar > * { flex: 0 0 auto; }
   .eb-toolbar .sep { align-self: center; height: 22px; }
+  /* Put the buttons a thumb reaches for first, and push the wide controls --
+     the paragraph style, the typeface and the zoom -- to the end of the strip. */
+  .eb-toolbar .tb-style, .eb-toolbar .font-btn, .eb-toolbar .eb-num { order: 5; }
+  .eb-toolbar .tb-style { min-width: 92px; }
+  .eb-toolbar .font-btn { max-width: 150px; }
 }
 
 @media (max-width: 560px) {
