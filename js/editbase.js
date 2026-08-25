@@ -6513,6 +6513,7 @@
           if (d.free) {
             s.left = round1(d.left + dx) + 'mm';
             s.top = round1(d.top + dy) + 'mm';
+            this.keepOnPaper(frameEl);
             this.syncFrame();
           } else if (d.flt) {
             // A floated frame is moved by the space it holds round itself: that is
@@ -6535,12 +6536,14 @@
         if (d.mode.indexOf('n') >= 0) { h = h0 - dy; if (d.free) { top = d.top + dy; } }
         w = Math.max(8, w);
         h = Math.max(5, h);
+        // Nothing is made wider than the paper it is printed on.
+        w = Math.min(w, sheet(normalisePaper(this.doc.paper)).w);
         if (d.mode !== 'n' && d.mode !== 's') { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
         // A picture keeps its proportions: its height follows its width.
         if (d.mode !== 'e' && d.mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
           if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; } else { s.minHeight = round1(h) + 'mm'; }
         }
-        if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; }
+        if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; this.keepOnPaper(frameEl); }
         this.syncFrame();
       },
       /** Dragging a frame that is in the flow moves it to another place in the text. */
@@ -6590,8 +6593,67 @@
        * run of a sentence, or one already parked where the writer put it by hand
        * -- and the paragraph command runs instead.
        */
+      /** The column the text is set in, in client pixels. */
+      columnBox() {
+        const c = canvas();
+        if (!c || !c.getBoundingClientRect) { return null; }
+        const z = this.frameZoom() || 1;
+        const cs = window.getComputedStyle(c);
+        const r = c.getBoundingClientRect();
+        return { left: r.left + (parseFloat(cs.paddingLeft) || 0) * z,
+          right: r.right - (parseFloat(cs.paddingRight) || 0) * z,
+          paperLeft: r.left, paperRight: r.right, z };
+      },
+      /** Shift a parked frame sideways by so many client pixels. */
+      nudgeFree(el, dx) {
+        if (!dx) { return; }
+        const z = this.frameZoom() || 1;
+        const now = parseFloat(el.style.left) || 0;
+        el.style.left = round1(now + dx * MM / z) + 'mm';
+      },
+      alignFree(el, cls) {
+        const box = this.columnBox();
+        if (!box || !el.getBoundingClientRect) { return false; }
+        const r = el.getBoundingClientRect();
+        let want;
+        if (cls === 'eb-al-l') { want = box.left; }
+        else if (cls === 'eb-al-c') { want = box.left + ((box.right - box.left) - r.width) / 2; }
+        else if (cls === 'eb-al-r') { want = box.right - r.width; }
+        else { return false; }
+        history.push(true);
+        this.nudgeFree(el, want - r.left);
+        this.settleFrame();
+        return true;
+      },
+      /**
+       * A parked frame stays on the paper. Dragged far enough it used to leave it
+       * entirely -- one in a document here sat 68.7mm off the left edge, where no
+       * alignment could reach it and nothing showed but the half that overhung.
+       */
+      keepOnPaper(el) {
+        const box = this.columnBox();
+        if (!box || !el || !el.getBoundingClientRect || !objectFree(el)) { return; }
+        const r = el.getBoundingClientRect();
+        // Wider than the paper it sits on: bring it back to the width of the
+        // column, or it can never be moved again -- every nudge is undone by the
+        // edge it is already past.
+        if (r.width > box.paperRight - box.paperLeft) {
+          const paper = normalisePaper(this.doc.paper);
+          el.style.width = round1(sheet(paper).w - paper.margin.left - paper.margin.right) + 'mm';
+          el.style.maxWidth = 'none';
+          const r2 = el.getBoundingClientRect();
+          this.nudgeFree(el, box.left - r2.left);
+          return;
+        }
+        if (r.left < box.paperLeft) { this.nudgeFree(el, box.paperLeft - r.left); }
+        else if (r.right > box.paperRight) { this.nudgeFree(el, box.paperRight - r.right); }
+      },
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
+        // A frame parked by hand is aligned by moving it: to the left margin, to
+        // the middle of the column, or to the right margin. This is also the way
+        // back for one that has been dragged off the paper altogether.
+        if (objectFree(el)) { return this.alignFree(el, cls); }
         // A frame in the run of a sentence has no alignment of its own, and neither
         // has one parked by hand. Say so and let the paragraph command run: a
         // button that quietly does nothing is worse than one that moves the line
