@@ -3071,6 +3071,7 @@
     const c = canvas();
     if (!c) { return; }
     repairNesting();
+    tidyMarks();
     renumberNotes();
     Array.from(c.querySelectorAll('table.eb-table')).forEach(headerGroup);
     let stray = null;
@@ -3393,9 +3394,51 @@
     });
     return n;
   }
+  /**
+   * A mark with nothing in it is litter -- pressing Enter inside one leaves the
+   * empty half behind -- and two of the same kind side by side should be one.
+   * The one the caret is sitting in is left alone: it is where the next letter
+   * is going to land.
+   */
+  function tidyMarks() {
+    const c = canvas();
+    if (!c) { return; }
+    const at = getRange();
+    const here = at ? at.startContainer : null;
+    Array.from(c.querySelectorAll('ins.eb-ins, del.eb-del')).forEach((el) => {
+      if (el.textContent.replace(/​/g, '')) { return; }
+      if (here && el.contains(here)) { return; }
+      el.remove();
+    });
+    Array.from(c.querySelectorAll('ins.eb-ins, del.eb-del')).forEach((el) => {
+      const next = el.nextSibling;
+      if (!next || next.nodeType !== 1 || next.nodeName !== el.nodeName) { return; }
+      if (next.getAttribute('class') !== el.getAttribute('class')) { return; }
+      while (next.firstChild) { el.appendChild(next.firstChild); }
+      next.remove();
+    });
+  }
+  /** One mark, on its own: keeping it or undoing it must not touch its neighbours. */
+  function acceptOne(el) {
+    if (!el || !el.parentNode) { return; }
+    if (el.nodeName === 'DEL') { el.remove(); return; }
+    const parent = el.parentNode;
+    while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+    parent.removeChild(el);
+  }
+  function rejectOne(el) {
+    if (!el || !el.parentNode) { return; }
+    if (el.nodeName === 'INS') { el.remove(); return; }
+    const parent = el.parentNode;
+    while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+    parent.removeChild(el);
+  }
   function countChanges() {
     const c = canvas();
-    return c ? c.querySelectorAll('ins.eb-ins, del.eb-del').length : 0;
+    if (!c) { return 0; }
+    // The one the caret is sitting in has nothing in it yet and is not a change.
+    return Array.from(c.querySelectorAll('ins.eb-ins, del.eb-del'))
+      .filter((el) => el.textContent.replace(/​/g, '')).length;
   }
 
   // ---- paste ---------------------------------------------------------------------
@@ -10275,8 +10318,8 @@ return function render(_ctx, _cache) {
         this.run(() => {
           if (kind === 'acceptAll') { acceptChanges(); }
           if (kind === 'rejectAll') { rejectChanges(); }
-          if (kind === 'acceptOne') { acceptChanges(one.parentNode === canvas() ? one : one.parentNode); }
-          if (kind === 'rejectOne') { rejectChanges(one.parentNode === canvas() ? one : one.parentNode); }
+          if (kind === 'acceptOne') { acceptOne(one); }
+          if (kind === 'rejectOne') { rejectOne(one); }
         });
         this.changes = countChanges();
       },
@@ -11092,7 +11135,14 @@ return function render(_ctx, _cache) {
       const c = canvasEl;
       c.addEventListener('beforeinput', (e) => this.onBeforeInput(e));
       c.addEventListener('compositionstart', () => { if (this.review) { ensureIns(); } });
-      c.addEventListener('input', () => { this.touch(); this.recount(); this.keepCaretVisible(); });
+      c.addEventListener('input', () => {
+        // Splitting a paragraph inside a mark leaves the empty half behind, and
+        // typing does not go through a command, so it is swept up here.
+        if (this.review) { tidyMarks(); this.changes = countChanges(); }
+        this.touch();
+        this.recount();
+        this.keepCaretVisible();
+      });
       c.addEventListener('paste', (e) => {
         const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
         if (files.some((f) => /^image\//.test(f.type))) {
