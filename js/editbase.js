@@ -63,6 +63,7 @@
     font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
     header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
     headingNumbers: '',
+    vertical: false,
   };
 
   function normalisePaper(p) {
@@ -72,6 +73,7 @@
     if (p.orientation === 'landscape') { out.orientation = 'landscape'; }
     if (p.font === 'sans') { out.font = 'sans'; }
     if (p.headingNumbers === 'decimal' || p.headingNumbers === 'japanese') { out.headingNumbers = p.headingNumbers; }
+    out.vertical = !!p.vertical;
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
     const lh = Number(p.lineHeight);
@@ -373,6 +375,23 @@
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
 
+/* 縦書き -- the text runs down the page and the columns run right to left. Every
+   rule that says "under" has to say "beside" instead: a heading's rule, a note's
+   bar, a caption. The writing mode does the rest, because a browser has had this
+   since 2016 and Japanese typesetting is what it was put there for. */
+.eb-doc.eb-tategaki { writing-mode: vertical-rl; text-orientation: mixed; text-align: justify; }
+.eb-doc.eb-tategaki h2 { border-bottom: none; border-left: 1.5pt solid #222; padding-bottom: 0; padding-left: .2em; }
+.eb-doc.eb-tategaki blockquote { border-left: none; border-top: 3pt solid #999; padding: 0 .4em 0 .4em; margin: 0 1em; }
+.eb-doc.eb-tategaki .eb-note { border-left: none; border-top: 4pt solid #2563eb; padding: .9em .5em 0 .5em; margin: 0 1.1em; }
+.eb-doc.eb-tategaki hr { border-top: none; border-left: .75pt solid #999; margin: 0 1.4em; }
+.eb-doc.eb-tategaki table.eb-table { width: auto; height: 100%; }
+.eb-doc.eb-tategaki .eb-pagebreak { break-before: page; }
+.eb-doc.eb-tategaki ul, .eb-doc.eb-tategaki ol { padding-left: 0; padding-top: 1.7em; }
+.eb-doc.eb-tategaki figure { margin: 0 1.2em; }
+/* Latin runs and figures stay upright in a column of Japanese unless they are
+   short enough to be turned on their side, which is what a reader expects. */
+.eb-doc.eb-tategaki .eb-yoko { text-combine-upright: all; }
+
 /* chapter numbers, counted by the file itself rather than typed into the text --
    so inserting a section renumbers everything after it without anyone touching it */
 .eb-doc.eb-hn { counter-reset: ebh1 ebh2 ebh3; }
@@ -638,9 +657,11 @@
 
   /** The classes the document itself wears: the numbering scheme, if any. */
   function docClasses(paper) {
-    if (paper.headingNumbers === 'decimal') { return 'eb-doc eb-hn'; }
-    if (paper.headingNumbers === 'japanese') { return 'eb-doc eb-hn eb-hn-ja'; }
-    return 'eb-doc';
+    const out = ['eb-doc'];
+    if (paper.headingNumbers === 'decimal') { out.push('eb-hn'); }
+    if (paper.headingNumbers === 'japanese') { out.push('eb-hn', 'eb-hn-ja'); }
+    if (paper.vertical) { out.push('eb-tategaki'); }
+    return out.join(' ');
   }
 
   function buildHtml(doc) {
@@ -656,8 +677,11 @@
       + '.eb-doc { --eb-font-body: ' + fontStack(fonts.body, 'serif') + ';'
       + ' --eb-font-head: ' + fontStack(fonts.head, 'sans') + ';'
       + ' --eb-font-mono: ' + fontStack(fonts.mono, 'mono') + '; }\n'
-      + '@media screen { body.eb-doc { max-width: ' + (s.w - paper.margin.left - paper.margin.right) + 'mm;'
-      + ' margin: ' + paper.margin.top + 'mm auto ' + paper.margin.bottom + 'mm; padding: 0 8px; } }';
+      + (paper.vertical
+        ? '@media screen { body.eb-doc { max-height: ' + (s.h - paper.margin.top - paper.margin.bottom) + 'mm;'
+          + ' margin: ' + paper.margin.top + 'mm ' + paper.margin.right + 'mm ' + paper.margin.bottom + 'mm ' + paper.margin.left + 'mm; } }'
+        : '@media screen { body.eb-doc { max-width: ' + (s.w - paper.margin.left - paper.margin.right) + 'mm;'
+          + ' margin: ' + paper.margin.top + 'mm auto ' + paper.margin.bottom + 'mm; padding: 0 8px; } }');
     // The typeface travels with the document as a stylesheet link, so the file looks
     // the same on a machine that has none of these fonts installed. It is the only
     // thing in the file that points anywhere outside it, and it is left out entirely
@@ -1478,6 +1502,7 @@
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
+    headerGroup(table);
     insertBlockNode(table);
     // somewhere to type after the table, or it traps the caret at the end of the document
     const tail = document.createElement('p');
@@ -1659,6 +1684,28 @@
       Array.from(c.attributes).forEach((a) => fresh.setAttribute(a.name, a.value));
       c.parentNode.replaceChild(fresh, c);
     });
+    headerGroup(table);
+  }
+  /**
+   * A header row in a <thead> is repeated at the top of every printed page the
+   * table runs on to. That is a browser's own doing, and it costs one element.
+   */
+  function headerGroup(table) {
+    const rows = tableRows(table);
+    const first = rows[0];
+    if (!first) { return; }
+    const isHeader = !!(first.children[0] && first.children[0].nodeName === 'TH');
+    const thead = table.querySelector('thead');
+    if (isHeader) {
+      if (thead && thead.contains(first)) { return; }
+      const head = thead || document.createElement('thead');
+      if (!thead) { table.insertBefore(head, table.firstChild); }
+      head.appendChild(first);
+    } else if (thead) {
+      const body = table.querySelector('tbody') || table;
+      while (thead.firstChild) { body.insertBefore(thead.firstChild, body.firstChild); }
+      thead.remove();
+    }
   }
   function setTableVariant(variant) {
     const cell = cellAt();
@@ -2589,12 +2636,14 @@
     return out;
   }
 
-  function makeSpacer(height) {
+  function makeSpacer(size, tate) {
     const el = document.createElement('div');
     el.className = 'eb-pagespacer';
     el.setAttribute('contenteditable', 'false');
     el.setAttribute('aria-hidden', 'true');
-    el.style.height = height + 'px';
+    // A block box measures itself along the block axis: down the page normally,
+    // across it when the writing runs down.
+    el.style[tate ? 'width' : 'height'] = size + 'px';
     return el;
   }
 
@@ -2609,11 +2658,15 @@
     c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
     const wrap = c.parentNode;
     const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
-    const pageH = sheet ? sheet.offsetHeight : 0;
-    if (!pageH || !c.offsetHeight) { return 1; }
+    // In 縦書き the text runs down the page and the pages run right to left, so
+    // the axis everything below measures along is the horizontal one. The
+    // arithmetic is the same; only what is measured changes.
+    const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+    const pageH = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    if (!pageH || !(tate ? c.offsetWidth : c.offsetHeight)) { return 1; }
     const style = window.getComputedStyle(c);
-    const mt = parseFloat(style.paddingTop) || 0;
-    const mb = parseFloat(style.paddingBottom) || 0;
+    const mt = parseFloat(tate ? style.paddingRight : style.paddingTop) || 0;
+    const mb = parseFloat(tate ? style.paddingLeft : style.paddingBottom) || 0;
     const usable = pageH - mt - mb;
     if (usable < 40) { return 1; }
     const extra = mt + mb + PAGE_GAP;
@@ -2633,23 +2686,25 @@
         continue;
       }
       if (!child.classList.contains('eb-pagespacer')) {
-        const top = child.offsetTop - mt;
-        const height = child.offsetHeight;
+        // Right to left: how far the block starts from the right edge of the canvas.
+        const top = tate ? (c.offsetWidth - child.offsetLeft - child.offsetWidth - mt) : (child.offsetTop - mt);
+        const height = tate ? child.offsetWidth : child.offsetHeight;
         while (top >= pageTop + usable) { pageTop += usable + extra; }
         const boundary = pageTop + usable;
         const forced = pendingBreak;
         pendingBreak = false;
         if (forced || (height <= usable && top < boundary && top + height > boundary + 0.5)) {
           const wanted = boundary + extra;
-          const spacer = makeSpacer(Math.max(0, boundary - top) + extra);
+          const spacer = makeSpacer(Math.max(0, boundary - top) + extra, tate);
           c.insertBefore(spacer, child);
           // Putting an element between two blocks stops their margins collapsing, so
           // the block lands a little lower than the arithmetic says. Measure where it
           // actually went and take the difference back out of the spacer.
-          const landed = child.offsetTop - mt;
+          const landed = tate ? (c.offsetWidth - child.offsetLeft - child.offsetWidth - mt) : (child.offsetTop - mt);
           const drift = landed - wanted;
           if (Math.abs(drift) > 0.5) {
-            spacer.style.height = Math.max(0, parseFloat(spacer.style.height) - drift) + 'px';
+            const prop = tate ? 'width' : 'height';
+            spacer.style[prop] = Math.max(0, parseFloat(spacer.style[prop]) - drift) + 'px';
           }
           pageTop = wanted;
         } else {
@@ -2662,7 +2717,7 @@
       child = next;
     }
     // A hair over a page needs another sheet; a hair under must not add one.
-    return Math.max(1, Math.ceil((c.offsetHeight + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
+    return Math.max(1, Math.ceil(((tate ? c.offsetWidth : c.offsetHeight) + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
   }
 
   // ---- housekeeping -------------------------------------------------------------
@@ -2790,6 +2845,7 @@
     if (!c) { return; }
     repairNesting();
     renumberNotes();
+    Array.from(c.querySelectorAll('table.eb-table')).forEach(headerGroup);
     let stray = null;
     Array.from(c.childNodes).forEach((n) => {
       if (n.nodeType === 3) {
@@ -3310,6 +3366,7 @@
     vTop: I('<path d="M2.6 2.6h10.8"/><path d="M8 5v7.4M5.6 10 8 12.4 10.4 10"/>'),
     vMid: I('<path d="M2.6 8h10.8"/><path d="M8 2.4v3M8 10.6v3"/>'),
     vBot: I('<path d="M2.6 13.4h10.8"/><path d="M8 3.6V11M5.6 6 8 3.6 10.4 6"/>'),
+    ruler: I('<rect x="1.6" y="5" width="12.8" height="6" rx="1"/><path d="M4.4 5v2.4M7 5v3.4M9.6 5v2.4M12.2 5v3.4"/>'),
     ruby: I('<path d="M3 12.6h10M4.6 9.6 8 3.4l3.4 6.2"/><path d="M4.4 2.2h7.2" stroke-width="1"/>'),
     note: I('<path d="M3 3.6h10M3 7h10M3 10.4h6"/><circle cx="12.6" cy="11" r="2.2"/>'),
     columns: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10" stroke-dasharray="2 1.6"/>'),
@@ -3536,6 +3593,7 @@
       <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
       <span class="sep"></span>
+      <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb text" :class="{ on: flow }" @mousedown.prevent @click="toggleFlow" :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span class="lbl">{{ flow ? t('Screen') : t('Page') }}</span>
@@ -3603,7 +3661,16 @@
     </div>
 
     <div class="eb-desk" :class="{ empty: !doc.id }">
-      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
+      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
+        <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
+          <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
+          <span class="tick" v-for="n in rulerMm.ticks" :key="n" :style="{ left: ((n - 1) * 10) + 'mm' }">{{ (n - 1) * 10 }}</span>
+          <span class="hm left" :style="{ left: rulerMm.ml + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'ml')" :title="t('Left margin')"></span>
+          <span class="hm right" :style="{ left: (rulerMm.w - rulerMm.mr) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'mr')" :title="t('Right margin')"></span>
+          <span class="ind first" :style="{ left: (rulerMm.ml + ind.left + ind.first) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'first')" :title="t('First line')"></span>
+          <span class="ind il" :style="{ left: (rulerMm.ml + ind.left) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'left')" :title="t('Indent left')"></span>
+          <span class="ind ir" :style="{ left: (rulerMm.w - rulerMm.mr - ind.right) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'right')" :title="t('Indent right')"></span>
+        </div>
         <div class="eb-sheets" aria-hidden="true" v-if="!flow">
           <div class="eb-sheet" v-for="n in pageCount" :key="n">
             <div class="run head" v-if="hasRunning">
@@ -3696,6 +3763,13 @@
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
           <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
+        </div>
+        <div class="eb-field">
+          <label>{{ t('Direction of the text') }}</label>
+          <select :value="doc.paper.vertical ? 'v' : 'h'" @change="setVertical($event.target.value === 'v')">
+            <option value="h">{{ t('Across the page (horizontal)') }}</option>
+            <option value="v">{{ t('Down the page (vertical, 縦書き)') }}</option>
+          </select>
         </div>
         <div class="eb-field">
           <label>{{ t('Number the headings') }}</label>
@@ -4610,6 +4684,8 @@
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [] },
         coarse: false,
+        ruler: true,
+        ind: { left: 0, right: 0, first: 0 },
         tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [], bar: false, caret: null },
         fpropsOpen: false,
         fpropsRange: null,
@@ -4770,12 +4846,20 @@
         ];
       },
       fontSizes() { return FONT_SIZES; },
-      numberClass() {
-        const n = this.doc.paper.headingNumbers;
-        if (n === 'decimal') { return 'eb-hn'; }
-        if (n === 'japanese') { return 'eb-hn eb-hn-ja'; }
-        return '';
+      rulerMm() {
+        const p = normalisePaper(this.doc.paper);
+        const s2 = sheet(p);
+        return { w: s2.w, ml: p.margin.left, mr: p.margin.right, ticks: Math.floor(s2.w / 10) + 1 };
       },
+      numberClass() {
+        const out = [];
+        const n = this.doc.paper.headingNumbers;
+        if (n === 'decimal') { out.push('eb-hn'); }
+        if (n === 'japanese') { out.push('eb-hn', 'eb-hn-ja'); }
+        if (this.doc.paper.vertical) { out.push('eb-tategaki'); }
+        return out.join(' ');
+      },
+      tategaki() { return !!this.doc.paper.vertical; },
       cellFill() { return this.fmt.cellFill || ''; },
       styleTargets() {
         const names = {
@@ -5064,6 +5148,12 @@
         s.marker = list ? (list.style.listStyleType || (list.nodeName === 'OL' ? 'decimal' : 'disc')) : '';
         const cell = at ? cellAt(at.startContainer) : null;
         s.cellFill = cell ? (rgbToHex(cell.style.backgroundColor) || '') : '';
+        const block = selectedBlocks()[0];
+        this.ind = block ? {
+          left: Number(numberIn(block.style.getPropertyValue('margin-left'), 'mm')) || 0,
+          right: Number(numberIn(block.style.getPropertyValue('margin-right'), 'mm')) || 0,
+          first: Number(numberIn(block.style.getPropertyValue('text-indent'), 'mm')) || 0,
+        } : { left: 0, right: 0, first: 0 };
         s.ruby = !!(at && rubyAt(at.startContainer));
         this.fmt = s;
         this.syncFrame();
@@ -6095,6 +6185,11 @@
         this.fprops.z = Number(frameEl.style.zIndex) || '';
         this.settleFrame();
       },
+      setVertical(on) {
+        this.doc.paper.vertical = !!on;
+        this.touch();
+        this.$nextTick(() => { this.fitZoom(); this.repaginate(); });
+      },
       openStyles() {
         const block = String(this.fmt.block || 'P').toLowerCase();
         const known = STYLE_TARGETS.some((t2) => t2.key === block);
@@ -6314,6 +6409,51 @@
         this.touch();
       },
       setMarker(type) { this.run(() => setListMarker(type)); },
+      /**
+       * The ruler. Its two outer marks are the paper's margins; the three inner ones
+       * are this paragraph's indents, which is the division a word processor makes
+       * and the one a writer expects.
+       */
+      rulerGrab(e, what) {
+        const p = normalisePaper(this.doc.paper);
+        const start = {
+          ml: p.margin.left, mr: p.margin.right,
+          left: this.ind.left, right: this.ind.right, first: this.ind.first,
+        };
+        const block = selectedBlocks()[0];
+        if (what !== 'ml' && what !== 'mr' && !block) { return; }
+        if (what === 'ml' || what === 'mr') { history.push(true); } else { history.push(true); }
+        const z = this.frameZoom() || 1;
+        const x0 = e.clientX;
+        const move = (ev) => {
+          const d = Math.round(((ev.clientX - x0) / z * MM) * 2) / 2;
+          if (what === 'ml') {
+            this.doc.paper.margin.left = Math.max(0, Math.min(100, start.ml + d));
+          } else if (what === 'mr') {
+            this.doc.paper.margin.right = Math.max(0, Math.min(100, start.mr - d));
+          } else if (what === 'left') {
+            this.ind.left = Math.max(-50, Math.min(150, start.left + d));
+            styleOrClear(block, 'margin-left', this.ind.left ? this.ind.left + 'mm' : '');
+          } else if (what === 'right') {
+            this.ind.right = Math.max(-50, Math.min(150, start.right - d));
+            styleOrClear(block, 'margin-right', this.ind.right ? this.ind.right + 'mm' : '');
+          } else if (what === 'first') {
+            this.ind.first = Math.max(-50, Math.min(150, start.first + d));
+            styleOrClear(block, 'text-indent', this.ind.first ? this.ind.first + 'mm' : '');
+          }
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          window.removeEventListener('pointercancel', up);
+          if (block && !block.getAttribute('style')) { block.removeAttribute('style'); }
+          this.touch();
+          this.repaginate();
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+      },
       /** The paintbrush: pick a format up with one press, put it down with the next. */
       useBrush() {
         if (!this.brush) {
@@ -6689,6 +6829,7 @@
       'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
+      ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
@@ -6709,6 +6850,8 @@
       if (al != null) { this.autolink = al === '1'; }
       const g = window.localStorage.getItem('eb-guides');
       if (g != null) { this.guides = g === '1'; }
+      const rl = window.localStorage.getItem('eb-ruler');
+      if (rl != null) { this.ruler = rl === '1'; }
       const z = Number(window.localStorage.getItem('eb-zoom') || 0);
       if (z >= 50 && z <= 200) { this.zoom = z; }
       document.addEventListener('click', (e) => {
