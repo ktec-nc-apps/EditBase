@@ -5641,7 +5641,7 @@
         tocTitle: '',
         spellcheck: false,
         autolink: true,
-        palette: true,
+        palette: true, pendingDrop: null,
         webOpen: false, webUrl: '', webBusy: false,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
@@ -5867,7 +5867,8 @@
       /** What stands on the shelf beside the paper. */
       paletteItems() {
         return [{ kind: 'frame', label: this.t('Text frame'), icon: this.icons.frame },
-          { kind: 'table', label: this.t('Insert table'), icon: this.icons.table }]
+          { kind: 'table', label: this.t('Insert table'), icon: this.icons.table },
+          { kind: 'image', label: this.t('Insert picture'), icon: this.icons.image }]
           .concat(this.shapes.map((sh) => ({ kind: sh.kind, label: sh.label, icon: '<span class="eb-shape-icon">' + sh.icon + '</span>' })));
       },
       /** The shapes that can be put on a page, drawn in CSS rather than in a font. */
@@ -6693,7 +6694,9 @@
           const raw = 'data:' + r.mime + ';base64,' + r.data;
           const url = await shrinkImage(raw, r.mime);
           this.pickerOpen = false;
-          this.run(() => insertImage(url, r.name, 'eb-img-m'));
+          let made = null;
+          this.run(() => { made = insertImage(url, r.name, 'eb-img-m'); });
+          this.placeAtPendingDrop(made);
         } catch (e) {
           this.notify(this.t('Could not read the picture: {msg}', { msg: e.message }));
         } finally { this.picker.busy = false; }
@@ -6701,6 +6704,47 @@
       imageCmd(kind, arg) {
         if (kind === 'size') { this.run(() => setImageSize(arg)); }
         if (kind === 'delete') { this.run(() => deleteImage()); }
+      },
+      /**
+       * A picture dragged off the shelf cannot be put down until it has been
+       * chosen, so where it was dropped is remembered while the picker is open and
+       * used the moment there is something to place.
+       */
+      placeAtPendingDrop(el) {
+        const at = this.pendingDrop;
+        this.pendingDrop = null;
+        if (!el || !at) { return; }
+        const put = () => {
+          if (!el.parentNode) { return; }
+          setObjectFree(el, true);
+          el.style.left = '0mm';
+          el.style.top = '0mm';
+          this.moveFreeTo(el, at.x, at.y);
+          this.keepOnPaper(el);
+          frameEl = el;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+          // Settling repaginates, and repagination can move the anchor the picture
+          // hangs from. Put it where it was dropped once the page has stopped
+          // moving, or it lands a line or two above the pointer.
+          this.$nextTick(() => {
+            if (!el.parentNode) { return; }
+            this.moveFreeTo(el, at.x, at.y);
+            this.keepOnPaper(el);
+            this.syncFrame();
+          });
+        };
+        // A picture has no size until it has loaded, and a box of no size cannot be
+        // put anywhere: wait for it, or it lands short of where it was dropped.
+        const img = el.querySelector ? el.querySelector('img') : null;
+        if (img && !img.complete) {
+          img.addEventListener('load', () => this.$nextTick(put), { once: true });
+          img.addEventListener('error', () => this.$nextTick(put), { once: true });
+          return;
+        }
+        this.$nextTick(put);
       },
       /** A picture on the clipboard goes straight in, same as one picked from Files. */
       async insertPastedFiles(files) {
@@ -7594,6 +7638,11 @@
         // wants. Both are one gesture apart.
         if (kind === 'frame' && !ev) { this.addFrame(); return; }
         if (kind === 'table' && !ev) { this.tableOpen = true; return; }
+        if (kind === 'image') {
+          this.pendingDrop = ev ? { x: ev.clientX, y: ev.clientY } : null;
+          this.openPicker();
+          return;
+        }
         if (ev) {
           const at2 = caretFromPoint(ev.clientX, ev.clientY);
           if (at2) { selectRange(at2); }
