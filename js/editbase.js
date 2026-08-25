@@ -527,13 +527,6 @@
 
   /** The stylesheet the editor canvas needs on top of DOC_CSS (never exported). */
   const EDITOR_CSS = `
-/* A line is a fraction of a millimetre tall, which is nothing to aim at. In the
-   editor it is given an invisible band above and below to be caught by; the
-   saved file has none of this, and the line prints as thin as it is drawn. */
-.eb-paper .eb-shape.eb-sh-line, .eb-paper .eb-shape.eb-sh-arrow { position: relative; }
-.eb-paper .eb-shape.eb-sh-line::before, .eb-paper .eb-shape.eb-sh-arrow::before {
-  content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 13px;
-}
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -2643,6 +2636,26 @@
   const MM = 25.4 / 96;
   const round1 = (n) => Math.round(n * 10) / 10;
 
+  /**
+   * A rule and a line are a pixel tall, which is nothing to aim at, and a click
+   * that misses by one lands in the text instead. Anything that thin is caught
+   * from a few pixels away. Measuring is better than an invisible band in the
+   * page: a band would swallow the clicks meant for the words around it.
+   */
+  function thinObjectNear(x, y) {
+    const c = canvas();
+    if (!c) { return null; }
+    let best = null;
+    Array.from(c.querySelectorAll('hr, .eb-sh-line, .eb-sh-arrow')).forEach((el) => {
+      if (!el.getBoundingClientRect) { return; }
+      const r = el.getBoundingClientRect();
+      if (r.height > 4 || !r.width) { return; }
+      if (x < r.left - 2 || x > r.right + 2) { return; }
+      const gap = Math.abs(y - (r.top + r.height / 2));
+      if (gap <= 6 && (!best || gap < best[0])) { best = [gap, el]; }
+    });
+    return best ? best[1] : null;
+  }
   function objectAt(node) {
     let n = node && node.nodeType === 3 ? node.parentNode : node;
     const c = canvas();
@@ -6932,7 +6945,7 @@
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
         if (frameDrag) { return; }
-        const at = objectAt(e.target);
+        const at = objectAt(e.target) || thinObjectNear(e.clientX, e.clientY);
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
         if (e.shiftKey && at && frameEl && at !== frameEl) {
@@ -7718,7 +7731,7 @@
         this.ctx.table = !!cellAt(at);
         this.ctx.image = !!imageAt(at);
         // The right button acts on what it is over, so it also picks the frame up.
-        const obj = objectAt(e.target) || objectAt(at);
+        const obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY);
         // The right button on an object shows that object's settings, whatever the
         // object is -- not only on the thin band of its border. Inside something
         // written in, a cell or a caption, the menu for text is what is wanted.
