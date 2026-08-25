@@ -565,7 +565,7 @@
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-radius|border-color|border-width|border-style|border-collapse|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-radius|border-color|border-width|border-style|border-collapse|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows)$/;
 
   function cleanStyle(value) {
     const kept = [];
@@ -1304,6 +1304,84 @@
     });
   }
 
+  /** Move the paragraph the caret is in past the one above or below it. */
+  function moveBlock(dir) {
+    const blocks = selectedBlocks().filter((b) => b && b.parentNode);
+    if (!blocks.length) { return false; }
+    const first = blocks[0];
+    const last = blocks[blocks.length - 1];
+    const parent = first.parentNode;
+    if (last.parentNode !== parent) { return false; }
+    const before = first.previousElementSibling;
+    const after = last.nextElementSibling;
+    const skip = (n) => (n && n.classList && n.classList.contains('eb-pagespacer') ? n.previousElementSibling : n);
+    if (dir < 0) {
+      const target = skip(before);
+      if (!target) { return false; }
+      parent.insertBefore(target, last.nextSibling);
+    } else {
+      const target = after && after.classList.contains('eb-pagespacer') ? after.nextElementSibling : after;
+      if (!target) { return false; }
+      parent.insertBefore(target, first);
+    }
+    return true;
+  }
+
+  // Half-width and full-width are two spellings of the same characters, and a
+  // Japanese document usually wants one of them throughout. ASCII sits at U+0021..
+  // U+007E and its full-width twins at U+FF01..U+FF5E, exactly 0xFEE0 apart.
+  const KANA_HALF = 'ｶﾞｷﾞｸﾞｹﾞｺﾞｻﾞｼﾞｽﾞｾﾞｿﾞﾀﾞﾁﾞﾂﾞﾃﾞﾄﾞﾊﾞﾋﾞﾌﾞﾍﾞﾎﾞﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟｳﾞ';
+  const KANA_FULL = 'ガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポヴ';
+  const KANA_ONE_H = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｧｨｩｪｫｬｭｮｯｰ｡｢｣､･';
+  const KANA_ONE_F = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンァィゥェォャュョッー。「」、・';
+  function toWide(text) {
+    return String(text)
+      .replace(/[｡-ﾟ]+/g, (run) => {
+        let out = '';
+        for (let i = 0; i < run.length; i++) {
+          // Only a real pair counts: indexOf on a single character would find the
+          // first half of one and turn a plain ｳ into a ヴ.
+          const two = run.slice(i, i + 2);
+          const k = two.length === 2 ? KANA_HALF.indexOf(two) : -1;
+          if (k >= 0 && k % 2 === 0) { out += KANA_FULL[k / 2]; i++; continue; }
+          const j = KANA_ONE_H.indexOf(run[i]);
+          out += j >= 0 ? KANA_ONE_F[j] : run[i];
+        }
+        return out;
+      })
+      .replace(/[!-~]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0xFEE0))
+      .replace(/ /g, '　');
+  }
+  function toNarrow(text) {
+    return String(text)
+      .replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+      .replace(/　/g, ' ')
+      .replace(/[ァ-ー、。「」・]/g, (ch) => {
+        const k = KANA_FULL.indexOf(ch);
+        if (k >= 0) { return KANA_HALF.slice(k * 2, k * 2 + 2); }
+        const j = KANA_ONE_F.indexOf(ch);
+        return j >= 0 ? KANA_ONE_H[j] : ch;
+      });
+  }
+  const TEXT_CASES = {
+    upper: (t) => t.toUpperCase(),
+    lower: (t) => t.toLowerCase(),
+    title: (t) => t.replace(/\b[a-z]/g, (ch) => ch.toUpperCase()),
+    wide: toWide,
+    narrow: toNarrow,
+  };
+  /** Rewrite the selected text without disturbing anything wrapped round it. */
+  function transformText(kind) {
+    const fn = TEXT_CASES[kind];
+    const range = getRange();
+    if (!fn || !range || range.collapsed) { return false; }
+    const nodes = textNodesInRange(range);
+    if (!nodes.length) { return false; }
+    nodes.forEach((n) => { n.data = fn(n.data); });
+    reselectNodes(nodes);
+    return true;
+  }
+
   // ---- insertions ---------------------------------------------------------------
   // ---- paragraph properties --------------------------------------------------------
   function numberIn(value, unit) {
@@ -1329,6 +1407,7 @@
       left: numberIn(s.getPropertyValue('margin-left'), 'mm'),
       right: numberIn(s.getPropertyValue('margin-right'), 'mm'),
       firstLine: numberIn(s.getPropertyValue('text-indent'), 'mm'),
+      noLoneLines: Number(s.getPropertyValue('orphans')) >= 2 && Number(s.getPropertyValue('widows')) >= 2,
       pageBefore: s.getPropertyValue('break-before') === 'page',
       keepWithNext: s.getPropertyValue('break-after') === 'avoid',
       keepTogether: s.getPropertyValue('break-inside') === 'avoid',
@@ -1373,6 +1452,8 @@
       styleOrClear(block, 'break-before', v.pageBefore ? 'page' : '');
       styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : '');
       styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : '');
+      styleOrClear(block, 'orphans', v.noLoneLines ? '2' : '');
+      styleOrClear(block, 'widows', v.noLoneLines ? '2' : '');
       // A rule round a paragraph, and a tint behind it -- the two things a notice
       // or a warning in a business document is always asking for.
       ['border', 'border-top', 'border-bottom', 'border-left', 'border-right'].forEach((prop) => styleOrClear(block, prop, ''));
@@ -1531,6 +1612,35 @@
     placeCaretIn(cap);
     return fig;
   }
+  // Cropping without cutting the picture: the frame is given a shape, the picture
+  // fills it, and which part of it shows is a position. Three CSS properties, no
+  // second copy of the image and nothing lost -- the whole picture is still in the
+  // file and the crop can be undone at any time.
+  const CROP_RATIOS = ['', '1 / 1', '4 / 3', '3 / 2', '16 / 9', '3 / 4', '2 / 3'];
+  function cropOf(fig) {
+    const img = fig ? fig.querySelector('img') : null;
+    if (!img) { return null; }
+    const pos = String(img.style.objectPosition || '').match(/(-?[\d.]+)%\s+(-?[\d.]+)%/);
+    return {
+      ratio: CROP_RATIOS.indexOf(img.style.aspectRatio) >= 0 ? img.style.aspectRatio : '',
+      x: pos ? Number(pos[1]) : 50,
+      y: pos ? Number(pos[2]) : 50,
+    };
+  }
+  function setCrop(fig, v) {
+    const img = fig ? fig.querySelector('img') : null;
+    if (!img) { return false; }
+    ['aspect-ratio', 'object-fit', 'object-position', 'height'].forEach((p2) => img.style.removeProperty(p2));
+    if (v && v.ratio) {
+      img.style.aspectRatio = v.ratio;
+      img.style.objectFit = 'cover';
+      img.style.objectPosition = Math.round(Number(v.x) || 50) + '% ' + Math.round(Number(v.y) || 50) + '%';
+      img.style.height = 'auto';
+    }
+    if (!img.getAttribute('style')) { img.removeAttribute('style'); }
+    return true;
+  }
+
   function imageAt(node) {
     let n = node;
     if (!n) {
@@ -1962,6 +2072,29 @@
       for (let j = 0; j < cs; j++) { out.push(w); }
     });
     return out;
+  }
+
+  /** A rule on the cells the selection touches, on the edges asked for. */
+  function setCellBorder(v) {
+    const cells = selectedCells();
+    if (!cells.length) { return false; }
+    const rule = v.style && v.style !== 'none'
+      ? (Number(v.width) || 0.75) + 'pt ' + v.style + ' ' + (/^#[0-9a-f]{6}$/i.test(v.colour || '') ? v.colour : '#666666')
+      : (v.style === 'none' ? 'none' : '');
+    cells.forEach((cell) => {
+      ['border', 'border-top', 'border-bottom', 'border-left', 'border-right']
+        .forEach((prop) => cell.style.removeProperty(prop));
+      if (rule) {
+        const sides = BORDER_SIDES.indexOf(v.sides) >= 0 ? v.sides : 'all';
+        if (sides === 'all') { cell.style.border = rule; } else {
+          if (sides === 'top' || sides === 'topbottom') { cell.style.borderTop = rule; }
+          if (sides === 'bottom' || sides === 'topbottom') { cell.style.borderBottom = rule; }
+          if (sides === 'left') { cell.style.borderLeft = rule; }
+        }
+      }
+      if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+    });
+    return true;
   }
 
   function atLastCell() {
@@ -3363,6 +3496,8 @@
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    crop: I('<path d="M4.6 1.6v9.8h9.8M1.6 4.6h9.8v9.8"/>'),
+    cellBorder: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10M2 8h12" stroke-dasharray="1.6 1.4"/>'),
     vTop: I('<path d="M2.6 2.6h10.8"/><path d="M8 5v7.4M5.6 10 8 12.4 10.4 10"/>'),
     vMid: I('<path d="M2.6 8h10.8"/><path d="M8 2.4v3M8 10.6v3"/>'),
     vBot: I('<path d="M2.6 13.4h10.8"/><path d="M8 3.6V11M5.6 6 8 3.6 10.4 6"/>'),
@@ -3625,6 +3760,7 @@
       <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
       <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
       <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="openCrop" :title="t('Crop…')"><span v-html="icons.crop"></span></button>
       <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
       <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
     </div>
@@ -3655,6 +3791,7 @@
       <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="openCellBorder" :title="t('Rule round the cells…')"><span v-html="icons.cellBorder"></span></button>
       <span class="sep"></span>
       <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
       <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
@@ -4183,6 +4320,76 @@
     </div>
   </div>
 
+  <!-- cropping a picture: a shape for the frame and a place to look at -->
+  <div v-if="cropOpen" class="eb-modal-back" @click="cropOpen = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Crop') }}</h3>
+      <div class="body">
+        <div class="eb-field">
+          <label>{{ t('Shape') }}</label>
+          <select v-model="crop.ratio">
+            <option value="">{{ t('The whole picture') }}</option>
+            <option value="1 / 1">{{ t('Square (1:1)') }}</option>
+            <option value="4 / 3">4 : 3</option>
+            <option value="3 / 2">3 : 2</option>
+            <option value="16 / 9">16 : 9</option>
+            <option value="3 / 4">3 : 4</option>
+            <option value="2 / 3">2 : 3</option>
+          </select>
+        </div>
+        <div class="eb-cropbox" v-if="crop.ratio" :style="{ aspectRatio: crop.ratio }" @pointerdown.prevent="cropGrab">
+          <img :src="cropSrc" :style="{ objectPosition: crop.x + '% ' + crop.y + '%' }">
+          <span class="hint">{{ t('Drag the picture to choose what shows.') }}</span>
+        </div>
+        <p class="eb-note">{{ t('Nothing is cut away: the whole picture stays in the file and the frame simply shows part of it, so the crop can be changed or undone at any time.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="crop.ratio = ''">{{ t('The whole picture') }}</button>
+        <button class="eb-btn" @click="cropOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyCrop">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- a rule round the chosen cells -->
+  <div v-if="cellBorderOpen" class="eb-modal-back" @click="cellBorderOpen = false">
+    <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
+      <h3>{{ t('Rule round the cells') }}</h3>
+      <div class="body">
+        <div class="eb-row eb-frow">
+          <div class="eb-field b-style">
+            <label>{{ t('Rule') }}</label>
+            <select v-model="cellBorder.style">
+              <option value="">{{ t('As the style says') }}</option>
+              <option value="none">{{ t('None') }}</option>
+              <option value="solid">{{ t('Solid') }}</option>
+              <option value="dashed">{{ t('Dashed') }}</option>
+              <option value="dotted">{{ t('Dotted') }}</option>
+              <option value="double">{{ t('Double') }}</option>
+            </select>
+          </div>
+          <div class="eb-field b-style">
+            <label>{{ t('On which edges') }}</label>
+            <select v-model="cellBorder.sides">
+              <option value="all">{{ t('All four') }}</option>
+              <option value="top">{{ t('Above') }}</option>
+              <option value="bottom">{{ t('Below') }}</option>
+              <option value="topbottom">{{ t('Above and below') }}</option>
+              <option value="left">{{ t('At the left') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="cellBorder.width"></div>
+          <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="cellBorder.colour"></div>
+        </div>
+        <p class="eb-note">{{ t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn" @click="cellBorderOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyCellBorder">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- a reading over a word -->
   <div v-if="rubyOpen" class="eb-modal-back" @click="rubyOpen = false">
     <div class="eb-modal" style="width:min(420px,100%)" @click.stop>
@@ -4396,6 +4603,12 @@
         <button class="ci" @click="ctxDo('inline','sup')">{{ t('Superscript') }}</button>
         <button class="ci" @click="ctxDo('inline','sub')">{{ t('Subscript') }}</button>
         <button class="ci" @click="ctxDo('inline','code')">{{ t('Monospaced') }}</button>
+        <div class="sep"></div>
+        <button class="ci" @click="ctxDo('case','wide')">{{ t('To full width') }}</button>
+        <button class="ci" @click="ctxDo('case','narrow')">{{ t('To half width') }}</button>
+        <button class="ci" @click="ctxDo('case','upper')">{{ t('UPPER CASE') }}</button>
+        <button class="ci" @click="ctxDo('case','lower')">{{ t('lower case') }}</button>
+        <button class="ci" @click="ctxDo('case','title')">{{ t('Capitalise Each Word') }}</button>
       </div>
     </div>
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -4553,6 +4766,7 @@
         <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
+        <label class="opt"><input type="checkbox" v-model="para.noLoneLines"> {{ t('Never leave one line of it alone on a page') }}</label>
         <p class="eb-note">{{ t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.') }}</p>
       </div>
       <div class="foot">
@@ -4686,6 +4900,10 @@
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
+        cropOpen: false, cropSrc: '',
+        crop: { ratio: '', x: 50, y: 50 },
+        cellBorderOpen: false,
+        cellBorder: { style: 'solid', sides: 'all', width: 0.75, colour: '#666666' },
         tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [], bar: false, caret: null },
         fpropsOpen: false,
         fpropsRange: null,
@@ -4694,7 +4912,7 @@
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
         },
         paraOpen: false,
-        para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false,
+        para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
           border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '' },
         charsOpen: false,
         charSets: CHAR_SETS,
@@ -6190,6 +6408,50 @@
         this.touch();
         this.$nextTick(() => { this.fitZoom(); this.repaginate(); });
       },
+      openCrop() {
+        const fig = imageAt(getRange() ? getRange().startContainer : null);
+        if (!fig) { this.notify(this.t('Put the cursor on a picture first.')); return; }
+        const img = fig.querySelector('img');
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.cropSrc = img ? img.getAttribute('src') : '';
+        this.crop = Object.assign({ ratio: '', x: 50, y: 50 }, cropOf(fig) || {});
+        this.cropOpen = true;
+      },
+      /** Drag inside the preview to say which part of the picture shows. */
+      cropGrab(e) {
+        const box = e.currentTarget;
+        const r = box.getBoundingClientRect();
+        const start = { x: e.clientX, y: e.clientY, cx: this.crop.x, cy: this.crop.y };
+        const move = (ev) => {
+          this.crop.x = Math.max(0, Math.min(100, start.cx - (ev.clientX - start.x) / Math.max(1, r.width) * 100));
+          this.crop.y = Math.max(0, Math.min(100, start.cy - (ev.clientY - start.y) / Math.max(1, r.height) * 100));
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      },
+      applyCrop() {
+        const v = Object.assign({}, this.crop);
+        this.cropOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the picture moved on */ } }
+        this.run(() => {
+          const fig = imageAt(getRange() ? getRange().startContainer : null);
+          if (fig) { setCrop(fig, v); }
+        });
+      },
+      openCellBorder() {
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.cellBorderOpen = true;
+      },
+      applyCellBorder() {
+        const v = Object.assign({}, this.cellBorder);
+        this.cellBorderOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the table moved on */ } }
+        this.run(() => setCellBorder(v));
+      },
       openStyles() {
         const block = String(this.fmt.block || 'P').toLowerCase();
         const known = STYLE_TARGETS.some((t2) => t2.key === block);
@@ -6312,6 +6574,7 @@
           list: () => this.list(arg),
           indent: () => this.indent(arg),
           clear: () => this.clearFmt(),
+          case: () => this.run(() => transformText(arg)),
           para: () => this.openPara(),
           toc: () => this.openToc(),
           chars: () => this.openChars(),
@@ -6483,7 +6746,7 @@
         this.repaginate();
       },
       clearPara() {
-        this.para = { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false,
+        this.para = { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
           border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '' };
       },
       openToc() {
@@ -6764,6 +7027,11 @@
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
+        if (meta && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault();
+          this.run(() => moveBlock(e.key === 'ArrowUp' ? -1 : 1));
+          return undefined;
+        }
         if (meta && !e.altKey) {
           const k = e.key.toLowerCase();
           if (k === 'b') { e.preventDefault(); return this.inline('bold'); }
@@ -7115,6 +7383,9 @@
   window.__eb_familiesInBody = familiesInBody;
   window.__eb_stylesCss = stylesCss;
   window.__eb_setColumnWidths = setColumnWidths;
+  window.__eb_width = { wide: toWide, narrow: toNarrow };
+  window.__eb_moveBlock = moveBlock;
+  window.__eb_setCrop = setCrop;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');
