@@ -626,3 +626,17 @@
 #editbase-root .eb-menu-item .k { margin-left: auto; font-size: 11.5px; color: var(--muted); }
 #editbase-root .eb-num .eb-tb.caret { min-width: 20px; }
 #editbase-root .eb-tb.font-btn { max-width: 190px; }
+
+/* the marker list, and the running header and footer drawn on each sheet */
+.eb-menu.markers { min-width: 232px; }
+#editbase-root .eb-menu.markers .eb-menu-item { gap: 10px; }
+#editbase-root .eb-menu.markers .mk { flex: 0 0 34px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.eb-sheet .run {
+  position: absolute; left: var(--eb-ml); right: var(--eb-mr);
+  display: flex; gap: 1em; font-size: 9pt; color: #666; pointer-events: none;
+}
+.eb-sheet .run .l, .eb-sheet .run .c, .eb-sheet .run .r { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+.eb-sheet .run .c { text-align: center; }
+.eb-sheet .run .r { text-align: right; }
+.eb-sheet .run.head { top: calc(var(--eb-mt) - 9mm); }
+.eb-sheet .run.foot { top: calc(var(--eb-paper-h) - var(--eb-mb) + 9mm); }
