@@ -343,8 +343,13 @@
 /* tables — sized to the text column and kept whole across a page break */
 .eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; white-space: normal; vertical-align: baseline; }
 .eb-doc table.eb-table th, .eb-doc table.eb-table td {
-  border: .75pt solid #666; padding: .38em .6em; vertical-align: top; text-align: left;
+  border: .75pt solid #666; padding: .38em .6em; vertical-align: top;
 }
+/* A default has to be weaker than a choice. Written the plain way this selector
+   counts for more than .eb-al-r does, and a cell told to range right stayed left
+   however many times the button was pressed. :where() gives the default no
+   weight at all, so the alignment on the cell wins. */
+:where(.eb-doc table.eb-table th, .eb-doc table.eb-table td) { text-align: left; }
 .eb-doc table.eb-table th { background: #eef1f6; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc table.eb-table.borderless th, .eb-doc table.eb-table.borderless td { border: none; }
 .eb-doc table.eb-table.rows th, .eb-doc table.eb-table.rows td { border-left: none; border-right: none; }
@@ -471,7 +476,8 @@
 
 /* mathematics — native MathML, no images and no renderer to install */
 .eb-doc math { font-size: 1.06em; }
-.eb-doc .eb-math-block { display: block; text-align: center; margin: 1em 0; break-inside: avoid; }
+.eb-doc .eb-math-block { display: block; margin: 1em 0; break-inside: avoid; }
+:where(.eb-doc .eb-math-block) { text-align: center; }
 
 /* an explicit page break: invisible on paper, a labelled line on screen */
 .eb-doc .eb-pagebreak { break-before: page; height: 0; margin: 0; border: none; }
@@ -1241,10 +1247,19 @@
     const c = canvas();
     let n = node && node.nodeType === 3 ? node.parentNode : node;
     while (n && n !== c && n.nodeType === 1) {
+      // A frame is a container written in, whatever tag it is made of: the
+      // alignment of the words in it belongs to the frame, not to the paragraph
+      // the frame is anchored in, which may be somewhere else entirely.
+      if (n.classList && n.classList.contains('eb-frame')) { return n; }
       if (INNER_BLOCKS.has(n.nodeName)) { return n; }
       n = n.parentNode;
     }
     return null;
+  }
+  /** Is the caret in this thing's own text? */
+  function caretInside(el) {
+    const r = getRange();
+    return !!(el && r && el.contains && el.contains(r.startContainer));
   }
   function selectedBlocks(inner) {
     const range = getRange();
@@ -5778,8 +5793,11 @@
       list(tag) { this.blockRun(() => toggleList(tag)); },
       align(cls) {
         // An object with its box up is what is being aligned -- not whatever
-        // paragraph the caret was left in, somewhere else on the page.
-        if (frameTaken && frameEl && this.alignObject(frameEl, cls)) { return; }
+        // paragraph the caret was left in, somewhere else on the page. But when
+        // the caret is in the frame's own text, the words in it are what is being
+        // aligned, and the frame stays where it is.
+        if (frameTaken && frameEl && !caretInside(frameEl)
+          && this.alignObject(frameEl, cls)) { return; }
         this.blockRun(() => setBlockClass('align', cls));
       },
       indent(dir) { this.blockRun(() => stepIndent(dir)); },
