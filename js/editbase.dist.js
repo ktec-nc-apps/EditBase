@@ -9954,24 +9954,30 @@ return function render(_ctx, _cache) {
         // After a paragraph command the box goes round the paragraphs, whether or
         // not any words are selected: a paragraph does not move when it is
         // aligned, and a run of words does.
+        //
+        // The measurement has to come from the paragraph itself. A range that
+        // selects a block reports the block's own rectangle AND a rectangle for
+        // every line of text inside it, and those line rectangles slide across
+        // the page the moment the paragraph is centred -- which is precisely the
+        // box seen to move. One rectangle per paragraph, taken from the element.
+        let rects = [];
         let ranges = [];
         if (blockBoxed) {
           selectedBlocks().forEach((block) => {
             if (!block || !block.parentNode) { return; }
-            const r2 = document.createRange();
-            r2.selectNode(block);
-            ranges.push(r2);
+            if (typeof block.getBoundingClientRect !== 'function') { return; }
+            rects.push(block.getBoundingClientRect());
           });
         }
-        if (!ranges.length) {
+        if (!rects.length) {
           const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
           if (range && !range.collapsed) { ranges = [range]; }
+          if (!ranges.length) { this.tsel.on = false; return; }
+          // No layout to measure (a document not yet shown, or the test harness).
+          if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
+          rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), []);
         }
-        if (!ranges.length) { this.tsel.on = false; return; }
-        // No layout to measure (a document not yet shown, or the test harness).
-        if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
-        const rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), [])
-          .filter((r2) => r2.width > 0.5 && r2.height > 0.5);
+        rects = rects.filter((r2) => r2.width > 0.5 && r2.height > 0.5);
         if (!rects.length) { this.tsel.on = false; return; }
         const z = this.frameZoom() || 1;
         const b = wrap.getBoundingClientRect();
