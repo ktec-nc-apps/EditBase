@@ -62,6 +62,7 @@
     size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 },
     font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
     header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
+    headingNumbers: '',
   };
 
   function normalisePaper(p) {
@@ -70,6 +71,7 @@
     if (PAPERS[p.size]) { out.size = p.size; }
     if (p.orientation === 'landscape') { out.orientation = 'landscape'; }
     if (p.font === 'sans') { out.font = 'sans'; }
+    if (p.headingNumbers === 'decimal' || p.headingNumbers === 'japanese') { out.headingNumbers = p.headingNumbers; }
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
     const lh = Number(p.lineHeight);
@@ -371,6 +373,20 @@
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
 
+/* chapter numbers, counted by the file itself rather than typed into the text --
+   so inserting a section renumbers everything after it without anyone touching it */
+.eb-doc.eb-hn { counter-reset: ebh1 ebh2 ebh3; }
+.eb-doc.eb-hn h1 { counter-increment: ebh1; counter-reset: ebh2 ebh3; }
+.eb-doc.eb-hn h2 { counter-increment: ebh2; counter-reset: ebh3; }
+.eb-doc.eb-hn h3 { counter-increment: ebh3; }
+.eb-doc.eb-hn h1::before { content: counter(ebh1) ". "; }
+.eb-doc.eb-hn h2::before { content: counter(ebh1) "." counter(ebh2) " "; }
+.eb-doc.eb-hn h3::before { content: counter(ebh1) "." counter(ebh2) "." counter(ebh3) " "; }
+.eb-doc.eb-hn-ja h1::before { content: "第" counter(ebh1) "章　"; }
+.eb-doc.eb-hn-ja h2::before { content: "第" counter(ebh2) "節　"; }
+.eb-doc.eb-hn-ja h3::before { content: "(" counter(ebh3) ") "; }
+.eb-doc .eb-toc h1::before, .eb-doc .eb-toc h2::before, .eb-doc .eb-toc h3::before { content: none; }
+
 /* a reading over a word: Japanese typesetting expects it at half size */
 .eb-doc ruby { ruby-position: over; ruby-align: center; }
 .eb-doc ruby rt { font-size: .5em; font-weight: normal; letter-spacing: 0; text-emphasis: none; }
@@ -438,6 +454,87 @@
 .eb-paper figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
 .eb-paper table.eb-table td:focus, .eb-paper table.eb-table th:focus { outline: 2px solid #2563eb33; }
 `;
+
+  // ---- the document's own styles ---------------------------------------------
+  // A word processor changes every heading at once by changing the style, not by
+  // visiting each one. Here that is a small stylesheet the file carries with it:
+  // one rule per kind of paragraph, written after the built-in sheet so it wins,
+  // and still beaten by anything set on a single paragraph by hand. It also keeps
+  // the markup clean -- a heading stays a plain <h2> with nothing written on it.
+  const STYLE_TARGETS = [
+    { key: 'p', sel: '.eb-doc p' },
+    { key: 'h1', sel: '.eb-doc h1' },
+    { key: 'h2', sel: '.eb-doc h2' },
+    { key: 'h3', sel: '.eb-doc h3' },
+    { key: 'h4', sel: '.eb-doc h4' },
+    { key: 'li', sel: '.eb-doc li' },
+    { key: 'blockquote', sel: '.eb-doc blockquote' },
+    { key: 'pre', sel: '.eb-doc pre' },
+    { key: 'cell', sel: '.eb-doc table.eb-table th, .eb-doc table.eb-table td' },
+    { key: 'caption', sel: '.eb-doc figcaption' },
+  ];
+  const EMPTY_STYLE = { family: '', size: '', colour: '', bold: false, italic: false, align: '', lineHeight: '', before: '', after: '' };
+
+  function normaliseStyles(raw) {
+    const out = {};
+    STYLE_TARGETS.forEach((t) => { out[t.key] = Object.assign({}, EMPTY_STYLE); });
+    if (!raw || typeof raw !== 'object') { return out; }
+    STYLE_TARGETS.forEach((t) => {
+      const src = raw[t.key];
+      if (!src || typeof src !== 'object') { return; }
+      const to = out[t.key];
+      if (typeof src.family === 'string' && /^[\w .+&'-]{0,64}$/.test(src.family)) { to.family = src.family.trim(); }
+      // An empty box means "nothing said about it". Number('') is 0, so the check
+      // has to come before the conversion or every style would be given a zero.
+      const numOr = (x, lo, hi, step) => {
+        if (x === '' || x == null) { return ''; }
+        const n = Number(x);
+        if (!Number.isFinite(n) || n < lo || n > hi) { return ''; }
+        return Math.round(n * step) / step;
+      };
+      to.size = numOr(src.size, 4, 200, 2);
+      if (typeof src.colour === 'string' && /^#[0-9a-f]{6}$/i.test(src.colour)) { to.colour = src.colour; }
+      to.bold = !!src.bold;
+      to.italic = !!src.italic;
+      if (['left', 'center', 'right', 'justify'].indexOf(src.align) >= 0) { to.align = src.align; }
+      to.lineHeight = numOr(src.lineHeight, 1, 4, 100);
+      to.before = numOr(src.before, 0, 200, 2);
+      to.after = numOr(src.after, 0, 200, 2);
+    });
+    return out;
+  }
+  function styleHasAnything(v) {
+    return !!(v && (v.family || v.size !== '' || v.colour || v.bold || v.italic || v.align || v.lineHeight !== '' || v.before !== '' || v.after !== ''));
+  }
+  function anyStyles(styles) { return STYLE_TARGETS.some((t) => styleHasAnything(styles[t.key])); }
+  /** The stylesheet those settings come to. */
+  function stylesCss(styles, prefix) {
+    const out = [];
+    STYLE_TARGETS.forEach((t) => {
+      const v = styles[t.key];
+      if (!styleHasAnything(v)) { return; }
+      const decls = [];
+      if (v.family) { decls.push('font-family: ' + fontStack(v.family, 'sans')); }
+      if (v.size !== '') { decls.push('font-size: ' + v.size + 'pt'); }
+      if (v.colour) { decls.push('color: ' + v.colour); }
+      if (v.bold) { decls.push('font-weight: 700'); }
+      if (v.italic) { decls.push('font-style: italic'); }
+      if (v.align) { decls.push('text-align: ' + v.align); }
+      if (v.lineHeight !== '') { decls.push('line-height: ' + v.lineHeight); }
+      if (v.before !== '') { decls.push('margin-top: ' + v.before + 'pt'); }
+      if (v.after !== '') { decls.push('margin-bottom: ' + v.after + 'pt'); }
+      // In the editor the app's own stylesheet already names the headings with the
+      // app's id in front of them, so the document's own rules need the same reach
+      // or they would lose to it -- and the editor would not show what the file does.
+      const sel = prefix ? t.sel.split(',').map((x) => prefix + x.trim()).join(', ') : t.sel;
+      out.push(sel + ' { ' + decls.join('; ') + '; }');
+    });
+    return out.join('\n');
+  }
+  /** The families those styles name, so the file asks for them too. */
+  function stylesFamilies(styles) {
+    return STYLE_TARGETS.map((t) => styles[t.key] && styles[t.key].family).filter(Boolean);
+  }
 
   // ---- sanitising -----------------------------------------------------------
   // A document is a file the user (or someone they shared with) may have edited by
@@ -539,12 +636,20 @@
       + '</div>\n';
   }
 
+  /** The classes the document itself wears: the numbering scheme, if any. */
+  function docClasses(paper) {
+    if (paper.headingNumbers === 'decimal') { return 'eb-doc eb-hn'; }
+    if (paper.headingNumbers === 'japanese') { return 'eb-doc eb-hn eb-hn-ja'; }
+    return 'eb-doc';
+  }
+
   function buildHtml(doc) {
     const paper = normalisePaper(doc.paper);
+    const styles = normaliseStyles(doc.styles);
     const lang = doc.lang || (document.documentElement.lang || 'ja');
     const body = stripEditorArtefacts(doc.body || '');
     const fonts = resolveFonts(paper, lang);
-    const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)));
+    const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)).concat(stylesFamilies(styles)));
     const s = sheet(paper);
     const page = 'html { background: #ffffff; }\n'
       + 'body.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; line-height: ' + paper.lineHeight + '; }\n'
@@ -568,10 +673,13 @@
       + '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
       + '<meta name="generator" content="EditBase ' + escapeAttr(APP_VERSION) + '">\n'
       + '<meta name="editbase-paper" content="' + escapeAttr(JSON.stringify(paper)) + '">\n'
+      + (anyStyles(styles) ? '<meta name="editbase-styles" content="' + escapeAttr(JSON.stringify(styles)) + '">\n' : '')
       + '<title>' + escapeAttr(doc.title || 'Document') + '</title>\n'
       + fontLinks
-      + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS + '</style>\n'
-      + '</head>\n<body class="eb-doc">\n'
+      + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS
+      + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
+      + '</style>\n'
+      + '</head>\n<body class="' + docClasses(paper) + '">\n'
       + runningBlock('eb-runhead', paper.header)
       + body + '\n'
       + runningBlock('eb-runfoot', paper.footer)
@@ -583,6 +691,7 @@
   function parseHtml(text) {
     const dom = new DOMParser().parseFromString(String(text || ''), 'text/html');
     const meta = dom.querySelector('meta[name="editbase-paper"]');
+    const styleMeta = dom.querySelector('meta[name="editbase-styles"]');
     const gen = dom.querySelector('meta[name="generator"]');
     let paper = null;
     if (meta) { try { paper = JSON.parse(meta.getAttribute('content') || '{}'); } catch (e) { paper = null; } }
@@ -595,6 +704,9 @@
       title: (dom.title || '').trim(),
       lang: dom.documentElement.getAttribute('lang') || 'ja',
       paper: normalisePaper(paper),
+      styles: normaliseStyles((function () {
+        try { return JSON.parse((styleMeta && styleMeta.getAttribute('content')) || '{}'); } catch (e) { return {}; }
+      }())),
       body: body.innerHTML.trim(),
       foreign: !(gen && /^EditBase\b/.test(gen.getAttribute('content') || '')),
     };
@@ -1196,7 +1308,26 @@
       pageBefore: s.getPropertyValue('break-before') === 'page',
       keepWithNext: s.getPropertyValue('break-after') === 'avoid',
       keepTogether: s.getPropertyValue('break-inside') === 'avoid',
+      border: BORDER_STYLES.indexOf(s.getPropertyValue('border-top-style')) >= 0 ? s.getPropertyValue('border-top-style') : '',
+      borderSides: borderSidesOf(s),
+      borderWidth: unitOf(s.getPropertyValue('border-top-width'), 'pt'),
+      borderColour: rgbToHex(s.getPropertyValue('border-top-color')) || '#666666',
+      fill: rgbToHex(s.getPropertyValue('background-color')) || '',
+      pad: numberIn(s.getPropertyValue('padding-top'), 'mm'),
     };
+  }
+  /** Which edges a paragraph's rule is drawn on, as the dialogue words it. */
+  const BORDER_SIDES = ['all', 'top', 'bottom', 'topbottom', 'left'];
+  function borderSidesOf(s) {
+    const on = (side) => BORDER_STYLES.indexOf(s.getPropertyValue('border-' + side + '-style')) >= 0
+      && s.getPropertyValue('border-' + side + '-style') !== 'none';
+    const t = on('top'); const b = on('bottom'); const l = on('left'); const r = on('right');
+    if (t && b && l && r) { return 'all'; }
+    if (t && b) { return 'topbottom'; }
+    if (t) { return 'top'; }
+    if (b) { return 'bottom'; }
+    if (l) { return 'left'; }
+    return 'all';
   }
 
   /**
@@ -1218,6 +1349,30 @@
       styleOrClear(block, 'break-before', v.pageBefore ? 'page' : '');
       styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : '');
       styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : '');
+      // A rule round a paragraph, and a tint behind it -- the two things a notice
+      // or a warning in a business document is always asking for.
+      ['border', 'border-top', 'border-bottom', 'border-left', 'border-right'].forEach((prop) => styleOrClear(block, prop, ''));
+      if (v.border && v.border !== 'none') {
+        const rule = (num(v.borderWidth) || 0.75) + 'pt ' + v.border + ' '
+          + (/^#[0-9a-f]{6}$/i.test(v.borderColour || '') ? v.borderColour : '#666666');
+        const sides = BORDER_SIDES.indexOf(v.borderSides) >= 0 ? v.borderSides : 'all';
+        if (sides === 'all') { styleOrClear(block, 'border', rule); } else {
+          if (sides === 'top' || sides === 'topbottom') { styleOrClear(block, 'border-top', rule); }
+          if (sides === 'bottom' || sides === 'topbottom') { styleOrClear(block, 'border-bottom', rule); }
+          if (sides === 'left') { styleOrClear(block, 'border-left', rule); }
+        }
+      }
+      const pad = num(v.pad);
+      ['padding-top', 'padding-bottom', 'padding-left', 'padding-right']
+        .forEach((prop) => styleOrClear(block, prop, pad === '' ? '' : pad + 'mm'));
+      if (/^#[0-9a-f]{6}$/i.test(v.fill || '')) {
+        styleOrClear(block, 'background-color', v.fill);
+        block.classList.add('eb-ink');
+      } else {
+        styleOrClear(block, 'background-color', '');
+        block.classList.remove('eb-ink');
+      }
+      if (block.getAttribute('class') === '') { block.removeAttribute('class'); }
       if (!block.getAttribute('style')) { block.removeAttribute('style'); }
     });
     return true;
@@ -1552,6 +1707,30 @@
    * ends, and a merge that would cut through a cell already spanning out of it is
    * refused rather than guessed at.
    */
+  /** Every cell the selection touches, which is what a cell command should act on. */
+  function selectedCells() {
+    const range = getRange();
+    const start = cellAt(range ? range.startContainer : null);
+    if (!start) { return []; }
+    const table = tableOf(start);
+    const end = cellAt(range ? range.endContainer : null) || start;
+    if (!table || tableOf(end) !== table) { return [start]; }
+    const grid = tableGrid(table);
+    const a = cellBox(grid, start);
+    const b = cellBox(grid, end);
+    if (!a || !b) { return [start]; }
+    const r0 = Math.min(a.r0, b.r0); const r1 = Math.max(a.r1, b.r1);
+    const c0 = Math.min(a.c0, b.c0); const c1 = Math.max(a.c1, b.c1);
+    const out = [];
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const cell = grid[r] && grid[r][c];
+        if (cell && out.indexOf(cell) < 0) { out.push(cell); }
+      }
+    }
+    return out;
+  }
+
   function mergeCells() {
     const range = getRange();
     const start = cellAt(range ? range.startContainer : null);
@@ -1649,6 +1828,93 @@
       if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
     });
     return true;
+  }
+
+  /**
+   * Column widths. A table with a colgroup and a fixed layout is the one thing a
+   * browser lays out exactly as told, and <col> is where a width belongs -- one
+   * declaration per column rather than one on every cell in it.
+   */
+  function tableColumns(table) {
+    const grid = tableGrid(table);
+    const count = grid.length ? grid[0].length : 0;
+    if (!count) { return null; }
+    let cg = table.querySelector('colgroup');
+    if (!cg) {
+      cg = document.createElement('colgroup');
+      table.insertBefore(cg, table.firstChild);
+    }
+    while (cg.children.length > count) { cg.lastElementChild.remove(); }
+    while (cg.children.length < count) { cg.appendChild(document.createElement('col')); }
+    return cg;
+  }
+  function setColumnWidths(table, widths) {
+    const cg = tableColumns(table);
+    if (!cg) { return false; }
+    Array.from(cg.children).forEach((col, i) => {
+      const w = Number(widths[i]);
+      if (w > 1) { col.style.width = round1(w) + 'mm'; } else { col.style.removeProperty('width'); }
+      if (!col.getAttribute('style')) { col.removeAttribute('style'); }
+    });
+    table.style.tableLayout = 'fixed';
+    return true;
+  }
+  /** A tint behind the cells the selection touches. */
+  function setCellFill(colour) {
+    const cells = selectedCells();
+    if (!cells.length) { return false; }
+    cells.forEach((cell) => {
+      if (/^#[0-9a-f]{6}$/i.test(colour || '')) {
+        cell.style.backgroundColor = colour;
+        cell.classList.add('eb-ink');
+      } else {
+        cell.style.removeProperty('background-color');
+        cell.classList.remove('eb-ink');
+      }
+      if (cell.getAttribute('class') === '') { cell.removeAttribute('class'); }
+      if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+    });
+    return true;
+  }
+  function setCellVerticalAlign(where) {
+    const cells = selectedCells();
+    if (!cells.length) { return false; }
+    cells.forEach((cell) => {
+      if (where) { cell.style.verticalAlign = where; } else { cell.style.removeProperty('vertical-align'); }
+      if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+    });
+    return true;
+  }
+
+  /** Where the columns meet, measured off the row that has the most cells in it. */
+  function columnEdges(table) {
+    const rows = tableRows(table);
+    let best = null;
+    rows.forEach((tr) => { if (!best || tr.children.length > best.children.length) { best = tr; } });
+    if (!best || best.children.length < 2) { return []; }
+    const out = [];
+    let i = 0;
+    Array.from(best.children).forEach((cell) => {
+      const cs = Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10));
+      i += cs;
+      out.push({ index: i - 1, right: cell.getBoundingClientRect().right, width: cell.getBoundingClientRect().width / cs, span: cs });
+    });
+    out.pop();
+    return out;
+  }
+  /** What each column is at this moment, in millimetres. */
+  function columnWidths(table, zoom) {
+    const rows = tableRows(table);
+    let best = null;
+    rows.forEach((tr) => { if (!best || tr.children.length > best.children.length) { best = tr; } });
+    if (!best) { return []; }
+    const out = [];
+    Array.from(best.children).forEach((cell) => {
+      const cs = Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10));
+      const w = cell.getBoundingClientRect().width / (zoom || 1) * MM / cs;
+      for (let j = 0; j < cs; j++) { out.push(w); }
+    });
+    return out;
   }
 
   function atLastCell() {
@@ -3041,6 +3307,9 @@
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    vTop: I('<path d="M2.6 2.6h10.8"/><path d="M8 5v7.4M5.6 10 8 12.4 10.4 10"/>'),
+    vMid: I('<path d="M2.6 8h10.8"/><path d="M8 2.4v3M8 10.6v3"/>'),
+    vBot: I('<path d="M2.6 13.4h10.8"/><path d="M8 3.6V11M5.6 6 8 3.6 10.4 6"/>'),
     ruby: I('<path d="M3 12.6h10M4.6 9.6 8 3.4l3.4 6.2"/><path d="M4.4 2.2h7.2" stroke-width="1"/>'),
     note: I('<path d="M3 3.6h10M3 7h10M3 10.4h6"/><circle cx="12.6" cy="11" r="2.2"/>'),
     columns: I('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10" stroke-dasharray="2 1.6"/>'),
@@ -3161,6 +3430,7 @@
         <option value="BLOCKQUOTE">{{ t('Quotation') }}</option>
         <option value="PRE">{{ t('Preformatted') }}</option>
       </select>
+      <button class="eb-tb" @mousedown.prevent @click="openStyles()" :title="t('Change this style everywhere…')"><span v-html="icons.props"></span></button>
       <span class="eb-pop">
         <button class="eb-tb text font-btn" :class="{ on: menu === 'font' }" @mousedown.prevent @click="toggleMenu('font')" :title="t('Typeface of the text')">
           <span class="fname" :style="{ fontFamily: fontPreviewStack(fmt.family) }">{{ fmt.family || fontsInUse.body }}</span>
@@ -3318,6 +3588,16 @@
         <option value="borderless">{{ t('No borders') }}</option>
       </select>
       <span class="sep"></span>
+      <label class="eb-tb" :title="t('Cell colour')">
+        <span class="colour-bar" :style="{ background: cellFill || 'transparent' }"></span>
+        <span v-html="icons.highlight"></span>
+        <input type="color" :value="cellFill || '#eef1f6'" @input="tableCmd('fill', $event.target.value)">
+      </label>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('fill', '')" :title="t('No cell colour')"><span v-html="icons.nocolour"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
+      <span class="sep"></span>
       <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
       <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
     </div>
@@ -3334,7 +3614,7 @@
             </div>
           </div>
         </div>
-        <div id="eb-canvas" class="eb-paper eb-doc"
+        <div id="eb-canvas" class="eb-paper eb-doc" :class="numberClass"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
         <div class="eb-tcaret" v-if="tsel.caret" :style="{ left: tsel.caret.x + 'px', top: tsel.caret.y + 'px', height: tsel.caret.h + 'px' }"></div>
@@ -3361,6 +3641,8 @@
             @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="openFrameProps"></div>
           <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
             @pointerdown.prevent.stop="frameGrab($event, h)"></span>
+          <span v-for="g in frame.grips" :key="'cg' + g.index" class="cg" :style="{ left: g.x + 'px' }"
+            @pointerdown.prevent.stop="colGrab($event, g.index)" :title="t('Drag to set the column width')"></span>
           <div class="bar" v-if="frame.bar" :class="{ below: frame.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
             <span class="nm">{{ frameLabel }}</span>
             <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
@@ -3414,6 +3696,15 @@
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
           <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
+        </div>
+        <div class="eb-field">
+          <label>{{ t('Number the headings') }}</label>
+          <select v-model="doc.paper.headingNumbers" @change="touch">
+            <option value="">{{ t('Not numbered') }}</option>
+            <option value="decimal">{{ t('1. / 1.1 / 1.1.1') }}</option>
+            <option value="japanese">{{ t('Chapter 1 / Section 1 / (1), in Japanese') }}</option>
+          </select>
+          <p class="eb-note">{{ t('The numbers are counted by the file itself, so adding a section renumbers everything after it. They are not part of the text and do not appear in a contents list.') }}</p>
         </div>
         <p class="eb-note">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
         <div class="eb-field">
@@ -3767,6 +4058,57 @@
   </div>
 
   <!-- the right button, as a word processor uses it -->
+  <!-- the styles of the document: one rule per kind of paragraph -->
+  <div v-if="stylesOpen" class="eb-modal-back" @click="closeStyles">
+    <div class="eb-modal" @click.stop>
+      <h3>{{ t('Styles of this document') }}</h3>
+      <div class="body">
+        <div class="eb-field">
+          <label>{{ t('Which style') }}</label>
+          <select v-model="styleKey">
+            <option v-for="t2 in styleTargets" :key="t2.key" :value="t2.key">{{ t2.label }}</option>
+          </select>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Typeface') }}</label>
+            <select :value="styleNow.family" @change="styleNow.family = $event.target.value; touchStyles()">
+              <option value="">{{ t('As the document says') }}</option>
+              <option v-for="f in styleFamilies" :key="f" :value="f">{{ f }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Size (pt)') }}</label><input type="number" min="4" max="200" step="0.5" v-model="styleNow.size" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Colour') }}</label>
+            <div class="colour-pair">
+              <input type="color" :value="styleNow.colour || '#111111'" @input="styleNow.colour = $event.target.value; touchStyles()">
+              <button class="eb-btn ghost" @click="styleNow.colour = ''; touchStyles()">{{ t('None') }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Alignment') }}</label>
+            <select v-model="styleNow.align" @change="touchStyles">
+              <option value="">{{ t('Unchanged') }}</option>
+              <option value="left">{{ t('Left') }}</option>
+              <option value="center">{{ t('Centre') }}</option>
+              <option value="right">{{ t('Right') }}</option>
+              <option value="justify">{{ t('Justified') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="styleNow.lineHeight" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.before" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.after" @input="touchStyles"></div>
+        </div>
+        <label class="opt"><input type="checkbox" v-model="styleNow.bold" @change="touchStyles"> {{ t('Bold') }}</label>
+        <label class="opt"><input type="checkbox" v-model="styleNow.italic" @change="touchStyles"> {{ t('Italic') }}</label>
+        <p class="eb-note">{{ t('This changes every paragraph of that kind at once, now and later, because it is written as a rule in the file rather than on each paragraph. Anything you have set on one paragraph by hand still wins over it.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="clearStyle">{{ t('Reset this style') }}</button>
+        <button class="eb-btn primary" @click="closeStyles">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- a reading over a word -->
   <div v-if="rubyOpen" class="eb-modal-back" @click="rubyOpen = false">
     <div class="eb-modal" style="width:min(420px,100%)" @click.stop>
@@ -4100,6 +4442,40 @@
           <div class="eb-field"><label>{{ t('Indent right (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
           <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
         </div>
+        <div class="eb-row eb-frow">
+          <div class="eb-field b-style">
+            <label>{{ t('Rule round the paragraph') }}</label>
+            <select v-model="para.border">
+              <option value="">{{ t('None') }}</option>
+              <option value="solid">{{ t('Solid') }}</option>
+              <option value="dashed">{{ t('Dashed') }}</option>
+              <option value="dotted">{{ t('Dotted') }}</option>
+              <option value="double">{{ t('Double') }}</option>
+            </select>
+          </div>
+          <div class="eb-field b-style">
+            <label>{{ t('On which edges') }}</label>
+            <select v-model="para.borderSides" :disabled="!para.border">
+              <option value="all">{{ t('All four') }}</option>
+              <option value="top">{{ t('Above') }}</option>
+              <option value="bottom">{{ t('Below') }}</option>
+              <option value="topbottom">{{ t('Above and below') }}</option>
+              <option value="left">{{ t('At the left') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="para.borderWidth" :disabled="!para.border"></div>
+          <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="para.borderColour" :disabled="!para.border"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Shading') }}</label>
+            <div class="colour-pair">
+              <input type="color" :value="para.fill || '#ffffff'" @input="para.fill = $event.target.value">
+              <button class="eb-btn ghost" @click="para.fill = ''">{{ t('None') }}</button>
+            </div>
+          </div>
+          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="40" step="0.5" v-model="para.pad"></div>
+        </div>
         <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
@@ -4206,7 +4582,8 @@
         fontList: [],
         fontScripts: [],
         docs: [],
-        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), lang: 'ja', foreign: false },
+        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), lang: 'ja', foreign: false },
+        stylesOpen: false, styleKey: 'h2',
         dirty: false,
         saving: false,
         savedAt: 0,
@@ -4231,7 +4608,7 @@
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, grips: [] },
         coarse: false,
         tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [], bar: false, caret: null },
         fpropsOpen: false,
@@ -4241,7 +4618,8 @@
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
         },
         paraOpen: false,
-        para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false },
+        para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false,
+          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '' },
         charsOpen: false,
         charSets: CHAR_SETS,
         charSet: 'Punctuation',
@@ -4392,6 +4770,38 @@
         ];
       },
       fontSizes() { return FONT_SIZES; },
+      numberClass() {
+        const n = this.doc.paper.headingNumbers;
+        if (n === 'decimal') { return 'eb-hn'; }
+        if (n === 'japanese') { return 'eb-hn eb-hn-ja'; }
+        return '';
+      },
+      cellFill() { return this.fmt.cellFill || ''; },
+      styleTargets() {
+        const names = {
+          p: this.t('Body text'), h1: this.t('Heading 1'), h2: this.t('Heading 2'),
+          h3: this.t('Heading 3'), h4: this.t('Heading 4'), li: this.t('List item'),
+          blockquote: this.t('Quotation'), pre: this.t('Preformatted'),
+          cell: this.t('Table text'), caption: this.t('Caption'),
+        };
+        return STYLE_TARGETS.map((t2) => ({ key: t2.key, label: names[t2.key] || t2.key }));
+      },
+      styleNow() {
+        if (!this.doc.styles) { this.doc.styles = normaliseStyles(null); }
+        if (!this.doc.styles[this.styleKey]) { this.doc.styles[this.styleKey] = Object.assign({}, EMPTY_STYLE); }
+        return this.doc.styles[this.styleKey];
+      },
+      /** The three the document already uses, so the common choice is one click. */
+      styleFamilies() {
+        const f = this.fontsInUse;
+        const out = [];
+        [f.body, f.heading, f.mono].forEach((n) => { if (n && out.indexOf(n) < 0) { out.push(n); } });
+        STYLE_TARGETS.forEach((t2) => {
+          const n = this.doc.styles && this.doc.styles[t2.key] && this.doc.styles[t2.key].family;
+          if (n && out.indexOf(n) < 0) { out.push(n); }
+        });
+        return out;
+      },
       hasRunning() {
         const h = this.doc.paper.header || {};
         const f = this.doc.paper.footer || {};
@@ -4501,7 +4911,7 @@
           const parsed = parseHtml(d.content);
           this.doc = {
             id: d.id, name: d.name, title: parsed.title || d.title,
-            paper: parsed.paper, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
+            paper: parsed.paper, styles: parsed.styles, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
           canvas().innerHTML = parsed.body || '<p><br></p>';
           normaliseCanvas(this.t('Page break'), this.t('Caption'));
@@ -4515,7 +4925,7 @@
               this.applyDocFonts();
             }).catch(() => { /* the fallback stack still renders */ });
           }
-          this.applyDocFonts();
+          this.applyDocStyles();
           history.reset();
           this.dirty = false;
           this.savedAt = (d.mtime || 0) * 1000;
@@ -4540,6 +4950,7 @@
         return buildHtml({
           title: this.doc.title || this.t('Untitled document'),
           paper: this.doc.paper,
+          styles: this.doc.styles,
           lang: this.doc.lang,
           body: this.exportBody(),
         });
@@ -4651,6 +5062,8 @@
         const at = getRange();
         const list = at ? listAt(at.startContainer) : null;
         s.marker = list ? (list.style.listStyleType || (list.nodeName === 'OL' ? 'decimal' : 'disc')) : '';
+        const cell = at ? cellAt(at.startContainer) : null;
+        s.cellFill = cell ? (rgbToHex(cell.style.backgroundColor) || '') : '';
         s.ruby = !!(at && rubyAt(at.startContainer));
         this.fmt = s;
         this.syncFrame();
@@ -4765,11 +5178,24 @@
         this.touch();
       },
       /** Load the families this document uses, for the editor's own canvas. */
+      /** The document's own styles, in a sheet of their own after the built-in one. */
+      applyDocStyles() {
+        const css = stylesCss(normaliseStyles(this.doc.styles), '#editbase-root ');
+        let el = document.getElementById('eb-doc-styles');
+        if (!el) {
+          el = document.createElement('style');
+          el.id = 'eb-doc-styles';
+          document.head.appendChild(el);
+        }
+        el.textContent = css;
+        this.applyDocFonts();
+        this.$nextTick(() => this.repaginate());
+      },
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
         const c = canvas();
         const named = c ? familiesInBody(c.innerHTML) : [];
-        linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono].concat(named)));
+        linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono].concat(named).concat(stylesFamilies(normaliseStyles(this.doc.styles)))));
         // Text set in the real typeface is a different height, so the pages have to
         // be laid out again once the fonts have actually loaded.
         if (document.fonts && document.fonts.ready) {
@@ -5182,6 +5608,8 @@
       },
       tableCmd(kind, arg) {
         const ops = {
+          fill: () => setCellFill(arg),
+          valign: () => setCellVerticalAlign(arg),
           rowAbove: () => addRow(-1), rowBelow: () => addRow(1),
           colLeft: () => addColumn(-1), colRight: () => addColumn(1),
           rowDel: () => deleteRow(), colDel: () => deleteColumn(),
@@ -5228,6 +5656,11 @@
         this.frame.kind = objectKind(el);
         this.frame.on = true;
         frameBox = a;
+        // A table is the one frame with something inside it worth taking hold of:
+        // the line between two columns.
+        this.frame.grips = el.nodeName === 'TABLE'
+          ? columnEdges(el).map((e) => ({ index: e.index, x: (e.right - b.left) / z }))
+          : [];
         if (this.coarse) { this.frame.bar = true; }
         this.syncText();
       },
@@ -5415,6 +5848,47 @@
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
         window.addEventListener('pointercancel', up);
+      },
+      /** Widen one column at the expense of the one beside it. */
+      colGrab(e, index) {
+        if (!frameEl || frameEl.nodeName !== 'TABLE') { return; }
+        framePinned = true;
+        this.frame.dragging = true;
+        history.push(true);
+        const z = this.frameZoom() || 1;
+        frameDrag = {
+          mode: 'column', index, z, x0: e.clientX, y0: e.clientY,
+          widths: columnWidths(frameEl, z), moved: false,
+        };
+        const move = (ev) => this.colDragMove(ev);
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          window.removeEventListener('pointercancel', up);
+          const d = frameDrag;
+          frameDrag = null;
+          this.frame.dragging = false;
+          if (d && d.moved) { this.settleFrame(); } else { this.$nextTick(() => this.syncFrame()); }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+      },
+      colDragMove(e) {
+        const d = frameDrag;
+        if (!d || d.mode !== 'column' || !frameEl) { return; }
+        if (Math.abs(e.clientX - d.x0) > 2) { d.moved = true; }
+        if (!d.moved) { return; }
+        const dx = (e.clientX - d.x0) / d.z * MM;
+        const widths = d.widths.slice();
+        const i = d.index;
+        if (widths[i] == null || widths[i + 1] == null) { return; }
+        const room = widths[i] + widths[i + 1];
+        const w = Math.max(6, Math.min(room - 6, widths[i] + dx));
+        widths[i] = w;
+        widths[i + 1] = room - w;
+        setColumnWidths(frameEl, widths);
+        this.syncFrame();
       },
       frameDragMove(e) {
         const d = frameDrag;
@@ -5620,6 +6094,22 @@
         restack(frameEl, where);
         this.fprops.z = Number(frameEl.style.zIndex) || '';
         this.settleFrame();
+      },
+      openStyles() {
+        const block = String(this.fmt.block || 'P').toLowerCase();
+        const known = STYLE_TARGETS.some((t2) => t2.key === block);
+        this.styleKey = known ? block : 'p';
+        this.stylesOpen = true;
+      },
+      closeStyles() { this.stylesOpen = false; },
+      touchStyles() {
+        this.doc.styles = normaliseStyles(this.doc.styles);
+        this.applyDocStyles();
+        this.touch();
+      },
+      clearStyle() {
+        this.doc.styles[this.styleKey] = Object.assign({}, EMPTY_STYLE);
+        this.touchStyles();
       },
       addFrame() { this.run(() => insertFrame()); this.$nextTick(() => this.syncFrame()); },
 
@@ -5853,7 +6343,8 @@
         this.repaginate();
       },
       clearPara() {
-        this.para = { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false };
+        this.para = { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false,
+          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '' };
       },
       openToc() {
         ctxRange = getRange() ? getRange().cloneRange() : null;
@@ -6479,6 +6970,8 @@
   window.__eb_frameText = frameText;
   window.__eb_restack = restack;
   window.__eb_familiesInBody = familiesInBody;
+  window.__eb_stylesCss = stylesCss;
+  window.__eb_setColumnWidths = setColumnWidths;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');
