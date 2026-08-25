@@ -778,7 +778,6 @@
   // paragraph: that is what was just acted on, and unlike a run of words it does
   // not move when the paragraph is aligned. Typing or clicking puts it back on
   // the 文節 the caret is standing in.
-  let blockBoxed = false;
   // When the menu opened, so that the tap that opened it cannot also close it.
   let ctxAt = 0;
   function canvas() { return canvasEl; }
@@ -1100,7 +1099,7 @@
     if (!range) { return; }
     if (!range.collapsed) { applyInlineStyle(prop, value); return; }
     const name = dashed(prop);
-    selectedBlocks().forEach((block) => {
+    selectedBlocks(true).forEach((block) => {
       // Setting it on the block says nothing while the words inside carry their own.
       Array.from(block.querySelectorAll('[style]')).forEach((el) => {
         if (!el.style.getPropertyValue(name)) { return; }
@@ -1218,9 +1217,39 @@
   function isFurniture(el) {
     return !!(el && el.classList && (el.classList.contains('eb-pagespacer')));
   }
-  function selectedBlocks() {
+  const INNER_BLOCKS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE',
+    'PRE', 'TD', 'TH', 'FIGCAPTION', 'DIV']);
+  /**
+   * The paragraph the caret is actually standing in -- the cell, the caption, the
+   * one paragraph inside the box -- rather than the whole thing that holds it.
+   * Centring inside a table centred every cell in it before this.
+   */
+  function innerBlockOf(node) {
+    const c = canvas();
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    while (n && n !== c && n.nodeType === 1) {
+      if (INNER_BLOCKS.has(n.nodeName)) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function selectedBlocks(inner) {
     const range = getRange();
     if (!range) { return []; }
+    if (inner && range) {
+      const a = innerBlockOf(range.startContainer);
+      const b = innerBlockOf(range.endContainer);
+      if (a && b && a === b) { return isFurniture(a) ? [] : [a]; }
+      if (a && b && a.parentNode === b.parentNode) {
+        const run = [];
+        let n = a;
+        while (n) {
+          if (!isFurniture(n)) { run.push(n); }
+          if (n === b) { return run; }
+          n = n.nextElementSibling;
+        }
+      }
+    }
     const first = blockAt(range.startContainer, range.startOffset);
     const last = blockAt(range.endContainer, range.endOffset);
     if (!first) { return []; }
@@ -1326,7 +1355,7 @@
     };
     const all = groups[group] || [];
     const wanted = group === 'align' ? alignClass(cls) : cls;
-    const blocks = selectedBlocks();
+    const blocks = selectedBlocks(true);
     // Pressing the same one again takes it off. A button that shows itself as
     // pressed has to be able to be un-pressed, and the paragraph goes back to
     // whatever the style says.
@@ -1347,7 +1376,7 @@
   }
   function stepIndent(dir) {
     const order = ['', 'eb-in1', 'eb-in2', 'eb-in3'];
-    selectedBlocks().forEach((b) => {
+    selectedBlocks(true).forEach((b) => {
       if (!b.classList) { return; }
       let level = 0;
       order.forEach((c, i) => { if (c && b.classList.contains(c)) { level = i; } });
@@ -1449,7 +1478,7 @@
 
   /** What the dialog shows: only what the paragraph itself sets, not what it inherits. */
   function paragraphProps() {
-    const block = selectedBlocks()[0];
+    const block = selectedBlocks(true)[0];
     if (!block) { return null; }
     const s = block.style;
     return {
@@ -1491,7 +1520,7 @@
    * file carries: no class the reader would have to be given a stylesheet for.
    */
   function setParagraphProps(v) {
-    const blocks = selectedBlocks();
+    const blocks = selectedBlocks(true);
     if (!blocks.length) { return false; }
     const num = (x) => (x === '' || x == null || Number.isNaN(Number(x)) ? '' : Number(x));
     blocks.forEach((block) => {
@@ -2672,22 +2701,38 @@
     return true;
   }
   /**
-   * Whether the caret is in this object's text, as opposed to the object simply
-   * being selected. It decides what Delete means: a character when someone is
-   * writing inside a frame or a caption, the whole object when its box is up and
-   * the caret is elsewhere. A formula is a unit -- the caret standing in its
-   * markup is nobody editing text.
+   * Whether a click on this spot picks the object up whole, rather than putting a
+   * caret in text that happens to live inside it. It is decided from what was
+   * clicked, not from where the browser then puts the caret -- the caret is the
+   * browser's to place, and reading it back gave a different answer depending on
+   * how the click arrived.
+   *
+   * Picked up whole: a picture, a rule, a formula, a frame standing in the run of
+   * a sentence. Written in: a caption, a table cell, a box, a block frame -- those
+   * are picked up by their own edge instead.
    */
-  function frameHoldsCaret(el) {
-    if (!el) { return false; }
-    const sel = getRange();
-    if (!sel || !el.contains(sel.startContainer)) { return false; }
-    let n = sel.startContainer;
-    n = n.nodeType === 3 ? n.parentElement : n;
-    if (n && n.closest && n.closest('.eb-math-block, math')) { return false; }
-    if (el.nodeName === 'FIGURE' && n && n.closest && !n.closest('figcaption')) { return false; }
-    return true;
+  function onText(el, x, y) {
+    if (!el || typeof el.getBoundingClientRect !== 'function') { return false; }
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    // No layout to measure (the test harness): nothing is under the pointer.
+    if (typeof r.getClientRects !== 'function') { return true; }
+    return Array.from(r.getClientRects())
+      .some((b) => x >= b.left && x <= b.right && y >= b.top && y <= b.bottom);
   }
+  function takesClick(el, target, x, y) {
+    if (!el || !target) { return false; }
+    const cls = el.classList;
+    if (el.nodeName === 'SPAN' && cls && cls.contains('eb-frame')) { return true; }
+    if (el.nodeName === 'HR') { return true; }
+    if (cls && cls.contains('eb-math-block')) { return true; }
+    if (el.nodeName === 'FIGURE') { return !(target.closest && target.closest('figcaption')); }
+    if (el.nodeName === 'TABLE') { return !(target.closest && target.closest('td, th')); }
+    // A box or a frame is written in: the click has to miss the words to take
+    // hold of the thing itself.
+    return !onText(el, x, y);
+  }
+  let frameTaken = false;
   function deleteObject(el) {
     if (!el) { return; }
     const host = objectFree(el) ? el.parentNode : el;
@@ -5664,7 +5709,7 @@
         s.marker = list ? (list.style.listStyleType || (list.nodeName === 'OL' ? 'decimal' : 'disc')) : '';
         const cell = at ? cellAt(at.startContainer) : null;
         s.cellFill = cell ? (rgbToHex(cell.style.backgroundColor) || '') : '';
-        const block = selectedBlocks()[0];
+        const block = selectedBlocks(true)[0];
         this.ind = block ? {
           left: Number(numberIn(block.style.getPropertyValue('margin-left'), 'mm')) || 0,
           right: Number(numberIn(block.style.getPropertyValue('margin-right'), 'mm')) || 0,
@@ -5699,13 +5744,13 @@
       },
       inline(key) { this.run(() => toggleInline(key)); },
       /** These act on the paragraph, so the box goes round the paragraph. */
-      blockRun(fn) { blockBoxed = true; this.run(fn); },
+      blockRun(fn) { this.run(fn); },
       setBlock(tag) { this.blockRun(() => setBlockType(tag)); },
       list(tag) { this.blockRun(() => toggleList(tag)); },
       align(cls) {
         // An object with its box up is what is being aligned -- not whatever
         // paragraph the caret was left in, somewhere else on the page.
-        if (framePinned && frameEl && this.alignObject(frameEl, cls)) { return; }
+        if (frameTaken && frameEl && this.alignObject(frameEl, cls)) { return; }
         this.blockRun(() => setBlockClass('align', cls));
       },
       indent(dir) { this.blockRun(() => stepIndent(dir)); },
@@ -6310,33 +6355,18 @@
         if (!c || !wrap || !this.doc.id) { this.tsel.on = false; return; }
         const sel = getRange();
         if (!sel || !inCanvas(sel.startContainer)) { this.tsel.on = false; return; }
-        // After a paragraph command the box goes round the paragraphs, whether or
-        // not any words are selected: a paragraph does not move when it is
-        // aligned, and a run of words does.
-        //
-        // The measurement has to come from the paragraph itself. A range that
-        // selects a block reports the block's own rectangle AND a rectangle for
-        // every line of text inside it, and those line rectangles slide across
-        // the page the moment the paragraph is centred -- which is precisely the
-        // box seen to move. One rectangle per paragraph, taken from the element.
-        let rects = [];
+        // The box belongs to the words it is drawn round, and it stays on them.
+        // Aligning the paragraph moves those words, and the box goes with them --
+        // it does not jump off onto the paragraph, which is somewhere else and
+        // not what was boxed.
         let ranges = [];
-        if (blockBoxed) {
-          selectedBlocks().forEach((block) => {
-            if (!block || !block.parentNode) { return; }
-            if (typeof block.getBoundingClientRect !== 'function') { return; }
-            rects.push(block.getBoundingClientRect());
-          });
-        }
-        if (!rects.length) {
-          const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
-          if (range && !range.collapsed) { ranges = [range]; }
-          if (!ranges.length) { this.tsel.on = false; return; }
-          // No layout to measure (a document not yet shown, or the test harness).
-          if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
-          rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), []);
-        }
-        rects = rects.filter((r2) => r2.width > 0.5 && r2.height > 0.5);
+        const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
+        if (range && !range.collapsed) { ranges = [range]; }
+        if (!ranges.length) { this.tsel.on = false; return; }
+        // No layout to measure (a document not yet shown, or the test harness).
+        if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
+        const rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), [])
+          .filter((r2) => r2.width > 0.5 && r2.height > 0.5);
         if (!rects.length) { this.tsel.on = false; return; }
         const z = this.frameZoom() || 1;
         const b = wrap.getBoundingClientRect();
@@ -6345,7 +6375,7 @@
         const top = Math.min.apply(null, boxes.map((r) => r.y));
         const right = Math.max.apply(null, boxes.map((r) => r.x + r.w));
         const bottom = Math.max.apply(null, boxes.map((r) => r.y + r.h));
-        textRange = blockBoxed ? null : ranges[0];
+        textRange = ranges[0];
         textBox = { left: Math.min.apply(null, rects.map((r) => r.left)), right: Math.max.apply(null, rects.map((r) => r.right)),
           top: Math.min.apply(null, rects.map((r) => r.top)), bottom: Math.max.apply(null, rects.map((r) => r.bottom)) };
         this.tsel.boxes = boxes;
@@ -6374,7 +6404,6 @@
       },
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
-        blockBoxed = false;
         if (frameDrag) { return; }
         const at = objectAt(e.target);
         frameEl = at;
@@ -6382,9 +6411,12 @@
         // selected either: remember that this one was chosen by hand.
         framePinned = !!at;
         if (at) { this.frame.bar = true; }
+        // One click picks the object up; a second one goes inside it to write.
+        frameTaken = takesClick(at, e.target, e.clientX, e.clientY) && e.detail <= 1;
         this.$nextTick(() => this.syncFrame());
       },
       clearFrame() {
+        frameTaken = false;
         frameEl = null;
         framePinned = false;
         frameBox = null;
@@ -6398,6 +6430,10 @@
       frameGrab(e, mode) {
         if (!frameEl) { return; }
         framePinned = true;
+        // Taking hold of the box itself -- its edge or one of its handles -- is
+        // taking hold of the object, whatever the object is. It is the only way
+        // to get at a table, which has no margin of its own to click on.
+        frameTaken = true;
         // While the pointer is down the box must not answer for what is under it,
         // or the drop lands on the editor's own overlay rather than on the page.
         this.frame.dragging = true;
@@ -6556,7 +6592,10 @@
        */
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
-        if (el.nodeName === 'SPAN' || objectFree(el)) { return false; }
+        // A frame in the run of a sentence has no alignment of its own, and one
+        // parked by hand is already where the writer put it. Neither is the
+        // paragraph, which is not what was picked up: leave them where they are.
+        if (el.nodeName === 'SPAN' || objectFree(el)) { return true; }
         const want = { 'eb-al-l': ['0', 'auto'], 'eb-al-c': ['auto', 'auto'], 'eb-al-r': ['auto', '0'] }[cls];
         if (!want) { return false; }
         const now = [el.style.marginLeft || '', el.style.marginRight || ''];
@@ -7004,7 +7043,7 @@
           ml: p.margin.left, mr: p.margin.right,
           left: this.ind.left, right: this.ind.right, first: this.ind.first,
         };
-        const block = selectedBlocks()[0];
+        const block = selectedBlocks(true)[0];
         if (what !== 'ml' && what !== 'mr' && !block) { return; }
         if (what === 'ml' || what === 'mr') { history.push(true); } else { history.push(true); }
         const z = this.frameZoom() || 1;
@@ -7352,7 +7391,7 @@
        * getTargetRanges is the whole trick.
        */
       onBeforeInput(e) {
-        blockBoxed = false;
+        frameTaken = false;
         history.push(false);
         if (!this.review || !this.doc.id) { return; }
         const type = String(e.inputType || '');
@@ -7406,8 +7445,7 @@
         // A picture with its box up goes when Delete is pressed, the way it does
         // in every word processor. Text being written inside a frame does not:
         // there the key deletes a character, as it always has.
-        if ((e.key === 'Delete' || e.key === 'Backspace') && this.frame.on && frameEl
-          && !frameHoldsCaret(frameEl)) {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && frameTaken && frameEl) {
           e.preventDefault();
           this.frameCmd('delete');
           return undefined;
