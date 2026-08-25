@@ -762,6 +762,11 @@
   // selection if there is one. It is a Range, not Vue state, for the same reason.
   let textRange = null;
   let textBox = null;
+  // After a command that acts on the whole paragraph, the box belongs round the
+  // paragraph: that is what was just acted on, and unlike a run of words it does
+  // not move when the paragraph is aligned. Typing or clicking puts it back on
+  // the 文節 the caret is standing in.
+  let blockBoxed = false;
   // When the menu opened, so that the tap that opened it cannot also close it.
   let ctxAt = 0;
   function canvas() { return canvasEl; }
@@ -9224,10 +9229,12 @@ return function render(_ctx, _cache) {
         this.recount();
       },
       inline(key) { this.run(() => toggleInline(key)); },
-      setBlock(tag) { this.run(() => setBlockType(tag)); },
-      list(tag) { this.run(() => toggleList(tag)); },
-      align(cls) { this.run(() => setBlockClass('align', cls)); },
-      indent(dir) { this.run(() => stepIndent(dir)); },
+      /** These act on the paragraph, so the box goes round the paragraph. */
+      blockRun(fn) { blockBoxed = true; this.run(fn); },
+      setBlock(tag) { this.blockRun(() => setBlockType(tag)); },
+      list(tag) { this.blockRun(() => toggleList(tag)); },
+      align(cls) { this.blockRun(() => setBlockClass('align', cls)); },
+      indent(dir) { this.blockRun(() => stepIndent(dir)); },
       clearFmt() { this.run(() => clearFormatting()); },
       setColour(value) { this.colour = value; this.run(() => applyInlineStyle('color', value)); },
       clearColour() { this.run(() => applyInlineStyle('color', '')); },
@@ -9825,7 +9832,14 @@ return function render(_ctx, _cache) {
         if (!c || !wrap || !this.doc.id) { this.tsel.on = false; return; }
         const sel = getRange();
         if (!sel || !inCanvas(sel.startContainer)) { this.tsel.on = false; return; }
-        const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
+        let range = null;
+        if (!sel.collapsed) {
+          range = sel.cloneRange();
+        } else if (blockBoxed) {
+          const block = selectedBlocks()[0];
+          if (block) { range = document.createRange(); range.selectNode(block); }
+        }
+        if (!range) { range = bunsetsuAt(sel.startContainer, sel.startOffset); }
         if (!range || range.collapsed) { this.tsel.on = false; return; }
         // No layout to measure (a document not yet shown, or the test harness).
         if (typeof range.getClientRects !== 'function') { this.tsel.on = false; return; }
@@ -9838,7 +9852,7 @@ return function render(_ctx, _cache) {
         const top = Math.min.apply(null, boxes.map((r) => r.y));
         const right = Math.max.apply(null, boxes.map((r) => r.x + r.w));
         const bottom = Math.max.apply(null, boxes.map((r) => r.y + r.h));
-        textRange = range;
+        textRange = blockBoxed && sel.collapsed ? null : range;
         textBox = { left: Math.min.apply(null, rects.map((r) => r.left)), right: Math.max.apply(null, rects.map((r) => r.right)),
           top: Math.min.apply(null, rects.map((r) => r.top)), bottom: Math.max.apply(null, rects.map((r) => r.bottom)) };
         this.tsel.boxes = boxes;
@@ -9867,6 +9881,7 @@ return function render(_ctx, _cache) {
       },
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
+        blockBoxed = false;
         if (frameDrag) { return; }
         const at = objectAt(e.target);
         frameEl = at;
@@ -10436,7 +10451,7 @@ return function render(_ctx, _cache) {
         const v = { count: Number(this.cols.count) || 1, gap: Number(this.cols.gap) || 0 };
         this.colsOpen = false;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
-        this.run(() => setColumns(v.count, v.gap));
+        this.blockRun(() => setColumns(v.count, v.gap));
         this.repaginate();
       },
       openRunning() { this.menu = ''; this.runOpen = true; },
@@ -10445,7 +10460,7 @@ return function render(_ctx, _cache) {
         this.doc.paper.footer = { l: '', c: '', r: '' };
         this.touch();
       },
-      setMarker(type) { this.run(() => setListMarker(type)); },
+      setMarker(type) { this.blockRun(() => setListMarker(type)); },
       /**
        * The ruler. Its two outer marks are the paper's margins; the three inner ones
        * are this paragraph's indents, which is the division a word processor makes
@@ -10516,7 +10531,7 @@ return function render(_ctx, _cache) {
         const v = Object.assign({}, this.para);
         this.paraOpen = false;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
-        this.run(() => setParagraphProps(v));
+        this.blockRun(() => setParagraphProps(v));
         this.repaginate();
       },
       clearPara() {
@@ -10805,6 +10820,7 @@ return function render(_ctx, _cache) {
        * getTargetRanges is the whole trick.
        */
       onBeforeInput(e) {
+        blockBoxed = false;
         history.push(false);
         if (!this.review || !this.doc.id) { return; }
         const type = String(e.inputType || '');
