@@ -758,3 +758,12 @@
   font: 11px/1.6 var(--font-face, sans-serif); padding: 0 6px; border-radius: 4px;
   background: #2563eb; color: #fff; pointer-events: none;
 }
+
+/* The boxes round objects held with Shift alongside the one in charge. */
+#editbase-root .eb-fmore {
+  position: absolute; pointer-events: none; z-index: 5;
+  outline: 1px dashed #2563eb; outline-offset: 1px; background: rgba(37, 99, 235, .06);
+}
+
+/* The object's name at the head of its toolbar row. */
+#editbase-root .eb-toolbar.sub .nm { font-weight: 600; opacity: .75; padding: 0 6px 0 2px; white-space: nowrap; }
