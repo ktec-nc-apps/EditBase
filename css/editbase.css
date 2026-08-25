@@ -719,3 +719,10 @@
 #editbase-root .eb-shape-icon { display: inline-flex; width: 16px; height: 16px; align-items: center; }
 #editbase-root .eb-shape-icon .sh { display: block; width: 14px; height: 11px; }
 #editbase-root .eb-menu-sep { height: 1px; margin: 4px 6px; background: currentColor; opacity: .15; }
+
+/* The outline that follows the pointer while a shape is dragged off the menu. */
+#editbase-root .eb-dragghost, .eb-dragghost {
+  position: fixed; z-index: 3000; pointer-events: none;
+  border: 1.5px dashed #2563eb; background: rgba(37, 99, 235, .08);
+  transform: translate(-50%, -50%); border-radius: 2px;
+}

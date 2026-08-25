@@ -4262,8 +4262,8 @@
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addFrame(); menu = ''"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
           <div class="eb-menu-sep"></div>
-          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item" draggable="true"
-            @dragstart="shapeDragStart($event, sh.kind)" @click="addShape(sh.kind); menu = ''">
+          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item"
+            @pointerdown.prevent="shapeGrab($event, sh.kind)">
             <span class="eb-shape-icon" v-html="sh.icon"></span>{{ sh.label }}</button>
           <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
@@ -7326,11 +7326,79 @@
         });
       },
       /** Dragging one out of the menu drops it where the pointer lets go. */
-      shapeDragStart(e, kind) {
-        try { e.dataTransfer.setData('text/eb-shape', kind); e.dataTransfer.effectAllowed = 'copy'; } catch (err) { /* older browsers */ }
-        this.menu = '';
+      /**
+       * Dragging a shape out of the menu and on to the page. It is done with the
+       * pointer rather than with the browser's own drag and drop: that carries a
+       * ghost image nobody asked for, behaves differently in every browser, and
+       * does not exist on a touch screen at all. A press, a move and a release is
+       * the same gesture everywhere.
+       *
+       * Released on the page, the shape is put down there. Released without
+       * moving, it is put down where the caret is, so a click still works.
+       */
+      shapeGrab(e, kind) {
+        const ghost = document.createElement('div');
+        ghost.className = 'eb-dragghost';
+        ghost.style.width = '45mm';
+        ghost.style.height = '25mm';
+        if (kind === 'ellipse') { ghost.style.borderRadius = '50%'; }
+        if (kind === 'round') { ghost.style.borderRadius = '4mm'; }
+        if (kind === 'line' || kind === 'arrow') { ghost.style.height = '0'; }
+        document.body.appendChild(ghost);
+        const at = (ev) => {
+          ghost.style.left = ev.clientX + 'px';
+          ghost.style.top = ev.clientY + 'px';
+        };
+        at(e);
+        let moved = false;
+        const start = { x: e.clientX, y: e.clientY };
+        const move = (ev) => {
+          if (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) > 4) { moved = true; }
+          at(ev);
+        };
+        const up = (ev) => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          ghost.remove();
+          this.menu = '';
+          const c = canvas();
+          const over = c && c.getBoundingClientRect ? c.getBoundingClientRect() : null;
+          const inside = !!over && ev.clientX >= over.left && ev.clientX <= over.right
+            && ev.clientY >= over.top && ev.clientY <= over.bottom;
+          this.dropShape(kind, moved && inside ? ev : null);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
       },
-
+      dropShape(kind, ev) {
+        const c = canvas();
+        if (!c) { return; }
+        if (ev) {
+          const at2 = caretFromPoint(ev.clientX, ev.clientY);
+          if (at2) { selectRange(at2); }
+        }
+        let made = null;
+        this.run(() => { made = insertShape(kind); });
+        this.$nextTick(() => {
+          if (made && made.parentNode && ev) {
+            this.moveFreeTo(made, ev.clientX, ev.clientY);
+            this.keepOnPaper(made);
+          }
+          frameEl = made;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.syncFrame();
+        });
+      },
+      /** Put a parked object's top-left corner at a point on the page. */
+      moveFreeTo(el, x, y) {
+        if (!el || !el.getBoundingClientRect) { return; }
+        const z = this.frameZoom() || 1;
+        const r = el.getBoundingClientRect();
+        el.style.left = round1((parseFloat(el.style.left) || 0) + (x - r.left) * MM / z) + 'mm';
+        el.style.top = round1((parseFloat(el.style.top) || 0) + (y - r.top) * MM / z) + 'mm';
+      },
       // ---- the context menu ----------------------------------------------------
       /**
        * LibreOffice puts its own menu on the right button, and so does this: the
@@ -8130,6 +8198,7 @@
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
+
       c.addEventListener('pointerdown', (e) => this.onCanvasDown(e));
       c.addEventListener('pointermove', (e) => this.frameHover(e), { passive: true });
       // Safari on a phone does not always raise contextmenu, so a long press on
