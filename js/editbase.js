@@ -487,7 +487,7 @@
     const lang = doc.lang || (document.documentElement.lang || 'ja');
     const body = stripEditorArtefacts(doc.body || '');
     const fonts = resolveFonts(paper, lang);
-    const url = fontsUrl([fonts.body, fonts.head, fonts.mono]);
+    const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)));
     const s = sheet(paper);
     const page = 'html { background: #ffffff; }\n'
       + 'body.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; line-height: ' + paper.lineHeight + '; }\n'
@@ -854,6 +854,85 @@
       el.appendChild(n);
     });
     reselectNodes(nodes);
+  }
+
+  // ---- size and typeface -----------------------------------------------------------
+  // LibreOffice's two toolbar boxes act on what is selected -- and with nothing
+  // selected, on the block the caret stands in. The document's own defaults are a
+  // different thing and live in the paper setup, which is where a style belongs.
+  // Changing the size of a word by changing the whole document is no use to anyone.
+  const FONT_SIZES = [8, 9, 9.5, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
+  const dashed = (prop) => prop.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+
+  /** A span that has lost its last style is nothing but litter in the file. */
+  function unwrapBareSpan(el) {
+    if (!el || el.nodeName !== 'SPAN' || el.attributes.length || !el.parentNode) { return; }
+    const parent = el.parentNode;
+    while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+    parent.removeChild(el);
+  }
+
+  function styleTextOrBlock(prop, value) {
+    const range = getRange();
+    if (!range) { return; }
+    if (!range.collapsed) { applyInlineStyle(prop, value); return; }
+    const name = dashed(prop);
+    selectedBlocks().forEach((block) => {
+      // Setting it on the block says nothing while the words inside carry their own.
+      Array.from(block.querySelectorAll('[style]')).forEach((el) => {
+        if (!el.style.getPropertyValue(name)) { return; }
+        el.style.removeProperty(name);
+        if (!el.getAttribute('style')) { el.removeAttribute('style'); unwrapBareSpan(el); }
+      });
+      if (value) { block.style.setProperty(name, value); } else { block.style.removeProperty(name); }
+      if (!block.getAttribute('style')) { block.removeAttribute('style'); }
+    });
+  }
+
+  /**
+   * What the text under the caret actually prints at, in points -- read off the
+   * layout, so a heading reports the size its style gives it rather than the
+   * document's default. The screen view draws the canvas at a reading size, and
+   * the ratio between the two takes the number back to what the paper will print.
+   */
+  function sizeAt(paperPt) {
+    const c = canvas();
+    const range = getRange();
+    if (!c || !range || !window.getComputedStyle) { return null; }
+    let n = range.startContainer;
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    if (!n || n.nodeType !== 1 || !inCanvas(n)) { return null; }
+    const canvasPx = parseFloat(window.getComputedStyle(c).fontSize) || 0;
+    const px = parseFloat(window.getComputedStyle(n).fontSize) || 0;
+    if (!canvasPx || !px || !paperPt) { return null; }
+    const scale = canvasPx / (paperPt * 4 / 3);
+    return Math.round(px * 0.75 / (scale || 1) * 2) / 2;
+  }
+
+  /** The family the text under the caret is actually set in. */
+  function familyAt() {
+    const range = getRange();
+    if (!range || !window.getComputedStyle) { return ''; }
+    let n = range.startContainer;
+    if (n && n.nodeType === 3) { n = n.parentNode; }
+    if (!n || n.nodeType !== 1 || !inCanvas(n)) { return ''; }
+    const first = String(window.getComputedStyle(n).fontFamily || '').split(',')[0].trim();
+    return first.replace(/^["']|["']$/g, '');
+  }
+
+  /**
+   * The families a document names in its own markup. A typeface put on a word has
+   * to travel with the file just as the document's own three do, or the file opens
+   * somewhere else in whatever that machine happens to have.
+   */
+  function familiesInBody(html) {
+    const out = [];
+    String(html == null ? '' : html).replace(/font-family:\s*(?:"|&quot;)([^"&]+)(?:"|&quot;)/g, (m, name) => {
+      const n = String(name).trim();
+      if (n && out.indexOf(n) < 0) { out.push(n); }
+      return m;
+    });
+    return out;
   }
 
   /** Take the highlight off, whichever colour it happens to be. */
@@ -2768,14 +2847,36 @@
         <option value="BLOCKQUOTE">{{ t('Quotation') }}</option>
         <option value="PRE">{{ t('Preformatted') }}</option>
       </select>
-      <button class="eb-tb text font-btn" @mousedown.prevent @click="openFonts('body')" :title="t('Body typeface')">
-        <span class="fname" :style="{ fontFamily: fontPreviewStack(fontsInUse.body) }">{{ fontsInUse.body }}</span>
-        <span class="caret" v-html="icons.down"></span>
-      </button>
-      <span class="eb-num" :title="t('Body size (pt)')">
-        <button class="eb-tb" @mousedown.prevent @click="stepSize(-0.5)" v-html="icons.minus"></button>
-        <input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize">
-        <button class="eb-tb" @mousedown.prevent @click="stepSize(0.5)" v-html="icons.plus"></button>
+      <span class="eb-pop">
+        <button class="eb-tb text font-btn" :class="{ on: menu === 'font' }" @mousedown.prevent @click="toggleMenu('font')" :title="t('Typeface of the text')">
+          <span class="fname" :style="{ fontFamily: fontPreviewStack(fmt.family) }">{{ fmt.family || fontsInUse.body }}</span>
+          <span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'font'" @mousedown.prevent>
+          <button class="eb-menu-item" @click="setFamily(''); menu = ''">{{ t('As the paragraph style says') }}</button>
+          <div class="eb-menu-sep"></div>
+          <button v-for="r in fontRoles" :key="r.key" class="eb-menu-item" @click="setFamily(fontsInUse[r.key]); menu = ''">
+            <span :style="{ fontFamily: fontPreviewStack(fontsInUse[r.key]) }">{{ fontsInUse[r.key] }}</span>
+            <span class="k">{{ r.label }}</span>
+          </button>
+          <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="openFonts('selection')">{{ t('Another typeface…') }}</button>
+          <button class="eb-menu-item" @click="paperOpen = true; menu = ''">{{ t('The typefaces of the document…') }}</button>
+        </div>
+      </span>
+      <span class="eb-pop">
+        <span class="eb-num" :title="t('Size of the text (pt)')">
+          <button class="eb-tb" @mousedown.prevent @click="stepSize(-0.5)" v-html="icons.minus"></button>
+          <input type="number" min="4" max="200" step="0.5" :value="fmt.size"
+            @change="setSize($event.target.value)" @keydown.enter.prevent="setSize($event.target.value)">
+          <button class="eb-tb" @mousedown.prevent @click="stepSize(0.5)" v-html="icons.plus"></button>
+          <button class="eb-tb caret" :class="{ on: menu === 'size' }" @mousedown.prevent @click="toggleMenu('size')" v-html="icons.down"></button>
+        </span>
+        <div class="eb-menu sizes" v-if="menu === 'size'" @mousedown.prevent>
+          <button v-for="n in fontSizes" :key="n" class="eb-menu-item" :class="{ on: fmt.size === n }" @click="setSize(n); menu = ''">{{ n }}</button>
+          <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="setSize(''); menu = ''">{{ t('As the paragraph style says') }}</button>
+        </div>
       </span>
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.bold }" @mousedown.prevent @click="inline('bold')" :title="t('Bold') + ' (Ctrl+B)'"><span class="b">B</span></button>
@@ -2974,11 +3075,12 @@
           <div class="eb-field"><label>{{ t('Right margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.right" @change="touch"></div>
         </div>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
-          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
+          <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
+          <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
         </div>
+        <p class="eb-note">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
         <div class="eb-field">
-          <label>{{ t('Typefaces') }}</label>
+          <label>{{ t('Default typefaces') }}</label>
           <div class="font-rows">
             <button v-for="r in fontRoles" :key="r.key" class="font-row" @click="openFonts(r.key)">
               <span class="role">{{ r.label }}</span>
@@ -3253,11 +3355,11 @@
           <span class="count">{{ t('{n} families', { n: fontResults.length }) }}</span>
         </div>
         <div class="font-list">
-          <button class="font-item" :class="{ on: !doc.paper.fonts[fontRole] }" @click="chooseFont('')">
-            <span class="nm">{{ t('Default for this language') }}</span>
-            <span class="meta">{{ defaultFontName }}</span>
+          <button class="font-item" :class="{ on: fontRole === 'selection' ? !fmt.family : !doc.paper.fonts[fontRole] }" @click="chooseFont('')">
+            <span class="nm">{{ fontRole === 'selection' ? t('As the paragraph style says') : t('Default for this language') }}</span>
+            <span class="meta">{{ fontRole === 'selection' ? fontsInUse.body : defaultFontName }}</span>
           </button>
-          <button v-for="f in fontPageItems" :key="f.f" class="font-item" :class="{ on: doc.paper.fonts[fontRole] === f.f }" @click="chooseFont(f.f)">
+          <button v-for="f in fontPageItems" :key="f.f" class="font-item" :class="{ on: fontRole === 'selection' ? fmt.family === f.f : doc.paper.fonts[fontRole] === f.f }" @click="chooseFont(f.f)">
             <span class="nm" :style="{ fontFamily: fontPreviewStack(f.f) }">{{ f.f }}</span>
             <span class="meta">{{ catLabel(f.c) }} · {{ t('{n} weights', { n: f.w.length }) }}</span>
           </button>
@@ -3692,7 +3794,7 @@
         guides: true,
         colour: '#111111',
         counts: 0,
-        fmt: { block: 'P', align: '', list: '' },
+        fmt: { block: 'P', align: '', list: '', size: null, family: '' },
         toast: '',
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
@@ -3783,6 +3885,7 @@
         ];
       },
       fontRoleLabel() {
+        if (this.fontRole === 'selection') { return this.t('The text you have chosen'); }
         const r = this.fontRoles.find((x) => x.key === this.fontRole);
         return r ? r.label : '';
       },
@@ -3820,7 +3923,7 @@
         });
       },
       fontPageItems() { return this.fontResults.slice(0, this.fontPage * 24); },
-      previewFamily() { return this.doc.paper.fonts[this.fontRole] || this.defaultFontName; },
+      previewFamily() { return (this.fontRole === 'selection' ? this.fmt.family : this.doc.paper.fonts[this.fontRole]) || this.defaultFontName; },
       sampleText() {
         const samples = {
           japanese: 'あの日見た花の名前を僕達はまだ知らない。永字八法 1234567890',
@@ -3862,6 +3965,7 @@
           { cls: 'eb-al-j', icon: bars([[0, 16], [0, 16], [0, 16], [0, 16]]), label: this.t('Justify') },
         ];
       },
+      fontSizes() { return FONT_SIZES; },
       frameHandles() { return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']; },
       /** Wrapping and free placement cannot both be true: CSS has only one answer. */
       freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
@@ -4093,6 +4197,8 @@
       refreshState() {
         if (!canvas()) { return; }
         const s = activeFormats();
+        s.size = sizeAt(normalisePaper(this.doc.paper).fontSize);
+        s.family = familyAt();
         this.fmt = s;
         this.syncFrame();
         const range = getRange();
@@ -4170,6 +4276,9 @@
         return names[code] || code;
       },
       async openFonts(role) {
+        // Choosing from the list puts the canvas out of focus, so where the text was
+        // has to be remembered before the dialogue takes over.
+        if (role === 'selection') { ctxRange = getRange() ? getRange().cloneRange() : null; }
         this.fontRole = role;
         this.fontsOpen = true;
         this.menu = '';
@@ -4192,6 +4301,12 @@
         linkStylesheet('eb-font-preview', '');
       },
       chooseFont(family) {
+        if (this.fontRole === 'selection') {
+          if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+          this.setFamily(family);
+          ctxRange = getRange() ? getRange().cloneRange() : ctxRange;
+          return;
+        }
         this.doc.paper.fonts[this.fontRole] = family;
         this.applyDocFonts();
         this.touch();
@@ -4199,7 +4314,9 @@
       /** Load the families this document uses, for the editor's own canvas. */
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
-        linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono]));
+        const c = canvas();
+        const named = c ? familiesInBody(c.innerHTML) : [];
+        linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono].concat(named)));
         // Text set in the real typeface is a different height, so the pages have to
         // be laid out again once the fonts have actually loaded.
         if (document.fonts && document.fonts.ready) {
@@ -4215,9 +4332,21 @@
       },
 
       toggleMenu(key) { this.menu = this.menu === key ? '' : key; },
+      /** The toolbar's size box: the selection, or the block the caret is in. */
+      setSize(pt) {
+        if (pt === '' || pt == null) { this.run(() => styleTextOrBlock('fontSize', '')); return; }
+        const v = Number(pt);
+        if (!(v >= 4 && v <= 200)) { this.refreshState(); return; }
+        this.run(() => styleTextOrBlock('fontSize', (Math.round(v * 2) / 2) + 'pt'));
+      },
       stepSize(d) {
-        const next = Math.min(36, Math.max(6, Math.round((Number(this.doc.paper.fontSize) + d) * 2) / 2));
-        this.doc.paper.fontSize = next;
+        const now = this.fmt.size || normalisePaper(this.doc.paper).fontSize;
+        this.setSize(Math.min(200, Math.max(4, Math.round((Number(now) + d) * 2) / 2)));
+      },
+      /** The toolbar's typeface box, on the same terms. */
+      setFamily(family) {
+        this.run(() => styleTextOrBlock('fontFamily', family ? fontStack(family, 'sans') : ''));
+        this.applyDocFonts();
       },
       stepZoom(d) { this.zoomSetByHand = true; this.zoom = Math.min(200, Math.max(25, this.zoom + d)); },
       clearHighlight() { this.run(() => clearMarks()); },
@@ -5814,6 +5943,7 @@
   };
   window.__eb_frameText = frameText;
   window.__eb_restack = restack;
+  window.__eb_familiesInBody = familiesInBody;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');

@@ -189,6 +189,12 @@
   padding: var(--eb-mt) var(--eb-mr) var(--eb-mb) var(--eb-ml);
   border: 0; border-radius: 0; box-shadow: none;
   font-size: inherit; line-height: inherit;
+  /* The same server.css rule sets the typeface of every contenteditable div to
+     Nextcloud's own, and it out-specifies the document's stylesheet -- so the
+     editor was drawing the text in the interface's font while the saved file drew
+     it in the document's. The editor and the artefact have to agree, and the
+     document's own typeface is the one that is right. */
+  font-family: var(--eb-font-body, inherit);
   outline: none;
 }
 /* The margin boundaries: the rectangle the text of each page sits inside, drawn
@@ -605,3 +611,18 @@
    drop lands on the editor's own overlay instead of on the page. */
 .eb-fsel.dragging .ed, .eb-fsel.dragging .hd, .eb-fsel.dragging .bar,
 .eb-tsel.dragging .bar { pointer-events: none; }
+
+/* ---------- the size and typeface boxes ----------
+   These act on the text, the way a word processor's do, so they need a list to
+   pick from as well as a number to type in. */
+.eb-menu.sizes {
+  display: grid; grid-template-columns: repeat(4, minmax(46px, 1fr));
+  gap: 2px; min-width: 208px; padding: 6px;
+}
+#editbase-root .eb-menu.sizes .eb-menu-item { justify-content: center; padding: 6px 4px; font-variant-numeric: tabular-nums; }
+#editbase-root .eb-menu.sizes .eb-menu-item.on { background: color-mix(in srgb, var(--primary) 16%, var(--surface)); }
+.eb-menu.sizes .eb-menu-sep { grid-column: 1 / -1; }
+#editbase-root .eb-menu.sizes .eb-menu-item:last-child { grid-column: 1 / -1; justify-content: flex-start; padding-left: 10px; }
+#editbase-root .eb-menu-item .k { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+#editbase-root .eb-num .eb-tb.caret { min-width: 20px; }
+#editbase-root .eb-tb.font-btn { max-width: 190px; }
