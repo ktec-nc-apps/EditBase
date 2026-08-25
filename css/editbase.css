@@ -714,3 +714,8 @@
 #editbase-root .eb-snap { position: absolute; background: #e5484d; pointer-events: none; z-index: 7; }
 #editbase-root .eb-snap.v { top: 0; bottom: 0; width: 1px; }
 #editbase-root .eb-snap.h { left: 0; right: 0; height: 1px; }
+
+/* The little drawing beside each shape in the insert menu. */
+#editbase-root .eb-shape-icon { display: inline-flex; width: 16px; height: 16px; align-items: center; }
+#editbase-root .eb-shape-icon .sh { display: block; width: 14px; height: 11px; }
+#editbase-root .eb-menu-sep { height: 1px; margin: 4px 6px; background: currentColor; opacity: .15; }
