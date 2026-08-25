@@ -3887,7 +3887,7 @@
         <option value="PRE">{{ t('Preformatted') }}</option>
       </select>
       <button class="eb-tb" @mousedown.prevent @click="openStyles()" :title="t('Change this style everywhere…')"><span v-html="icons.props"></span></button>
-      <span class="eb-pop">
+      <span class="eb-pop wide-ctl">
         <button class="eb-tb text font-btn" :class="{ on: menu === 'font' }" @mousedown.prevent @click="toggleMenu('font')" :title="t('Typeface of the text')">
           <span class="fname" :style="{ fontFamily: fontPreviewStack(fmt.family) }">{{ fmt.family || fontsInUse.body }}</span>
           <span class="caret" v-html="icons.down"></span>
@@ -3904,7 +3904,7 @@
           <button class="eb-menu-item" @click="paperOpen = true; menu = ''">{{ t('The typefaces of the document…') }}</button>
         </div>
       </span>
-      <span class="eb-pop">
+      <span class="eb-pop wide-ctl">
         <span class="eb-num" :title="t('Size of the text (pt)')">
           <button class="eb-tb" @mousedown.prevent @click="stepSize(-0.5)" v-html="icons.minus"></button>
           <input type="number" min="4" max="200" step="0.5" :value="fmt.size"

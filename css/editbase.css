@@ -290,7 +290,9 @@
   .eb-toolbar .sep { align-self: center; height: 22px; }
   /* Put the buttons a thumb reaches for first, and push the wide controls --
      the paragraph style, the typeface and the zoom -- to the end of the strip. */
-  .eb-toolbar .tb-style, #editbase-root .eb-toolbar .font-btn, .eb-toolbar .eb-num { order: 5; }
+  /* The wide controls are wrapped in their own span now, and it is the span that
+     the toolbar lays out, so the order has to go on the wrapper. */
+  .eb-toolbar .tb-style, .eb-toolbar .eb-pop.wide-ctl, .eb-toolbar .eb-num { order: 5; }
   .eb-toolbar .tb-style { min-width: 92px; }
   #editbase-root .eb-toolbar .font-btn { max-width: 150px; }
 }
