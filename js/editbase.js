@@ -762,7 +762,6 @@
   // selection if there is one. It is a Range, not Vue state, for the same reason.
   let textRange = null;
   let textBox = null;
-  let textDrag = null;
   // When the menu opened, so that the tap that opened it cannot also close it.
   let ctxAt = 0;
   function canvas() { return canvasEl; }
@@ -3985,23 +3984,15 @@
         <div id="eb-canvas" class="eb-paper eb-doc" :class="numberClass"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
-        <div class="eb-tcaret" v-if="tsel.caret" :style="{ left: tsel.caret.x + 'px', top: tsel.caret.y + 'px', height: tsel.caret.h + 'px' }"></div>
-        <!-- text is an object too: the box is round the 文節 the caret is in, or
-             round whatever is selected -->
-        <div class="eb-tsel" v-if="tsel.on" :class="{ dragging: frame.dragging }">
+        <!-- Text is an object too, and this is the box round the 文節 the caret is
+             standing in, or round whatever is selected. It is a marker and nothing
+             more: it takes no pointer and carries no bar, because anything floating
+             over the line above would cover the words there and slide across the
+             page every time the paragraph is aligned. What can be done to a phrase
+             is on the right button, under its own heading. -->
+        <div class="eb-tsel" v-if="tsel.on">
           <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
             :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
-          <div class="grip" :style="{ left: tsel.x + 'px', top: tsel.y + 'px', width: tsel.w + 'px', height: tsel.h + 'px' }">
-            <div class="bar" v-if="tsel.bar && !frame.on" :class="{ below: tsel.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
-              <button class="eb-tb hold" @pointerdown.prevent.stop="textGrab($event)" :title="t('Drag this to move the words')"><span v-html="icons.grip"></span></button>
-              <span class="nm">{{ t('Phrase') }}</span>
-              <button class="eb-tb" @click="textCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-              <button class="eb-tb" @click="textCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
-              <button class="eb-tb" @click="textCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
-              <button class="eb-tb" @click="textCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
-              <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
-            </div>
-          </div>
         </div>
         <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging }" :style="{ left: frame.x + 'px', top: frame.y + 'px', width: frame.w + 'px', height: frame.h + 'px' }">
           <div class="box"></div>
@@ -5069,7 +5060,7 @@
         crop: { ratio: '', x: 50, y: 50 },
         cellBorderOpen: false,
         cellBorder: { style: 'solid', sides: 'all', width: 0.75, colour: '#666666' },
-        tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [], bar: false, caret: null },
+        tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [] },
         fpropsOpen: false,
         fpropsRange: null,
         fprops: {
@@ -6154,10 +6145,6 @@
           if (on !== this.frame.bar) { this.frame.bar = on; }
           return;
         }
-        if (this.tsel.on) {
-          const on = near(textBox);
-          if (on !== this.tsel.bar) { this.tsel.bar = on; }
-        }
       },
       /**
        * Text is an object as well. The box goes round whatever is selected, or --
@@ -6168,7 +6155,7 @@
         textRange = null;
         const c = canvas();
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
-        if (!c || !wrap || !this.doc.id || textDrag) { this.tsel.on = false; return; }
+        if (!c || !wrap || !this.doc.id) { this.tsel.on = false; return; }
         const sel = getRange();
         if (!sel || !inCanvas(sel.startContainer)) { this.tsel.on = false; return; }
         const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
@@ -6193,66 +6180,6 @@
         this.tsel.w = right - left;
         this.tsel.h = bottom - top;
         this.tsel.on = true;
-        if (this.coarse) { this.tsel.bar = true; }
-      },
-      /** Dragging the box round a run of text moves the words, not a copy of them. */
-      textGrab(e) {
-        if (!textRange) { return; }
-        this.frame.dragging = true;
-        history.push(true);
-        textDrag = { x0: e.clientX, y0: e.clientY, range: textRange.cloneRange(), moved: false, point: null };
-        const move = (ev) => this.textDragMove(ev);
-        const up = (ev) => {
-          window.removeEventListener('pointermove', move);
-          window.removeEventListener('pointerup', up);
-          window.removeEventListener('pointercancel', up);
-          this.textDragEnd(ev);
-        };
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', up);
-        window.addEventListener('pointercancel', up);
-      },
-      textDragMove(e) {
-        const d = textDrag;
-        if (!d) { return; }
-        if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 3) { d.moved = true; }
-        if (!d.moved) { return; }
-        const point = caretFromPoint(e.clientX, e.clientY);
-        if (!point || !inCanvas(point.startContainer) || pointInsideRange(d.range, point)) {
-          d.point = null;
-          this.tsel.caret = null;
-          return;
-        }
-        d.point = point;
-        const wrap = this.$el.querySelector('.eb-paperwrap');
-        const b = wrap.getBoundingClientRect();
-        const z = this.frameZoom() || 1;
-        const probe = point.cloneRange();
-        const rects = probe.getClientRects();
-        let r = rects.length ? rects[0] : null;
-        if (!r && point.startContainer.nodeType === 1) { r = point.startContainer.getBoundingClientRect(); }
-        if (!r) {
-          probe.selectNodeContents(point.startContainer.nodeType === 3 ? point.startContainer.parentNode : point.startContainer);
-          r = probe.getBoundingClientRect();
-        }
-        this.tsel.caret = { x: (r.left - b.left) / z, y: (r.top - b.top) / z, h: (r.height || 16) / z };
-      },
-      textDragEnd() {
-        const d = textDrag;
-        textDrag = null;
-        this.frame.dragging = false;
-        this.tsel.caret = null;
-        if (!d || !d.moved || !d.point) { this.$nextTick(() => this.syncFrame()); return; }
-        const point = d.point;
-        const frag = d.range.extractContents();
-        if (!frag || !frag.firstChild) { this.$nextTick(() => this.syncFrame()); return; }
-        try {
-          selectRange(point);
-          insertFragmentAt(frag);
-        } catch (err) {
-          this.notify(this.t('There is nowhere to drop that.'));
-        }
-        this.settleFrame();
       },
       /** Any of these turns the run of text into a frame, and then acts on it. */
       promoteText() {
@@ -6290,8 +6217,6 @@
         this.frame.bar = false;
         this.frame.drop = -1;
         this.tsel.on = false;
-        this.tsel.bar = false;
-        this.tsel.caret = null;
         textRange = null;
       },
       /** Take hold of the border to move it, or of a handle to size it. */

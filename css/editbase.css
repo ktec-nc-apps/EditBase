@@ -572,45 +572,23 @@
 /* ---------- the bounding box round a run of words ----------
    Text is an object too. The box goes round the 文節 the caret is in -- or round
    the selection -- and is drawn lighter than a frame's, because it is there all
-   the time while writing and must not shout. Only its border band takes the
-   pointer, so typing inside it is unaffected. */
+   the time while writing and must not shout. It is a marker and nothing more: it
+   takes no pointer and carries no bar, so it can never cover a word or move
+   anything about. What can be done to a phrase is on the right button. */
 .eb-tsel { position: absolute; inset: 0; pointer-events: none; z-index: 18; }
 .eb-tsel .tbox {
   position: absolute;
   border: 1px dashed color-mix(in srgb, var(--primary) 45%, transparent);
   border-radius: 2px;
 }
-/* Nothing about this box takes the pointer. A frame's border can be a handle
-   because a frame has a border of its own; a phrase's does not -- it is drawn
-   over ordinary words, and a band there would swallow every click meant for the
-   caret and move a word or two instead. The handle is in the bar. */
-.eb-tsel .grip { position: absolute; pointer-events: none; }
-#editbase-root .eb-tsel .bar .hold { cursor: move; touch-action: none; color: var(--muted); }
-#editbase-root .eb-tsel .bar .hold:hover { color: var(--text); }
-.eb-tsel .bar {
-  position: absolute; left: -1px; bottom: 100%; margin-bottom: 8px;
-  display: flex; align-items: center; gap: 2px; white-space: nowrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-  padding: 3px; box-shadow: var(--shadow); pointer-events: auto;
-}
-.eb-tsel .bar.below { bottom: auto; top: 100%; margin: 8px 0 0; }
-.eb-tsel .bar .nm { font-size: 12px; color: var(--muted); padding: 0 6px; }
-#editbase-root .eb-tsel .bar .eb-tb { height: 26px; min-width: 26px; }
-/* Where the words will land when the box round them is let go of. */
-.eb-tcaret { position: absolute; width: 2px; background: var(--primary); z-index: 21; pointer-events: none; }
-
-@media (hover: none) {
-  #editbase-root .eb-tsel .bar .eb-tb { height: 32px; min-width: 32px; }
-}
 
 @media print {
-  .eb-tsel, .eb-tcaret { display: none !important; }
+  .eb-tsel { display: none !important; }
 }
 
 /* A box that is being dragged must not answer for what is underneath it, or the
    drop lands on the editor's own overlay instead of on the page. */
-.eb-fsel.dragging .ed, .eb-fsel.dragging .hd, .eb-fsel.dragging .bar,
-.eb-tsel.dragging .bar { pointer-events: none; }
+.eb-fsel.dragging .ed, .eb-fsel.dragging .hd, .eb-fsel.dragging .bar { pointer-events: none; }
 
 /* ---------- the size and typeface boxes ----------
    These act on the text, the way a word processor's do, so they need a list to
