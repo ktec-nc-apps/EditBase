@@ -347,11 +347,15 @@
 }
 .eb-doc .eb-frame > *:first-child { margin-top: 0; }
 .eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
+/* A run of words made into a frame: a box, but not a box that shows until it is
+   told to. It is inline-block so it can be given a size, floated or placed. */
+.eb-doc span.eb-frame { display: inline-block; border: 0; padding: 0; margin: 0; }
 /* An object placed by hand is parked in a zero-height anchor left at the point in
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
    paragraph goes wherever that paragraph goes. */
-.eb-doc .eb-anchor { position: relative; height: 0; margin: 0; }
+.eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; }
+.eb-doc span.eb-anchor { position: relative; display: inline; }
 .eb-doc .eb-anchor > * { position: absolute; margin: 0; }
 /* Browsers leave background colours out of a printout unless the page insists. */
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -547,6 +551,11 @@
   let framePinned = false;
   let frameDrag = null;
   let frameBox = null;
+  // The run of text the box is round when no object is selected: a 文節, or the
+  // selection if there is one. It is a Range, not Vue state, for the same reason.
+  let textRange = null;
+  let textBox = null;
+  let textDrag = null;
   // When the menu opened, so that the tap that opened it cannot also close it.
   let ctxAt = 0;
   function canvas() { return canvasEl; }
@@ -1633,7 +1642,9 @@
   // is one: a picture, a table, a callout, a formula, a contents list, a text frame.
   // A frame here is not a new kind of markup -- it is the object itself wearing
   // inline CSS -- so the file stays plain HTML and any browser lays it out the same.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, hr';
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, hr';
+  /** Elements that may hold blocks of their own, so a frame can be dropped into them. */
+  const BLOCK_HOSTS = 'aside.eb-box, div.eb-frame, div.eb-note, blockquote, li, td, th';
   const BORDER_STYLES = ['none', 'solid', 'dashed', 'dotted', 'double'];
   /** One CSS pixel in millimetres: the whole app measures paper, not screens. */
   const MM = 25.4 / 96;
@@ -1649,8 +1660,91 @@
     return null;
   }
   /** Free means: taken out of the flow and parked in an anchor of its own. */
+  // A 文節 is the unit a reader of Japanese actually sees: one 自立語 with whatever
+  // 付属語 cling to it. A morphological analyser would do this properly, but the
+  // script itself gives most of the answer -- 自立語 start with kanji, katakana or
+  // latin, and the hiragana after them belong to the word in front. For text in a
+  // latin script the unit is the word.
+  function charClass(ch) {
+    if (!ch) { return 'end'; }
+    if (/\s|　/.test(ch)) { return 'space'; }
+    if (/[、。，．！？；：)）」』】〉》\]}]/.test(ch)) { return 'close'; }
+    if (/[(（「『【〈《\[{]/.test(ch)) { return 'open'; }
+    if (/[ぁ-ゟー]/.test(ch)) { return 'kana'; }
+    if (/[゠-ヿ]/.test(ch)) { return 'kata'; }
+    if (/[一-鿿々]/.test(ch)) { return 'kanji'; }
+    if (/[0-9０-９]/.test(ch)) { return 'digit'; }
+    if (/[A-Za-zÀ-ÿ]/.test(ch)) { return 'latin'; }
+    return 'other';
+  }
+  // The words the script cannot mark out: 自立語 written in kana. Breaking before
+  // one of these is only right after a kana that can end a 用言 or a 助詞 -- without
+  // that guard 「まことに」 would be cut in the middle of a word.
+  const KANA_WORDS = /^(こと|もの|ため|とき|ところ|わけ|はず|つもり|よう|ほう|すべて|ほとんど|かなり|とても|もっと|すぐ|まだ|もう|ぜひ|とくに|つねに|また|さらに|しかし|そして|ただし|および|または|なお|つまり|たとえば|なぜなら)/;
+  const KANA_TAIL = /[るたいなのてではがをにともかられりんうすずけ]/;
+
+  /** May a 文節 break between s[i-1] and s[i]? */
+  function bunsetsuBreak(s, i) {
+    if (i <= 0 || i >= s.length) { return false; }
+    const before = charClass(s[i - 1]);
+    const here = charClass(s[i]);
+    if (before === 'kana' && here === 'kana' && KANA_TAIL.test(s[i - 1]) && KANA_WORDS.test(s.slice(i))) { return true; }
+    if (before === 'space') { return true; }
+    if (here === 'space') { return false; }
+    // Punctuation that closes a phrase stays with it; one that opens starts a new one.
+    if (here === 'close') { return false; }
+    if (before === 'close') { return true; }
+    if (here === 'open') { return true; }
+    if (before === 'open') { return false; }
+    if (before === here) { return false; }
+    // A 自立語 starts a new 文節; the kana that follow do not.
+    if (here === 'kana') { return false; }
+    if (before === 'kanji' && here === 'kata') { return true; }
+    if (before === 'kata' && here === 'kanji') { return true; }
+    if (before === 'kana') { return true; }
+    if ((before === 'latin' || before === 'digit') && (here === 'latin' || here === 'digit')) { return false; }
+    return true;
+  }
+  /** The 文節 the caret is in, as a Range over the one text node it lives in. */
+  function bunsetsuAt(node, offset) {
+    if (!node || node.nodeType !== 3) { return null; }
+    const s = node.data;
+    if (!s || !s.trim()) { return null; }
+    let at = Math.max(0, Math.min(offset, s.length));
+    // A caret sitting on a break belongs to the 文節 in front of it.
+    if (at >= s.length) { at = s.length - 1; }
+    let from = at;
+    while (from > 0 && !bunsetsuBreak(s, from)) { from--; }
+    let to = at + 1;
+    while (to < s.length && !bunsetsuBreak(s, to)) { to++; }
+    while (from < to && charClass(s[from]) === 'space') { from++; }
+    while (to > from && charClass(s[to - 1]) === 'space') { to--; }
+    if (to <= from) { return null; }
+    const r = document.createRange();
+    r.setStart(node, from);
+    r.setEnd(node, to);
+    return r;
+  }
+  /**
+   * Make the text a frame of its own, so everything a frame can do it can do too.
+   * Inline, because a run of words inside a sentence is not a block.
+   */
+  function frameText(range) {
+    if (!range || range.collapsed) { return null; }
+    const span = document.createElement('span');
+    span.className = 'eb-frame';
+    try {
+      span.appendChild(range.extractContents());
+    } catch (e) {
+      return null;
+    }
+    range.insertNode(span);
+    return span;
+  }
+
   function objectKind(el) {
     if (!el) { return ''; }
+    if (el.nodeName === 'SPAN' && el.classList.contains('eb-frame')) { return 'TEXT'; }
     if (el.classList && el.classList.contains('eb-frame')) { return 'FRAME'; }
     if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
     if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
@@ -1663,7 +1757,9 @@
   function setObjectFree(el, free) {
     if (!el || free === objectFree(el)) { return; }
     if (free) {
-      const anchor = document.createElement('div');
+      // A block frame is parked between two blocks; a run of text is parked where it
+      // stood in the line, so the anchor has to be of the same kind as the frame.
+      const anchor = document.createElement(el.nodeName === 'SPAN' ? 'span' : 'div');
       anchor.className = 'eb-anchor';
       el.parentNode.insertBefore(anchor, el);
       anchor.appendChild(el);
@@ -1705,6 +1801,31 @@
     return box;
   }
 
+  /**
+   * Freely placed frames overlap, so they need an order to overlap in. Rather than
+   * let numbers drift apart, the whole stack is renumbered 1..n every time, and the
+   * one being moved is put where it was asked for.
+   */
+  function stackedFrames() {
+    const c = canvas();
+    return c ? Array.from(c.querySelectorAll('.eb-anchor > *')) : [];
+  }
+  function restack(el, where) {
+    const list = stackedFrames();
+    if (list.length < 2 || list.indexOf(el) < 0) {
+      if (el && list.indexOf(el) >= 0) { el.style.zIndex = '1'; }
+      return;
+    }
+    const order = list.map((n, i) => ({ n, z: Number(n.style.zIndex) || 0, i }));
+    order.sort((a, b) => (a.z - b.z) || (a.i - b.i));
+    const from = order.findIndex((x) => x.n === el);
+    let to = from;
+    if (where === 'front') { to = order.length - 1; } else if (where === 'back') { to = 0; } else { to = Math.max(0, Math.min(order.length - 1, from + where)); }
+    const moved = order.splice(from, 1)[0];
+    order.splice(to, 0, moved);
+    order.forEach((x, k) => { x.n.style.zIndex = String(k + 1); });
+  }
+
   function unitOf(value, unit) {
     const m = /^(-?[\d.]+)([a-z%]*)$/.exec(String(value == null ? '' : value).trim());
     return m && m[2] === unit ? Number(m[1]) : '';
@@ -1716,10 +1837,13 @@
   function objectProps(el) {
     if (!el) { return null; }
     const s = el.style;
+    const flt = s.cssFloat || s.float || '';
     let place = '';
-    if (objectFree(el)) { place = 'free'; } else if (s.cssFloat === 'left' || s.float === 'left') { place = 'float-left'; } else if (s.cssFloat === 'right' || s.float === 'right') { place = 'float-right'; } else if (s.marginLeft === 'auto' && s.marginRight === 'auto') { place = 'center'; } else if (s.marginLeft === 'auto') { place = 'right'; } else if (s.marginRight === 'auto') { place = 'left'; }
+    if (objectFree(el)) { place = 'free'; } else if (s.marginLeft === 'auto' && s.marginRight === 'auto') { place = 'center'; } else if (s.marginLeft === 'auto') { place = 'right'; } else if (s.marginRight === 'auto') { place = 'left'; }
     return {
       place,
+      wrap: (flt === 'left' || flt === 'right') ? flt : '',
+      z: Number(s.zIndex) || '',
       x: mmOf(s.left), y: mmOf(s.top),
       width: mmOf(s.width), height: mmOf(s.minHeight) === '' ? mmOf(s.height) : mmOf(s.minHeight),
       mt: mmOf(s.marginTop), mb: mmOf(s.marginBottom),
@@ -1738,14 +1862,18 @@
   const FRAME_PROPS = ['left', 'top', 'float', 'width', 'max-width', 'height', 'min-height',
     'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
     'padding-top', 'padding-bottom', 'padding-left', 'padding-right',
-    'border', 'border-radius', 'background-color', 'break-inside'];
+    'border', 'border-radius', 'background-color', 'break-inside', 'z-index'];
 
   /** Write the dialogue back on to the element, as CSS the file carries with it. */
   function setObjectProps(el, v) {
     if (!el) { return; }
     const s = el.style;
     const num = (x) => (x === '' || x == null || isNaN(Number(x)) ? null : Number(x));
-    setObjectFree(el, v.place === 'free');
+    // Wrapping and free placement are two answers to the same question, and CSS can
+    // only give one: a floated box is in the flow and the text goes round it, an
+    // absolutely placed one is out of the flow and the text goes under it.
+    const wrap = (v.wrap === 'left' || v.wrap === 'right') ? v.wrap : '';
+    setObjectFree(el, !wrap && v.place === 'free');
     FRAME_PROPS.forEach((p) => s.removeProperty(p));
     const w = num(v.width);
     if (w) { s.width = w + 'mm'; s.maxWidth = 'none'; }
@@ -1754,15 +1882,19 @@
     const mt = num(v.mt); const mb = num(v.mb); const ml = num(v.ml); const mr = num(v.mr);
     if (mt != null) { s.marginTop = mt + 'mm'; }
     if (mb != null) { s.marginBottom = mb + 'mm'; }
-    if (v.place === 'free') {
+    if (wrap) {
+      s.cssFloat = wrap;
+      if (wrap === 'left') {
+        s.marginRight = (mr == null ? 6 : mr) + 'mm';
+        if (ml != null) { s.marginLeft = ml + 'mm'; }
+      } else {
+        s.marginLeft = (ml == null ? 6 : ml) + 'mm';
+        if (mr != null) { s.marginRight = mr + 'mm'; }
+      }
+    } else if (v.place === 'free') {
       s.left = (num(v.x) || 0) + 'mm';
       s.top = (num(v.y) || 0) + 'mm';
-    } else if (v.place === 'float-left') {
-      s.cssFloat = 'left'; s.marginRight = (mr == null ? 6 : mr) + 'mm';
-      if (ml != null) { s.marginLeft = ml + 'mm'; }
-    } else if (v.place === 'float-right') {
-      s.cssFloat = 'right'; s.marginLeft = (ml == null ? 6 : ml) + 'mm';
-      if (mr != null) { s.marginRight = mr + 'mm'; }
+      if (num(v.z)) { s.zIndex = String(num(v.z)); }
     } else if (v.place === 'center') {
       s.marginLeft = 'auto'; s.marginRight = 'auto';
     } else if (v.place === 'left') {
@@ -2766,7 +2898,26 @@
         <div id="eb-canvas" class="eb-paper eb-doc"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
-        <div class="eb-fsel" v-if="frame.on" :style="{ left: frame.x + 'px', top: frame.y + 'px', width: frame.w + 'px', height: frame.h + 'px' }">
+        <div class="eb-tcaret" v-if="tsel.caret" :style="{ left: tsel.caret.x + 'px', top: tsel.caret.y + 'px', height: tsel.caret.h + 'px' }"></div>
+        <!-- text is an object too: the box is round the 文節 the caret is in, or
+             round whatever is selected -->
+        <div class="eb-tsel" v-if="tsel.on" :class="{ dragging: frame.dragging }">
+          <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
+            :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
+          <div class="grip" :style="{ left: tsel.x + 'px', top: tsel.y + 'px', width: tsel.w + 'px', height: tsel.h + 'px' }">
+            <div v-for="e in ['t','r','b','l']" :key="'te' + e" class="ed" :class="e"
+              @pointerdown.prevent="textGrab($event)" @contextmenu.prevent.stop="openFrameProps"></div>
+            <div class="bar" v-if="tsel.bar && !frame.on" :class="{ below: tsel.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
+              <span class="nm">{{ t('Phrase') }}</span>
+              <button class="eb-tb" @click="textCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
+              <button class="eb-tb" @click="textCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
+              <button class="eb-tb" @click="textCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
+              <button class="eb-tb" @click="textCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+              <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
+            </div>
+          </div>
+        </div>
+        <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging }" :style="{ left: frame.x + 'px', top: frame.y + 'px', width: frame.w + 'px', height: frame.h + 'px' }">
           <div class="box"></div>
           <div v-for="e in ['t','r','b','l']" :key="'e' + e" class="ed" :class="e"
             @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="openFrameProps"></div>
@@ -3189,15 +3340,31 @@
               <option value="left">{{ t('In the flow, at the left') }}</option>
               <option value="center">{{ t('In the flow, centred') }}</option>
               <option value="right">{{ t('In the flow, at the right') }}</option>
-              <option value="float-left">{{ t('Text wraps on the right') }}</option>
-              <option value="float-right">{{ t('Text wraps on the left') }}</option>
               <option value="free">{{ t('Placed freely') }}</option>
             </select>
           </div>
-          <div class="eb-field" v-if="fprops.place === 'free'"><label>{{ t('From the left (mm)') }}</label><input type="number" step="1" v-model="fprops.x"></div>
-          <div class="eb-field" v-if="fprops.place === 'free'"><label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y"></div>
+          <div class="eb-field">
+            <label>{{ t('Text wrap') }}</label>
+            <select v-model="fprops.wrap">
+              <option value="">{{ t('None') }}</option>
+              <option value="left">{{ t('Text wraps on the right') }}</option>
+              <option value="right">{{ t('Text wraps on the left') }}</option>
+            </select>
+          </div>
         </div>
-        <p class="eb-note" v-if="fprops.place === 'free'">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed.') }}</p>
+        <div class="eb-row" v-if="freePlacement">
+          <div class="eb-field"><label>{{ t('From the left (mm)') }}</label><input type="number" step="1" v-model="fprops.x"></div>
+          <div class="eb-field"><label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y"></div>
+          <div class="eb-field">
+            <label>{{ t('Overlapping') }}</label>
+            <div class="colour-pair">
+              <button class="eb-btn ghost" @click="stackFromProps('front')">{{ t('Bring to front') }}</button>
+              <button class="eb-btn ghost" @click="stackFromProps('back')">{{ t('Send to back') }}</button>
+            </div>
+          </div>
+        </div>
+        <p class="eb-note" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
+        <p class="eb-note" v-else-if="fprops.wrap">{{ t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.') }}</p>
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')"></div>
           <div class="eb-field"><label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')"></div>
@@ -3357,10 +3524,10 @@
       </div>
     </template>
 
-    <template v-if="ctx.frame">
+    <template v-if="ctx.frame || ctx.text">
       <div class="sep"></div>
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Frame') }}</span><span class="s">›</span>
+        <span>{{ ctx.frame ? t('Frame') : t('This phrase') }}</span><span class="s">›</span>
         <div class="fly">
           <button class="ci" @click="ctxDo('frameProps')">{{ t('Frame properties…') }}</button>
           <div class="sep"></div>
@@ -3369,7 +3536,10 @@
           <button class="ci" @click="ctxDo('frameWrap','left')">{{ t('Wrap text on the right') }}</button>
           <button class="ci" @click="ctxDo('frameWrap','right')">{{ t('Wrap text on the left') }}</button>
           <div class="sep"></div>
-          <button class="ci" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
+          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
+          <div class="sep"></div>
+          <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
         </div>
       </div>
     </template>
@@ -3526,10 +3696,12 @@
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, sourceOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, free: false, drop: -1, kind: '', bar: false, dragging: false },
         coarse: false,
+        tsel: { on: false, x: 0, y: 0, w: 0, h: 0, boxes: [], bar: false, caret: null },
         fpropsOpen: false,
+        fpropsRange: null,
         fprops: {
           place: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', shadow: false, keep: false,
@@ -3685,13 +3857,15 @@
         ];
       },
       frameHandles() { return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']; },
+      /** Wrapping and free placement cannot both be true: CSS has only one answer. */
+      freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
       /** What the frame is, in the writer's words, for the bar and the dialogue. */
       frameLabel() {
         const kind = this.frame.kind;
         const names = {
           FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
-          NOTE: this.t('Note'), FRAME: this.t('Frame'),
+          NOTE: this.t('Note'), FRAME: this.t('Frame'), TEXT: this.t('Phrase'),
         };
         return names[kind] || this.t('Frame');
       },
@@ -4432,14 +4606,14 @@
           if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
         }
         const el = frameEl;
-        if (!el) { this.frame.on = false; return; }
+        if (!el) { this.frame.on = false; this.syncText(); return; }
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
         if (!wrap || !el.getBoundingClientRect) { this.frame.on = false; return; }
         const z = this.frameZoom() || 1;
         const a = el.getBoundingClientRect();
         const b = wrap.getBoundingClientRect();
         // No layout to measure (a document not yet shown, or the test harness).
-        if (!a.width && !a.height) { this.frame.on = false; return; }
+        if (!a.width && !a.height) { this.frame.on = false; this.syncText(); return; }
         this.frame.x = (a.left - b.left) / z;
         this.frame.y = (a.top - b.top) / z;
         this.frame.w = a.width / z;
@@ -4449,6 +4623,7 @@
         this.frame.on = true;
         frameBox = a;
         if (this.coarse) { this.frame.bar = true; }
+        this.syncText();
       },
       /**
        * The little bar would sit over the line above the frame and hide it, so it
@@ -4456,13 +4631,130 @@
        * wanted. A finger has no hover, so on a touch screen it simply stays out.
        */
       frameHover(e) {
-        if (!this.frame.on || this.coarse) { return; }
-        if (frameDrag) { this.frame.bar = true; return; }
-        const r = frameBox;
-        if (!r) { return; }
-        const near = e.clientX > r.left - 40 && e.clientX < r.right + 40
+        if (this.coarse) { return; }
+        const near = (r) => !!r && e.clientX > r.left - 40 && e.clientX < r.right + 40
           && e.clientY > r.top - 52 && e.clientY < r.bottom + 40;
-        if (near !== this.frame.bar) { this.frame.bar = near; }
+        if (this.frame.on) {
+          const on = frameDrag ? true : near(frameBox);
+          if (on !== this.frame.bar) { this.frame.bar = on; }
+          return;
+        }
+        if (this.tsel.on) {
+          const on = near(textBox);
+          if (on !== this.tsel.bar) { this.tsel.bar = on; }
+        }
+      },
+      /**
+       * Text is an object as well. The box goes round whatever is selected, or --
+       * when nothing is -- round the 文節 the caret is standing in, which is the
+       * unit a reader of Japanese sees and the unit worth moving about.
+       */
+      syncText() {
+        textRange = null;
+        const c = canvas();
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!c || !wrap || !this.doc.id || textDrag) { this.tsel.on = false; return; }
+        const sel = getRange();
+        if (!sel || !inCanvas(sel.startContainer)) { this.tsel.on = false; return; }
+        const range = sel.collapsed ? bunsetsuAt(sel.startContainer, sel.startOffset) : sel.cloneRange();
+        if (!range || range.collapsed) { this.tsel.on = false; return; }
+        // No layout to measure (a document not yet shown, or the test harness).
+        if (typeof range.getClientRects !== 'function') { this.tsel.on = false; return; }
+        const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+        if (!rects.length) { this.tsel.on = false; return; }
+        const z = this.frameZoom() || 1;
+        const b = wrap.getBoundingClientRect();
+        const boxes = rects.map((r) => ({ x: (r.left - b.left) / z, y: (r.top - b.top) / z, w: r.width / z, h: r.height / z }));
+        const left = Math.min.apply(null, boxes.map((r) => r.x));
+        const top = Math.min.apply(null, boxes.map((r) => r.y));
+        const right = Math.max.apply(null, boxes.map((r) => r.x + r.w));
+        const bottom = Math.max.apply(null, boxes.map((r) => r.y + r.h));
+        textRange = range;
+        textBox = { left: Math.min.apply(null, rects.map((r) => r.left)), right: Math.max.apply(null, rects.map((r) => r.right)),
+          top: Math.min.apply(null, rects.map((r) => r.top)), bottom: Math.max.apply(null, rects.map((r) => r.bottom)) };
+        this.tsel.boxes = boxes;
+        this.tsel.x = left;
+        this.tsel.y = top;
+        this.tsel.w = right - left;
+        this.tsel.h = bottom - top;
+        this.tsel.on = true;
+        if (this.coarse) { this.tsel.bar = true; }
+      },
+      /** Dragging the box round a run of text moves the words, not a copy of them. */
+      textGrab(e) {
+        if (!textRange) { return; }
+        this.frame.dragging = true;
+        history.push(true);
+        textDrag = { x0: e.clientX, y0: e.clientY, range: textRange.cloneRange(), moved: false, point: null };
+        const move = (ev) => this.textDragMove(ev);
+        const up = (ev) => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          window.removeEventListener('pointercancel', up);
+          this.textDragEnd(ev);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+      },
+      textDragMove(e) {
+        const d = textDrag;
+        if (!d) { return; }
+        if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 3) { d.moved = true; }
+        if (!d.moved) { return; }
+        const point = caretFromPoint(e.clientX, e.clientY);
+        if (!point || !inCanvas(point.startContainer) || pointInsideRange(d.range, point)) {
+          d.point = null;
+          this.tsel.caret = null;
+          return;
+        }
+        d.point = point;
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        const b = wrap.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const probe = point.cloneRange();
+        const rects = probe.getClientRects();
+        let r = rects.length ? rects[0] : null;
+        if (!r && point.startContainer.nodeType === 1) { r = point.startContainer.getBoundingClientRect(); }
+        if (!r) {
+          probe.selectNodeContents(point.startContainer.nodeType === 3 ? point.startContainer.parentNode : point.startContainer);
+          r = probe.getBoundingClientRect();
+        }
+        this.tsel.caret = { x: (r.left - b.left) / z, y: (r.top - b.top) / z, h: (r.height || 16) / z };
+      },
+      textDragEnd() {
+        const d = textDrag;
+        textDrag = null;
+        this.frame.dragging = false;
+        this.tsel.caret = null;
+        if (!d || !d.moved || !d.point) { this.$nextTick(() => this.syncFrame()); return; }
+        const point = d.point;
+        const frag = d.range.extractContents();
+        if (!frag || !frag.firstChild) { this.$nextTick(() => this.syncFrame()); return; }
+        try {
+          selectRange(point);
+          insertFragmentAt(frag);
+        } catch (err) {
+          this.notify(this.t('There is nowhere to drop that.'));
+        }
+        this.settleFrame();
+      },
+      /** Any of these turns the run of text into a frame, and then acts on it. */
+      promoteText() {
+        if (frameEl) { return frameEl; }
+        if (!textRange) { return null; }
+        history.push(true);
+        const span = frameText(textRange);
+        if (!span) { return null; }
+        frameEl = span;
+        framePinned = true;
+        textRange = null;
+        this.tsel.on = false;
+        return span;
+      },
+      textCmd(kind, arg) {
+        if (!this.promoteText()) { return; }
+        this.frameCmd(kind, arg);
       },
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
@@ -4482,11 +4774,18 @@
         this.frame.on = false;
         this.frame.bar = false;
         this.frame.drop = -1;
+        this.tsel.on = false;
+        this.tsel.bar = false;
+        this.tsel.caret = null;
+        textRange = null;
       },
       /** Take hold of the border to move it, or of a handle to size it. */
       frameGrab(e, mode) {
         if (!frameEl) { return; }
         framePinned = true;
+        // While the pointer is down the box must not answer for what is under it,
+        // or the drop lands on the editor's own overlay rather than on the page.
+        this.frame.dragging = true;
         const props = objectProps(frameEl) || {};
         history.push(true);
         frameDrag = {
@@ -4549,13 +4848,17 @@
         const d = frameDrag;
         if (!c || !d || !frameEl) { return; }
         const host = objectFree(frameEl) ? frameEl.parentNode : frameEl;
+        // The innermost block under the pointer wins, so a formula can be put back
+        // inside the box it came out of rather than landing in front of it.
         let node = document.elementFromPoint(e.clientX, e.clientY);
         let block = null;
-        while (node && node !== c) {
-          if (node.parentNode === c) { block = node; break; }
-          node = node.parentNode;
+        while (node && node !== c && node.nodeType === 1) {
+          const parent = node.parentNode;
+          const hosts = parent === c || (parent && parent.nodeType === 1 && parent.matches && parent.matches(BLOCK_HOSTS));
+          if (hosts && isBlock(node)) { block = node; break; }
+          node = parent;
         }
-        if (!block || block === host || block.classList.contains('eb-pagespacer')) {
+        if (!block || block === host || host.contains(block) || block.classList.contains('eb-pagespacer')) {
           d.ref = null;
           this.frame.drop = -1;
           return;
@@ -4571,6 +4874,7 @@
       frameDragEnd() {
         const d = frameDrag;
         frameDrag = null;
+        this.frame.dragging = false;
         this.frame.drop = -1;
         if (!d || !frameEl) { return; }
         if (!d.moved) { return; }
@@ -4610,9 +4914,20 @@
           if (arg) {
             el.style.cssFloat = arg;
             el.style[arg === 'left' ? 'marginRight' : 'marginLeft'] = '6mm';
-            if (!el.style.width) { el.style.width = '60mm'; el.style.maxWidth = 'none'; }
+            // A block would collapse to nothing without a width; a run of words
+            // floated on its own is exactly as wide as the words are.
+            if (!el.style.width && el.nodeName !== 'SPAN') { el.style.width = '60mm'; el.style.maxWidth = 'none'; }
           }
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+        } else if (kind === 'stack') {
+          if (!objectFree(el)) {
+            const w = this.frame.w;
+            setObjectFree(el, true);
+            el.style.left = '0mm';
+            el.style.top = '0mm';
+            if (!el.style.width && w) { el.style.width = round1(w * MM) + 'mm'; el.style.maxWidth = 'none'; }
+          }
+          restack(el, arg);
         } else if (kind === 'delete') {
           deleteObject(el);
           this.clearFrame();
@@ -4620,10 +4935,17 @@
         this.settleFrame();
       },
       openFrameProps() {
-        if (!frameEl) { return; }
+        if (!frameEl && !textRange) { return; }
         this.closeCtx();
-        const props = objectProps(frameEl);
-        if (props) { this.fprops = Object.assign({}, this.fprops, props); }
+        if (frameEl) {
+          const props = objectProps(frameEl);
+          if (props) { this.fprops = Object.assign({}, this.fprops, props); }
+        } else {
+          // Nothing is written on the text yet, so the dialogue starts empty; the
+          // run of words only becomes a frame if the settings are applied.
+          this.clearFrameProps();
+          this.fpropsRange = textRange.cloneRange();
+        }
         this.fpropsOpen = true;
       },
       clearFrameProps() {
@@ -4635,10 +4957,35 @@
       applyFrameProps() {
         const v = Object.assign({}, this.fprops);
         this.fpropsOpen = false;
+        if (!frameEl && this.fpropsRange) {
+          textRange = this.fpropsRange;
+          this.fpropsRange = null;
+          try { selectRange(textRange); } catch (e) { /* the text moved on */ }
+          if (!this.promoteText()) { return; }
+        }
         if (!frameEl) { return; }
         framePinned = true;
         history.push(true);
         setObjectProps(frameEl, v);
+        this.settleFrame();
+      },
+      /** The two overlap buttons in the dialogue act at once, like a menu item. */
+      stackFromProps(where) {
+        const v = Object.assign({}, this.fprops, { place: 'free', wrap: '' });
+        this.fprops.place = 'free';
+        this.fprops.wrap = '';
+        if (!frameEl && this.fpropsRange) {
+          textRange = this.fpropsRange;
+          this.fpropsRange = null;
+          try { selectRange(textRange); } catch (e) { /* the text moved on */ }
+          if (!this.promoteText()) { return; }
+        }
+        if (!frameEl) { return; }
+        framePinned = true;
+        history.push(true);
+        setObjectProps(frameEl, v);
+        restack(frameEl, where);
+        this.fprops.z = Number(frameEl.style.zIndex) || '';
         this.settleFrame();
       },
       addFrame() { this.run(() => insertFrame()); this.$nextTick(() => this.syncFrame()); },
@@ -4668,8 +5015,10 @@
         this.ctx.image = !!imageAt(at);
         // The right button acts on what it is over, so it also picks the frame up.
         const obj = objectAt(e.target) || objectAt(at);
-        if (obj) { frameEl = obj; framePinned = true; }
+        if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
         this.ctx.frame = !!obj;
+        this.syncFrame();
+        this.ctx.text = !obj && !!textRange;
         this.ctx.link = !!linkAt(at);
         this.ctx.list = !!(topBlockOf(at) && closestMatching(at, { tag: 'LI' }));
         this.ctx.selection = !!(range && !range.collapsed);
@@ -4764,8 +5113,10 @@
           alt: () => this.openAlt(),
           imageDel: () => this.imageCmd('delete'),
           frameProps: () => this.openFrameProps(),
-          frameFree: () => this.frameCmd('free'),
-          frameWrap: () => this.frameCmd('wrap', arg),
+          frameFree: () => (frameEl ? this.frameCmd('free') : this.textCmd('free')),
+          frameWrap: () => (frameEl ? this.frameCmd('wrap', arg) : this.textCmd('wrap', arg)),
+          frameFront: () => (frameEl ? this.frameCmd('stack', 'front') : this.textCmd('stack', 'front')),
+          frameBack: () => (frameEl ? this.frameCmd('stack', 'back') : this.textCmd('stack', 'back')),
           frameDel: () => this.frameCmd('delete'),
           guides: () => { this.guides = !this.guides; },
         };
@@ -5401,6 +5752,17 @@
   window.__eb_pasteHtmlAt = pasteHtmlAt;
   // moving a frame is driven by the pointer, which jsdom has no layout for
   window.__eb_moveObjectTo = moveObjectTo;
+  // the 文節 rule, which is arithmetic over the script and testable on its own
+  window.__eb_bunsetsu = (text) => {
+    const out = [];
+    let from = 0;
+    for (let i = 1; i <= text.length; i++) {
+      if (i === text.length || bunsetsuBreak(text, i)) { out.push(text.slice(from, i)); from = i; }
+    }
+    return out.filter((x) => x !== '');
+  };
+  window.__eb_frameText = frameText;
+  window.__eb_restack = restack;
 
   if (document.getElementById('editbase-root')) {
     app.mount('#editbase-root');
