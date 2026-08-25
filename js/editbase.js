@@ -2652,7 +2652,8 @@
     redo: I('<path d="M13 8H5.5a3 3 0 0 0 0 6H9"/><path d="M10.5 5.5 13 8l-2.5 2.5"/>'),
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
-    free: I('<path d="M8 1.8v12.4M1.8 8h12.4M8 1.8 6 4M8 1.8 10 4M8 14.2 6 12M8 14.2 10 12M1.8 8 4 6M1.8 8 4 10M14.2 8 12 6M14.2 8 12 10"/>'),
+    free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
+    grip: I('<circle cx="6" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="12.4" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="12.4" r=".95" fill="currentColor" stroke="none"/>'),
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
@@ -2905,9 +2906,8 @@
           <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
             :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
           <div class="grip" :style="{ left: tsel.x + 'px', top: tsel.y + 'px', width: tsel.w + 'px', height: tsel.h + 'px' }">
-            <div v-for="e in ['t','r','b','l']" :key="'te' + e" class="ed" :class="e"
-              @pointerdown.prevent="textGrab($event)" @contextmenu.prevent.stop="openFrameProps"></div>
             <div class="bar" v-if="tsel.bar && !frame.on" :class="{ below: tsel.y < 44 }" @pointerdown.stop @mousedown.prevent @contextmenu.prevent.stop="openFrameProps">
+              <button class="eb-tb hold" @pointerdown.prevent.stop="textGrab($event)" :title="t('Drag this to move the words')"><span v-html="icons.grip"></span></button>
               <span class="nm">{{ t('Phrase') }}</span>
               <button class="eb-tb" @click="textCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
               <button class="eb-tb" @click="textCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
@@ -4600,6 +4600,13 @@
         const c = canvas();
         if (!c || !this.doc.id) { this.frame.on = false; frameEl = null; return; }
         if (frameEl && !c.contains(frameEl)) { frameEl = null; framePinned = false; }
+        // A click holds on to the object it landed on, so it stays selected while
+        // the bar and the handles are used. It lets go when the caret is somewhere
+        // else -- unless it is one of the objects a caret can never be inside.
+        if (framePinned && frameEl && !/^(HR|FIGURE|IMG)$/.test(frameEl.nodeName)) {
+          const at = getRange();
+          if (at && inCanvas(at.startContainer) && !frameEl.contains(at.startContainer)) { framePinned = false; }
+        }
         if (!framePinned) {
           const range = getRange();
           const at = range && inCanvas(range.startContainer) ? objectAt(range.startContainer) : null;
@@ -4763,7 +4770,7 @@
         frameEl = at;
         // A rule or a picture never holds the caret, so the caret cannot keep it
         // selected either: remember that this one was chosen by hand.
-        framePinned = !!(at && (at.nodeName === 'HR' || at.nodeName === 'FIGURE' || at.nodeName === 'IMG'));
+        framePinned = !!at;
         if (at) { this.frame.bar = true; }
         this.$nextTick(() => this.syncFrame());
       },

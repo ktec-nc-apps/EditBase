@@ -563,12 +563,13 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
   border: 1px dashed color-mix(in srgb, var(--primary) 45%, transparent);
   border-radius: 2px;
 }
+/* Nothing about this box takes the pointer. A frame's border can be a handle
+   because a frame has a border of its own; a phrase's does not -- it is drawn
+   over ordinary words, and a band there would swallow every click meant for the
+   caret and move a word or two instead. The handle is in the bar. */
 .eb-tsel .grip { position: absolute; pointer-events: none; }
-.eb-tsel .grip .ed { position: absolute; pointer-events: auto; cursor: move; touch-action: none; }
-.eb-tsel .grip .ed.t { left: -4px; right: -4px; top: -4px; height: 7px; }
-.eb-tsel .grip .ed.b { left: -4px; right: -4px; bottom: -4px; height: 7px; }
-.eb-tsel .grip .ed.l { top: -4px; bottom: -4px; left: -4px; width: 7px; }
-.eb-tsel .grip .ed.r { top: -4px; bottom: -4px; right: -4px; width: 7px; }
+.eb-tsel .bar .hold { cursor: move; touch-action: none; color: var(--muted); }
+.eb-tsel .bar .hold:hover { color: var(--text); }
 .eb-tsel .bar {
   position: absolute; left: -1px; bottom: 100%; margin-bottom: 8px;
   display: flex; align-items: center; gap: 2px; white-space: nowrap;
@@ -582,10 +583,6 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 .eb-tcaret { position: absolute; width: 2px; background: var(--primary); z-index: 21; pointer-events: none; }
 
 @media (hover: none) {
-  .eb-tsel .grip .ed.t { left: -8px; right: -8px; top: -8px; height: 15px; }
-  .eb-tsel .grip .ed.b { left: -8px; right: -8px; bottom: -8px; height: 15px; }
-  .eb-tsel .grip .ed.l { top: -8px; bottom: -8px; left: -8px; width: 15px; }
-  .eb-tsel .grip .ed.r { top: -8px; bottom: -8px; right: -8px; width: 15px; }
   .eb-tsel .bar .eb-tb { height: 32px; min-width: 32px; }
 }
 
@@ -596,4 +593,4 @@ label.eb-tb input[type=color] { position: absolute; inset: 0; opacity: 0; cursor
 /* A box that is being dragged must not answer for what is underneath it, or the
    drop lands on the editor's own overlay instead of on the page. */
 .eb-fsel.dragging .ed, .eb-fsel.dragging .hd, .eb-fsel.dragging .bar,
-.eb-tsel.dragging .ed, .eb-tsel.dragging .bar { pointer-events: none; }
+.eb-tsel.dragging .bar { pointer-events: none; }

@@ -94,6 +94,7 @@ OC.L10N.register(
     "No borders": "No borders",
     "Delete table": "Delete table",
     "Tab moves to the next cell; a new row is added at the end.": "Tab moves to the next cell; a new row is added at the end.",
+    "Drag this to move the words": "Drag this to move the words",
     "Phrase": "Phrase",
     "Place it freely": "Place it freely",
     "No text wrap": "No text wrap",
