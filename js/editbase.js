@@ -274,10 +274,15 @@
 }
 .eb-doc > *:first-child { margin-top: 0; }
 .eb-doc p { margin: 0 0 0.9em; }
+/* Everything a heading, a list, a block of code or a table needs is said here
+   rather than left to the browser: an interface stylesheet round the editor can
+   have its own opinion about a bare <ul> or <h2>, and then the editor draws one
+   thing while the saved file draws another. Saying it makes the two agree, and
+   makes the file render the same wherever it is opened. */
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
   font-family: var(--eb-font-head, "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif);
   line-height: 1.4; margin: 1.6em 0 0.7em; break-after: avoid-page; text-align: left;
-  color: #111111;
+  color: #111111; font-weight: 700;
 }
 .eb-doc h1 { font-size: 1.9em; letter-spacing: .02em; }
 .eb-doc h2 { font-size: 1.5em; border-bottom: 1.5pt solid #222; padding-bottom: .2em; }
@@ -285,11 +290,16 @@
 .eb-doc h4 { font-size: 1.1em; }
 .eb-doc h5, .eb-doc h6 { font-size: 1em; }
 .eb-doc ul, .eb-doc ol { margin: 0 0 0.9em; padding-left: 1.7em; }
+.eb-doc ul { list-style-type: disc; }
+.eb-doc ul ul { list-style-type: circle; }
+.eb-doc ul ul ul { list-style-type: square; }
+.eb-doc ol { list-style-type: decimal; }
 .eb-doc li { margin: 0.15em 0; }
 .eb-doc blockquote {
   margin: 1em 0; padding: .4em 0 .4em 1em; border-left: 3pt solid #999; color: #333;
 }
 .eb-doc pre {
+  margin: 1em 0;
   font-family: var(--eb-font-mono, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace); font-size: .92em;
   background: #f4f4f4; border: .75pt solid #d5d5d5; border-radius: 4pt; padding: .7em .9em;
   overflow-x: auto; white-space: pre-wrap; break-inside: avoid;
@@ -325,7 +335,7 @@
 }
 
 /* tables — sized to the text column and kept whole across a page break */
-.eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; }
+.eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; white-space: normal; vertical-align: baseline; }
 .eb-doc table.eb-table th, .eb-doc table.eb-table td {
   border: .75pt solid #666; padding: .38em .6em; vertical-align: top; text-align: left;
 }
@@ -664,8 +674,10 @@
   }
 
   /** The classes the document itself wears: the numbering scheme, if any. */
-  function docClasses(paper) {
+  function docClasses(paper, clean) {
     const out = ['eb-doc'];
+    // Printing while the marks are hidden should print what is on the screen.
+    if (clean) { out.push('eb-clean'); }
     if (paper.headingNumbers === 'decimal') { out.push('eb-hn'); }
     if (paper.headingNumbers === 'japanese') { out.push('eb-hn', 'eb-hn-ja'); }
     if (paper.vertical) { out.push('eb-tategaki'); }
@@ -711,7 +723,7 @@
       + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
-      + '</head>\n<body class="' + docClasses(paper) + '">\n'
+      + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
       + runningBlock('eb-runhead', paper.header)
       + body + '\n'
       + runningBlock('eb-runfoot', paper.footer)
@@ -1791,7 +1803,40 @@
       const fresh = blankCell(ref ? ref.nodeName : 'TD');
       row.insertBefore(fresh, dir < 0 ? ref : (ref ? ref.nextSibling : null));
     });
+    // A width belongs to a column, so a new column needs one of its own, taken
+    // out of the one it was put beside. Without this the widths land on the
+    // wrong columns and the table goes crooked.
+    splitColumnWidth(table, idx, dir < 0 ? idx : idx + 1);
     placeCaretIn(cell.parentNode.children[dir < 0 ? idx : idx + 1]);
+  }
+  /** Halve one column's width and give the other half to the new one beside it. */
+  function splitColumnWidth(table, from, to) {
+    const cg = table.querySelector('colgroup');
+    if (!cg) { return; }
+    const cols = Array.from(cg.children);
+    const src = cols[Math.min(from, cols.length - 1)];
+    const w = src ? mmOf(src.style.width) : '';
+    const fresh = document.createElement('col');
+    if (w !== '' && w > 2) {
+      src.style.width = round1(w / 2) + 'mm';
+      fresh.style.width = round1(w / 2) + 'mm';
+    }
+    cg.insertBefore(fresh, cg.children[to] || null);
+  }
+  /** Take a column's width away and give it to the one that takes its place. */
+  function mergeColumnWidth(table, idx) {
+    const cg = table.querySelector('colgroup');
+    if (!cg) { return; }
+    const gone = cg.children[idx];
+    if (!gone) { return; }
+    const w = mmOf(gone.style.width);
+    const near = cg.children[idx + 1] || cg.children[idx - 1];
+    if (near && w !== '' && w > 0) {
+      const have = mmOf(near.style.width);
+      near.style.width = round1((have === '' ? 0 : have) + w) + 'mm';
+    }
+    gone.remove();
+    if (!cg.children.length) { cg.remove(); }
   }
   function deleteRow() {
     const cell = cellAt();
@@ -1813,6 +1858,7 @@
     tableRows(table).forEach((row) => {
       if (row.children[idx]) { row.children[idx].remove(); }
     });
+    mergeColumnWidth(table, idx);
     const row = tableRows(table)[0];
     placeCaretIn(row ? (row.children[Math.min(idx, row.children.length - 1)] || row) : table);
   }
@@ -3098,40 +3144,63 @@
     future: [],
     limit: 200,
     lastPush: 0,
+    // The document is more than its text: the paper, the styles, the running
+    // header. Undo has to put those back too, or changing a style and pressing
+    // Ctrl+Z quietly undoes the last thing typed instead.
+    readState: null,
+    applyState: null,
+    state() { return this.readState ? this.readState() : ''; },
+    /**
+     * A settings change is noticed after it has happened -- the field has already
+     * written its value by the time anything is told about it -- so what goes on
+     * the stack is the state as it was before, handed in by the caller.
+     */
+    pushPrev(state) {
+      const c = canvas();
+      if (!c) { return; }
+      this.past.push({ html: c.innerHTML, caret: caretOffset(), state });
+      if (this.past.length > this.limit) { this.past.shift(); }
+      this.future.length = 0;
+      this.lastPush = Date.now();
+    },
     push(force) {
       const c = canvas();
       if (!c) { return; }
       const now = Date.now();
       const html = c.innerHTML;
+      const state = this.state();
       const top = this.past[this.past.length - 1];
-      if (top && top.html === html) { return; }
+      if (top && top.html === html && top.state === state) { return; }
       // typing is coalesced into bursts; a command always starts a new entry
       if (!force && top && now - this.lastPush < 700) { return; }
-      this.past.push({ html, caret: caretOffset() });
+      this.past.push({ html, caret: caretOffset(), state });
       if (this.past.length > this.limit) { this.past.shift(); }
       this.future.length = 0;
       this.lastPush = now;
     },
+    restore(entry) {
+      const c = canvas();
+      c.innerHTML = entry.html;
+      if (entry.state && this.applyState) { this.applyState(entry.state); }
+      setCaretOffset(entry.caret);
+      this.lastPush = 0;
+    },
     undo() {
       const c = canvas();
       if (!c || !this.past.length) { return false; }
-      const current = { html: c.innerHTML, caret: caretOffset() };
+      const current = { html: c.innerHTML, caret: caretOffset(), state: this.state() };
       let entry = this.past.pop();
-      if (entry.html === current.html && this.past.length) { entry = this.past.pop(); }
+      if (entry.html === current.html && entry.state === current.state && this.past.length) { entry = this.past.pop(); }
       this.future.push(current);
-      c.innerHTML = entry.html;
-      setCaretOffset(entry.caret);
-      this.lastPush = 0;
+      this.restore(entry);
       return true;
     },
     redo() {
       const c = canvas();
       if (!c || !this.future.length) { return false; }
       const entry = this.future.pop();
-      this.past.push({ html: c.innerHTML, caret: caretOffset() });
-      c.innerHTML = entry.html;
-      setCaretOffset(entry.caret);
-      this.lastPush = 0;
+      this.past.push({ html: c.innerHTML, caret: caretOffset(), state: this.state() });
+      this.restore(entry);
       return true;
     },
     reset() { this.past.length = 0; this.future.length = 0; this.lastPush = 0; },
@@ -4045,25 +4114,25 @@
         <div class="eb-row">
           <div class="eb-field">
             <label>{{ t('Paper size') }}</label>
-            <select v-model="doc.paper.size" @change="touch"><option v-for="p in paperSizes" :key="p" :value="p">{{ p }}</option></select>
+            <select v-model="doc.paper.size" @change="touchSettings"><option v-for="p in paperSizes" :key="p" :value="p">{{ p }}</option></select>
           </div>
           <div class="eb-field">
             <label>{{ t('Orientation') }}</label>
-            <select v-model="doc.paper.orientation" @change="touch">
+            <select v-model="doc.paper.orientation" @change="touchSettings">
               <option value="portrait">{{ t('Portrait') }}</option>
               <option value="landscape">{{ t('Landscape') }}</option>
             </select>
           </div>
         </div>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Top margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.top" @change="touch"></div>
-          <div class="eb-field"><label>{{ t('Bottom margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.bottom" @change="touch"></div>
-          <div class="eb-field"><label>{{ t('Left margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.left" @change="touch"></div>
-          <div class="eb-field"><label>{{ t('Right margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.right" @change="touch"></div>
+          <div class="eb-field"><label>{{ t('Top margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.top" @change="touchSettings"></div>
+          <div class="eb-field"><label>{{ t('Bottom margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.bottom" @change="touchSettings"></div>
+          <div class="eb-field"><label>{{ t('Left margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.left" @change="touchSettings"></div>
+          <div class="eb-field"><label>{{ t('Right margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.right" @change="touchSettings"></div>
         </div>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touch"></div>
-          <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touch"></div>
+          <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touchSettings"></div>
+          <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touchSettings"></div>
         </div>
         <div class="eb-field">
           <label>{{ t('Direction of the text') }}</label>
@@ -4074,14 +4143,14 @@
         </div>
         <div class="eb-field">
           <label>{{ t('Number the headings') }}</label>
-          <select v-model="doc.paper.headingNumbers" @change="touch">
+          <select v-model="doc.paper.headingNumbers" @change="touchSettings">
             <option value="">{{ t('Not numbered') }}</option>
             <option value="decimal">{{ t('1. / 1.1 / 1.1.1') }}</option>
             <option value="japanese">{{ t('Chapter 1 / Section 1 / (1), in Japanese') }}</option>
           </select>
-          <p class="eb-note">{{ t('The numbers are counted by the file itself, so adding a section renumbers everything after it. They are not part of the text and do not appear in a contents list.') }}</p>
+          <p class="eb-tip">{{ t('The numbers are counted by the file itself, so adding a section renumbers everything after it. They are not part of the text and do not appear in a contents list.') }}</p>
         </div>
-        <p class="eb-note">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
+        <p class="eb-tip">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
         <div class="eb-field">
           <label>{{ t('Default typefaces') }}</label>
           <div class="font-rows">
@@ -4092,9 +4161,9 @@
               <span class="caret" v-html="icons.down"></span>
             </button>
           </div>
-          <p class="eb-note">{{ t('Any family on Google Fonts can be used. The document carries its typefaces with it, so the file looks the same on a machine where they are not installed.') }}</p>
+          <p class="eb-tip">{{ t('Any family on Google Fonts can be used. The document carries its typefaces with it, so the file looks the same on a machine where they are not installed.') }}</p>
         </div>
-        <p class="eb-note">{{ t('Page numbers and running headers come from your browser print dialogue: browsers do not yet support headers inside the page rule. Everything else here is written into the file.') }}</p>
+        <p class="eb-tip">{{ t('Page numbers and running headers come from your browser print dialogue: browsers do not yet support headers inside the page rule. Everything else here is written into the file.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="saveDefaultPaper">{{ t('Use as default for new documents') }}</button>
@@ -4146,7 +4215,7 @@
           <label>{{ t('Preview') }}</label>
           <div class="eb-doc" style="background:#fff;color:#111;border-radius:9px;padding:10px 12px;overflow-x:auto" v-html="mathPreview"></div>
         </div>
-        <p class="eb-note">{{ t('MathML is drawn by the browser itself, so the formula stays text in the file — searchable, selectable and never a picture.') }}</p>
+        <p class="eb-tip">{{ t('MathML is drawn by the browser itself, so the formula stays text in the file — searchable, selectable and never a picture.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="mathOpen = false">{{ t('Cancel') }}</button>
@@ -4161,7 +4230,7 @@
       <h3><span v-html="icons.link"></span> {{ sourceLabel(source) }}</h3>
       <div class="body">
         <p class="hint" v-if="src.loading">{{ t('Loading…') }}</p>
-        <p class="eb-note" v-if="src.error" style="color:var(--danger)">{{ src.error }}</p>
+        <p class="eb-tip" v-if="src.error" style="color:var(--danger)">{{ src.error }}</p>
 
         <!-- Tables -->
         <template v-if="source === 'tables'">
@@ -4172,7 +4241,7 @@
             <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
           </div>
           <template v-if="src.detail">
-            <p class="eb-note">{{ t('{name}: {c} columns, {r} rows', { name: src.detail.title, c: src.detail.columns.length, r: src.detail.rows.length }) }}</p>
+            <p class="eb-tip">{{ t('{name}: {c} columns, {r} rows', { name: src.detail.title, c: src.detail.columns.length, r: src.detail.rows.length }) }}</p>
             <label class="opt"><input type="checkbox" v-model="src.withHeader"> {{ t('First row is a header') }}</label>
             <div class="src-preview">
               <table class="eb-table">
@@ -4197,7 +4266,7 @@
             </button>
             <p class="hint" v-if="!src.items.length && !src.loading">{{ t('No contact matches that.') }}</p>
           </div>
-          <p class="eb-note">{{ t('Choosing a contact writes the address block at the cursor. For one letter per contact, use the merge fields below.') }}</p>
+          <p class="eb-tip">{{ t('Choosing a contact writes the address block at the cursor. For one letter per contact, use the merge fields below.') }}</p>
           <div class="chips">
             <button v-for="k in contactFields" :key="k" class="chip" @click="insertField(k)">{{ fieldTag(k) }}</button>
           </div>
@@ -4234,7 +4303,7 @@
             <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
           </div>
           <template v-if="src.collection">
-            <p class="eb-note">{{ t('{name}: {c} fields, {r} records', { name: src.collection.name, c: src.fields.length, r: src.records.length }) }}</p>
+            <p class="eb-tip">{{ t('{name}: {c} fields, {r} records', { name: src.collection.name, c: src.fields.length, r: src.records.length }) }}</p>
             <div class="font-list">
               <button v-for="r in src.records" :key="r.id" class="fp-item" @click="insertRecord(r)">
                 <span class="nm">{{ recordName(r) }}</span>
@@ -4242,7 +4311,7 @@
               </button>
               <p class="hint" v-if="!src.records.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
             </div>
-            <p class="eb-note">{{ t('Choosing a record writes it at the cursor as a two-column table, leaving out the fields it has nothing in. For one letter per record, use the merge fields below.') }}</p>
+            <p class="eb-tip">{{ t('Choosing a record writes it at the cursor as a two-column table, leaving out the fields it has nothing in. For one letter per record, use the merge fields below.') }}</p>
             <div class="chips">
               <button v-for="f in src.fields" :key="f.key" class="chip" @click="insertField(f.key)">{{ fieldTag(f.key) }} {{ f.label }}</button>
             </div>
@@ -4292,9 +4361,9 @@
     <div class="eb-modal" @click.stop>
       <h3>{{ t('Mail merge') }}</h3>
       <div class="body">
-        <p class="eb-note" v-if="!merge.keys.length">{{ mergeHint }}</p>
+        <p class="eb-tip" v-if="!merge.keys.length">{{ mergeHint }}</p>
         <template v-else>
-          <p class="eb-note">{{ t('{n} records will be filled into {k} fields:', { n: merge.count, k: merge.keys.length }) }}</p>
+          <p class="eb-tip">{{ t('{n} records will be filled into {k} fields:', { n: merge.count, k: merge.keys.length }) }}</p>
           <div class="chips"><span v-for="k in merge.keys" :key="k" class="chip">{{ fieldTag(k) }}</span></div>
           <label class="opt" style="margin-top:10px"><input type="radio" :value="false" v-model="merge.separate"> {{ t('One document, one page per record') }}</label>
           <label class="opt"><input type="radio" :value="true" v-model="merge.separate"> {{ t('A separate document per record') }}</label>
@@ -4328,7 +4397,7 @@
           </button>
           <p class="hint" v-if="!picker.loading && !picker.entries.length">{{ t('This folder is empty.') }}</p>
         </div>
-        <p class="eb-note">{{ t('The picture is embedded in the document itself, so it travels with the file. Large photographs are scaled down on the way in.') }}</p>
+        <p class="eb-tip">{{ t('The picture is embedded in the document itself, so it travels with the file. Large photographs are scaled down on the way in.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="pickerOpen = false">{{ t('Cancel') }}</button>
@@ -4387,7 +4456,7 @@
         <div class="eb-field">
           <label>{{ t('Save documents in') }}</label>
           <input type="text" v-model="settings.folder">
-          <p class="eb-note">{{ t('A folder in your own Files. Documents already saved elsewhere stay where they are.') }}</p>
+          <p class="eb-tip">{{ t('A folder in your own Files. Documents already saved elsewhere stay where they are.') }}</p>
         </div>
         <div class="eb-row">
           <div class="eb-field">
@@ -4409,7 +4478,7 @@
         <div class="eb-field">
           <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
           <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
-          <p class="eb-note">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
+          <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
         </div>
         <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
       </div>
@@ -4425,7 +4494,7 @@
     <div class="eb-modal" style="width:min(860px,100%)" @click.stop>
       <h3>&lt;/&gt; {{ t('View the HTML') }}</h3>
       <div class="body">
-        <p class="eb-note">{{ t('This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.') }}</p>
+        <p class="eb-tip">{{ t('This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.') }}</p>
         <textarea rows="18" spellcheck="false" readonly :value="htmlText" style="width:100%;font-family:monospace;font-size:12px"></textarea>
       </div>
       <div class="foot"><button class="eb-btn primary" @click="htmlOpen = false">{{ t('Close') }}</button></div>
@@ -4475,7 +4544,7 @@
         </div>
         <label class="opt"><input type="checkbox" v-model="styleNow.bold" @change="touchStyles"> {{ t('Bold') }}</label>
         <label class="opt"><input type="checkbox" v-model="styleNow.italic" @change="touchStyles"> {{ t('Italic') }}</label>
-        <p class="eb-note">{{ t('This changes every paragraph of that kind at once, now and later, because it is written as a rule in the file rather than on each paragraph. Anything you have set on one paragraph by hand still wins over it.') }}</p>
+        <p class="eb-tip">{{ t('This changes every paragraph of that kind at once, now and later, because it is written as a rule in the file rather than on each paragraph. Anything you have set on one paragraph by hand still wins over it.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearStyle">{{ t('Reset this style') }}</button>
@@ -4505,7 +4574,7 @@
           <img :src="cropSrc" :style="{ objectPosition: crop.x + '% ' + crop.y + '%' }">
           <span class="hint">{{ t('Drag the picture to choose what shows.') }}</span>
         </div>
-        <p class="eb-note">{{ t('Nothing is cut away: the whole picture stays in the file and the frame simply shows part of it, so the crop can be changed or undone at any time.') }}</p>
+        <p class="eb-tip">{{ t('Nothing is cut away: the whole picture stays in the file and the frame simply shows part of it, so the crop can be changed or undone at any time.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="crop.ratio = ''">{{ t('The whole picture') }}</button>
@@ -4545,7 +4614,7 @@
           <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="cellBorder.width"></div>
           <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="cellBorder.colour"></div>
         </div>
-        <p class="eb-note">{{ t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.') }}</p>
+        <p class="eb-tip">{{ t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn" @click="cellBorderOpen = false">{{ t('Cancel') }}</button>
@@ -4561,7 +4630,7 @@
       <div class="body">
         <div class="eb-field"><label>{{ t('Word') }}</label><input type="text" :value="rubyWord" readonly></div>
         <div class="eb-field"><label>{{ t('Reading') }}</label><input ref="rubyInput" type="text" v-model="rubyText" @keydown.enter.prevent="applyRubyText"></div>
-        <p class="eb-note">{{ t('The reading is written above the word, at half its size, using the element HTML has for exactly this.') }}</p>
+        <p class="eb-tip">{{ t('The reading is written above the word, at half its size, using the element HTML has for exactly this.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" v-if="fmt.ruby" @click="dropRuby">{{ t('Remove the reading') }}</button>
@@ -4577,7 +4646,7 @@
       <h3>{{ t('Note') }}</h3>
       <div class="body">
         <div class="eb-field"><label>{{ t('The note') }}</label><textarea ref="noteInput" rows="4" v-model="noteText"></textarea></div>
-        <p class="eb-note">{{ t('A number goes in at the cursor and the note is added to the list at the end of the document. The numbers follow the order the notes are cited in and look after themselves. A browser cannot put a note at the foot of the page that cites it: nothing in CSS moves text from one page to another.') }}</p>
+        <p class="eb-tip">{{ t('A number goes in at the cursor and the note is added to the list at the end of the document. The numbers follow the order the notes are cited in and look after themselves. A browser cannot put a note at the foot of the page that cites it: nothing in CSS moves text from one page to another.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn" @click="noteOpen = false">{{ t('Cancel') }}</button>
@@ -4603,7 +4672,7 @@
           </div>
           <div class="eb-field"><label>{{ t('Gap (mm)') }}</label><input type="number" min="0" max="40" step="1" v-model.number="cols.gap"></div>
         </div>
-        <p class="eb-note">{{ t('The paragraphs you have selected are laid out in columns. Select a paragraph inside them and choose one column to take the columns off again.') }}</p>
+        <p class="eb-tip">{{ t('The paragraphs you have selected are laid out in columns. Select a paragraph inside them and choose one column to take the columns off again.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn" @click="colsOpen = false">{{ t('Cancel') }}</button>
@@ -4629,7 +4698,7 @@
           <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.c" @input="touch"></div>
           <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.r" @input="touch"></div>
         </div>
-        <p class="eb-note">{{ t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.') }}</p>
+        <p class="eb-tip">{{ t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearRunning">{{ t('Clear') }}</button>
@@ -4675,8 +4744,8 @@
             </div>
           </div>
         </div>
-        <p class="eb-note" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
-        <p class="eb-note" v-else-if="fprops.wrap">{{ t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.') }}</p>
+        <p class="eb-tip" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
+        <p class="eb-tip" v-else-if="fprops.wrap">{{ t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.') }}</p>
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')"></div>
           <div class="eb-field"><label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')"></div>
@@ -4718,7 +4787,7 @@
             <label class="opt"><input type="checkbox" v-model="fprops.keep"> {{ t('Do not split across pages') }}</label>
           </div>
         </div>
-        <p class="eb-note">{{ t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.') }}</p>
+        <p class="eb-tip">{{ t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearFrameProps">{{ t('Clear') }}</button>
@@ -4931,7 +5000,7 @@
         <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.noLoneLines"> {{ t('Never leave one line of it alone on a page') }}</label>
-        <p class="eb-note">{{ t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.') }}</p>
+        <p class="eb-tip">{{ t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearPara">{{ t('Reset') }}</button>
@@ -4947,7 +5016,7 @@
       <h3>{{ t('Table of contents…') }}</h3>
       <div class="body">
         <div class="eb-field"><label>{{ t('Title') }}</label><input type="text" v-model="tocTitle" @keydown.enter.prevent="applyToc"></div>
-        <p class="eb-note">{{ t('Built from the headings in the document, as links to them. Running it again brings an existing contents list up to date.') }}</p>
+        <p class="eb-tip">{{ t('Built from the headings in the document, as links to them. Running it again brings an existing contents list up to date.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="tocOpen = false">{{ t('Cancel') }}</button>
@@ -4967,7 +5036,7 @@
         <div class="eb-chargrid">
           <button v-for="(ch, i) in charsOf(charSet)" :key="i" class="eb-charcell" @click="pickChar(ch)">{{ ch }}</button>
         </div>
-        <p class="eb-note">{{ t('The character goes in at the caret. The dialog stays open so several can be picked.') }}</p>
+        <p class="eb-tip">{{ t('The character goes in at the caret. The dialog stays open so several can be picked.') }}</p>
       </div>
       <div class="foot"><button class="eb-btn primary" @click="charsOpen = false">{{ t('Close') }}</button></div>
     </div>
@@ -4980,7 +5049,7 @@
       <div class="body">
         <div class="eb-field"><label>{{ t('Text') }}</label><input type="text" v-model="link.text" :placeholder="t('The words that carry the link')"></div>
         <div class="eb-field"><label>{{ t('Address') }}</label><input type="text" v-model="link.url" placeholder="example.org/page" @keydown.enter.prevent="applyLinkDialog"></div>
-        <p class="eb-note">{{ t('A bare address becomes https://, and an e-mail address becomes a mailto: link.') }}</p>
+        <p class="eb-tip">{{ t('A bare address becomes https://, and an e-mail address becomes a mailto: link.') }}</p>
       </div>
       <div class="foot">
         <button v-if="link.editing" class="eb-btn ghost" @click="linkOpen = false; ctxDo('linkDel')">{{ t('Remove the link') }}</button>
@@ -4996,7 +5065,7 @@
       <h3>{{ t('Alternative text…') }}</h3>
       <div class="body">
         <div class="eb-field"><label>{{ t('Alternative text') }}</label><input type="text" v-model="altText" @keydown.enter.prevent="applyAlt"></div>
-        <p class="eb-note">{{ t('This is what a screen reader says, and what shows if the picture cannot be loaded. It is written into the file as the alt attribute.') }}</p>
+        <p class="eb-tip">{{ t('This is what a screen reader says, and what shows if the picture cannot be loaded. It is written into the file as the alt attribute.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="altOpen = false">{{ t('Cancel') }}</button>
@@ -5065,6 +5134,7 @@
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
         review: false, showChanges: true, changes: 0,
+        prevSettings: '',
         cropOpen: false, cropSrc: '',
         crop: { ratio: '', x: 50, y: 50 },
         cellBorderOpen: false,
@@ -5395,6 +5465,7 @@
           }
           this.applyDocStyles();
           history.reset();
+          this.prevSettings = history.state();
           this.dirty = false;
           this.savedAt = (d.mtime || 0) * 1000;
           this.refreshState();
@@ -5414,8 +5485,9 @@
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
         return stripEditorArtefacts(clone.innerHTML);
       },
-      currentHtml() {
+      currentHtml(clean) {
         return buildHtml({
+          clean: !!clean,
           title: this.doc.title || this.t('Untitled document'),
           paper: this.doc.paper,
           styles: this.doc.styles,
@@ -5477,7 +5549,7 @@
         this.menuOpen = false;
         downloadHtml(this.doc.name || (this.doc.title + '.html'), this.currentHtml());
       },
-      printDoc() { printHtml(this.currentHtml()); },
+      printDoc() { printHtml(this.currentHtml(!this.showChanges)); },
       showSource() {
         this.menuOpen = false;
         this.htmlText = this.currentHtml();
@@ -6527,7 +6599,9 @@
         this.settleFrame();
       },
       setVertical(on) {
+        history.pushPrev(this.prevSettings);
         this.doc.paper.vertical = !!on;
+        this.prevSettings = history.state();
         this.touch();
         this.$nextTick(() => { this.fitZoom(); this.repaginate(); });
       },
@@ -6594,8 +6668,16 @@
         this.stylesOpen = true;
       },
       closeStyles() { this.stylesOpen = false; },
+      /** A change to the paper or the styles is an undoable step like any other. */
+      touchSettings() {
+        history.pushPrev(this.prevSettings);
+        this.prevSettings = history.state();
+        this.touch();
+      },
       touchStyles() {
+        history.pushPrev(this.prevSettings);
         this.doc.styles = normaliseStyles(this.doc.styles);
+        this.prevSettings = history.state();
         this.applyDocStyles();
         this.touch();
       },
@@ -6802,8 +6884,10 @@
       },
       openRunning() { this.menu = ''; this.runOpen = true; },
       clearRunning() {
+        history.pushPrev(this.prevSettings);
         this.doc.paper.header = { l: '', c: '', r: '' };
         this.doc.paper.footer = { l: '', c: '', r: '' };
+        this.prevSettings = history.state();
         this.touch();
       },
       setMarker(type) { this.blockRun(() => setListMarker(type)); },
@@ -7292,6 +7376,14 @@
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
+      history.readState = () => JSON.stringify({ paper: this.doc.paper, styles: this.doc.styles });
+      history.applyState = (raw) => {
+        let v = null;
+        try { v = JSON.parse(raw); } catch (e) { return; }
+        this.doc.paper = normalisePaper(v.paper);
+        this.doc.styles = normaliseStyles(v.styles);
+        this.applyDocStyles();
+      };
       const style = document.createElement('style');
       style.id = 'eb-doc-style';
       style.textContent = DOC_CSS + EDITOR_CSS;

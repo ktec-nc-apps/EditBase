@@ -223,7 +223,11 @@
 }
 .eb-row { display: flex; gap: 10px; }
 .eb-row > * { flex: 1 1 0; min-width: 0; }
-.eb-note { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+/* The little explanation under a field in a dialogue. It used to be called
+   .eb-note, which is also the document's own side-bar note, so the app was
+   repainting the document's notes in the editor while the saved file drew them
+   properly. Two different things may not share a name. */
+.eb-tip { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
 
 .eb-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 9px 16px; z-index: 4000; font-size: 14px; }

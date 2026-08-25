@@ -274,10 +274,15 @@
 }
 .eb-doc > *:first-child { margin-top: 0; }
 .eb-doc p { margin: 0 0 0.9em; }
+/* Everything a heading, a list, a block of code or a table needs is said here
+   rather than left to the browser: an interface stylesheet round the editor can
+   have its own opinion about a bare <ul> or <h2>, and then the editor draws one
+   thing while the saved file draws another. Saying it makes the two agree, and
+   makes the file render the same wherever it is opened. */
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
   font-family: var(--eb-font-head, "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif);
   line-height: 1.4; margin: 1.6em 0 0.7em; break-after: avoid-page; text-align: left;
-  color: #111111;
+  color: #111111; font-weight: 700;
 }
 .eb-doc h1 { font-size: 1.9em; letter-spacing: .02em; }
 .eb-doc h2 { font-size: 1.5em; border-bottom: 1.5pt solid #222; padding-bottom: .2em; }
@@ -285,11 +290,16 @@
 .eb-doc h4 { font-size: 1.1em; }
 .eb-doc h5, .eb-doc h6 { font-size: 1em; }
 .eb-doc ul, .eb-doc ol { margin: 0 0 0.9em; padding-left: 1.7em; }
+.eb-doc ul { list-style-type: disc; }
+.eb-doc ul ul { list-style-type: circle; }
+.eb-doc ul ul ul { list-style-type: square; }
+.eb-doc ol { list-style-type: decimal; }
 .eb-doc li { margin: 0.15em 0; }
 .eb-doc blockquote {
   margin: 1em 0; padding: .4em 0 .4em 1em; border-left: 3pt solid #999; color: #333;
 }
 .eb-doc pre {
+  margin: 1em 0;
   font-family: var(--eb-font-mono, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace); font-size: .92em;
   background: #f4f4f4; border: .75pt solid #d5d5d5; border-radius: 4pt; padding: .7em .9em;
   overflow-x: auto; white-space: pre-wrap; break-inside: avoid;
@@ -325,7 +335,7 @@
 }
 
 /* tables — sized to the text column and kept whole across a page break */
-.eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; }
+.eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; white-space: normal; vertical-align: baseline; }
 .eb-doc table.eb-table th, .eb-doc table.eb-table td {
   border: .75pt solid #666; padding: .38em .6em; vertical-align: top; text-align: left;
 }
@@ -664,8 +674,10 @@
   }
 
   /** The classes the document itself wears: the numbering scheme, if any. */
-  function docClasses(paper) {
+  function docClasses(paper, clean) {
     const out = ['eb-doc'];
+    // Printing while the marks are hidden should print what is on the screen.
+    if (clean) { out.push('eb-clean'); }
     if (paper.headingNumbers === 'decimal') { out.push('eb-hn'); }
     if (paper.headingNumbers === 'japanese') { out.push('eb-hn', 'eb-hn-ja'); }
     if (paper.vertical) { out.push('eb-tategaki'); }
@@ -711,7 +723,7 @@
       + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
-      + '</head>\n<body class="' + docClasses(paper) + '">\n'
+      + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
       + runningBlock('eb-runhead', paper.header)
       + body + '\n'
       + runningBlock('eb-runfoot', paper.footer)
@@ -1791,7 +1803,40 @@
       const fresh = blankCell(ref ? ref.nodeName : 'TD');
       row.insertBefore(fresh, dir < 0 ? ref : (ref ? ref.nextSibling : null));
     });
+    // A width belongs to a column, so a new column needs one of its own, taken
+    // out of the one it was put beside. Without this the widths land on the
+    // wrong columns and the table goes crooked.
+    splitColumnWidth(table, idx, dir < 0 ? idx : idx + 1);
     placeCaretIn(cell.parentNode.children[dir < 0 ? idx : idx + 1]);
+  }
+  /** Halve one column's width and give the other half to the new one beside it. */
+  function splitColumnWidth(table, from, to) {
+    const cg = table.querySelector('colgroup');
+    if (!cg) { return; }
+    const cols = Array.from(cg.children);
+    const src = cols[Math.min(from, cols.length - 1)];
+    const w = src ? mmOf(src.style.width) : '';
+    const fresh = document.createElement('col');
+    if (w !== '' && w > 2) {
+      src.style.width = round1(w / 2) + 'mm';
+      fresh.style.width = round1(w / 2) + 'mm';
+    }
+    cg.insertBefore(fresh, cg.children[to] || null);
+  }
+  /** Take a column's width away and give it to the one that takes its place. */
+  function mergeColumnWidth(table, idx) {
+    const cg = table.querySelector('colgroup');
+    if (!cg) { return; }
+    const gone = cg.children[idx];
+    if (!gone) { return; }
+    const w = mmOf(gone.style.width);
+    const near = cg.children[idx + 1] || cg.children[idx - 1];
+    if (near && w !== '' && w > 0) {
+      const have = mmOf(near.style.width);
+      near.style.width = round1((have === '' ? 0 : have) + w) + 'mm';
+    }
+    gone.remove();
+    if (!cg.children.length) { cg.remove(); }
   }
   function deleteRow() {
     const cell = cellAt();
@@ -1813,6 +1858,7 @@
     tableRows(table).forEach((row) => {
       if (row.children[idx]) { row.children[idx].remove(); }
     });
+    mergeColumnWidth(table, idx);
     const row = tableRows(table)[0];
     placeCaretIn(row ? (row.children[Math.min(idx, row.children.length - 1)] || row) : table);
   }
@@ -3098,40 +3144,63 @@
     future: [],
     limit: 200,
     lastPush: 0,
+    // The document is more than its text: the paper, the styles, the running
+    // header. Undo has to put those back too, or changing a style and pressing
+    // Ctrl+Z quietly undoes the last thing typed instead.
+    readState: null,
+    applyState: null,
+    state() { return this.readState ? this.readState() : ''; },
+    /**
+     * A settings change is noticed after it has happened -- the field has already
+     * written its value by the time anything is told about it -- so what goes on
+     * the stack is the state as it was before, handed in by the caller.
+     */
+    pushPrev(state) {
+      const c = canvas();
+      if (!c) { return; }
+      this.past.push({ html: c.innerHTML, caret: caretOffset(), state });
+      if (this.past.length > this.limit) { this.past.shift(); }
+      this.future.length = 0;
+      this.lastPush = Date.now();
+    },
     push(force) {
       const c = canvas();
       if (!c) { return; }
       const now = Date.now();
       const html = c.innerHTML;
+      const state = this.state();
       const top = this.past[this.past.length - 1];
-      if (top && top.html === html) { return; }
+      if (top && top.html === html && top.state === state) { return; }
       // typing is coalesced into bursts; a command always starts a new entry
       if (!force && top && now - this.lastPush < 700) { return; }
-      this.past.push({ html, caret: caretOffset() });
+      this.past.push({ html, caret: caretOffset(), state });
       if (this.past.length > this.limit) { this.past.shift(); }
       this.future.length = 0;
       this.lastPush = now;
     },
+    restore(entry) {
+      const c = canvas();
+      c.innerHTML = entry.html;
+      if (entry.state && this.applyState) { this.applyState(entry.state); }
+      setCaretOffset(entry.caret);
+      this.lastPush = 0;
+    },
     undo() {
       const c = canvas();
       if (!c || !this.past.length) { return false; }
-      const current = { html: c.innerHTML, caret: caretOffset() };
+      const current = { html: c.innerHTML, caret: caretOffset(), state: this.state() };
       let entry = this.past.pop();
-      if (entry.html === current.html && this.past.length) { entry = this.past.pop(); }
+      if (entry.html === current.html && entry.state === current.state && this.past.length) { entry = this.past.pop(); }
       this.future.push(current);
-      c.innerHTML = entry.html;
-      setCaretOffset(entry.caret);
-      this.lastPush = 0;
+      this.restore(entry);
       return true;
     },
     redo() {
       const c = canvas();
       if (!c || !this.future.length) { return false; }
       const entry = this.future.pop();
-      this.past.push({ html: c.innerHTML, caret: caretOffset() });
-      c.innerHTML = entry.html;
-      setCaretOffset(entry.caret);
-      this.lastPush = 0;
+      this.past.push({ html: c.innerHTML, caret: caretOffset(), state: this.state() });
+      this.restore(entry);
       return true;
     },
     reset() { this.past.length = 0; this.future.length = 0; this.lastPush = 0; },
@@ -4069,8 +4138,8 @@ const _hoisted_282 = { class: "eb-field" }
 const _hoisted_283 = { value: "" }
 const _hoisted_284 = { value: "decimal" }
 const _hoisted_285 = { value: "japanese" }
-const _hoisted_286 = { class: "eb-note" }
-const _hoisted_287 = { class: "eb-note" }
+const _hoisted_286 = { class: "eb-tip" }
+const _hoisted_287 = { class: "eb-tip" }
 const _hoisted_288 = { class: "eb-field" }
 const _hoisted_289 = { class: "font-rows" }
 const _hoisted_290 = ["onClick"]
@@ -4080,8 +4149,8 @@ const _hoisted_292 = {
   class: "tag"
 }
 const _hoisted_293 = ["innerHTML"]
-const _hoisted_294 = { class: "eb-note" }
-const _hoisted_295 = { class: "eb-note" }
+const _hoisted_294 = { class: "eb-tip" }
+const _hoisted_295 = { class: "eb-tip" }
 const _hoisted_296 = { class: "foot" }
 const _hoisted_297 = { class: "body" }
 const _hoisted_298 = { class: "eb-row" }
@@ -4101,7 +4170,7 @@ const _hoisted_311 = /*#__PURE__*/_createElementVNode("label", null, "MathML", -
 const _hoisted_312 = { style: {"display":"flex","gap":"8px","align-items":"center"} }
 const _hoisted_313 = { class: "eb-field" }
 const _hoisted_314 = ["innerHTML"]
-const _hoisted_315 = { class: "eb-note" }
+const _hoisted_315 = { class: "eb-tip" }
 const _hoisted_316 = { class: "foot" }
 const _hoisted_317 = ["innerHTML"]
 const _hoisted_318 = { class: "body" }
@@ -4111,7 +4180,7 @@ const _hoisted_319 = {
 }
 const _hoisted_320 = {
   key: 1,
-  class: "eb-note",
+  class: "eb-tip",
   style: {"color":"var(--danger)"}
 }
 const _hoisted_321 = {
@@ -4125,7 +4194,7 @@ const _hoisted_325 = {
   key: 0,
   class: "hint"
 }
-const _hoisted_326 = { class: "eb-note" }
+const _hoisted_326 = { class: "eb-tip" }
 const _hoisted_327 = { class: "opt" }
 const _hoisted_328 = { class: "src-preview" }
 const _hoisted_329 = { class: "eb-table" }
@@ -4141,7 +4210,7 @@ const _hoisted_338 = {
   key: 0,
   class: "hint"
 }
-const _hoisted_339 = { class: "eb-note" }
+const _hoisted_339 = { class: "eb-tip" }
 const _hoisted_340 = { class: "chips" }
 const _hoisted_341 = ["onClick"]
 const _hoisted_342 = { class: "eb-row" }
@@ -4169,7 +4238,7 @@ const _hoisted_357 = {
   key: 0,
   class: "hint"
 }
-const _hoisted_358 = { class: "eb-note" }
+const _hoisted_358 = { class: "eb-tip" }
 const _hoisted_359 = { class: "font-list" }
 const _hoisted_360 = ["onClick"]
 const _hoisted_361 = { class: "nm" }
@@ -4178,7 +4247,7 @@ const _hoisted_363 = {
   key: 0,
   class: "hint"
 }
-const _hoisted_364 = { class: "eb-note" }
+const _hoisted_364 = { class: "eb-tip" }
 const _hoisted_365 = { class: "chips" }
 const _hoisted_366 = ["onClick"]
 const _hoisted_367 = {
@@ -4214,9 +4283,9 @@ const _hoisted_381 = { class: "foot" }
 const _hoisted_382 = { class: "body" }
 const _hoisted_383 = {
   key: 0,
-  class: "eb-note"
+  class: "eb-tip"
 }
-const _hoisted_384 = { class: "eb-note" }
+const _hoisted_384 = { class: "eb-tip" }
 const _hoisted_385 = { class: "chips" }
 const _hoisted_386 = {
   class: "opt",
@@ -4251,7 +4320,7 @@ const _hoisted_403 = {
   key: 2,
   class: "hint"
 }
-const _hoisted_404 = { class: "eb-note" }
+const _hoisted_404 = { class: "eb-tip" }
 const _hoisted_405 = { class: "foot" }
 const _hoisted_406 = ["disabled"]
 const _hoisted_407 = ["innerHTML"]
@@ -4283,7 +4352,7 @@ const _hoisted_426 = { class: "eb-field" }
 const _hoisted_427 = { class: "foot" }
 const _hoisted_428 = { class: "body" }
 const _hoisted_429 = { class: "eb-field" }
-const _hoisted_430 = { class: "eb-note" }
+const _hoisted_430 = { class: "eb-tip" }
 const _hoisted_431 = { class: "eb-row" }
 const _hoisted_432 = { class: "eb-field" }
 const _hoisted_433 = { value: "auto" }
@@ -4297,11 +4366,11 @@ const _hoisted_440 = { class: "opt" }
 const _hoisted_441 = ["checked"]
 const _hoisted_442 = { class: "opt" }
 const _hoisted_443 = ["checked"]
-const _hoisted_444 = { class: "eb-note" }
+const _hoisted_444 = { class: "eb-tip" }
 const _hoisted_445 = { style: {"display":"flex","gap":"8px","align-items":"center"} }
 const _hoisted_446 = { class: "foot" }
 const _hoisted_447 = { class: "body" }
-const _hoisted_448 = { class: "eb-note" }
+const _hoisted_448 = { class: "eb-tip" }
 const _hoisted_449 = ["value"]
 const _hoisted_450 = { class: "foot" }
 const _hoisted_451 = { class: "body" }
@@ -4328,7 +4397,7 @@ const _hoisted_471 = { class: "eb-field" }
 const _hoisted_472 = { class: "eb-field" }
 const _hoisted_473 = { class: "opt" }
 const _hoisted_474 = { class: "opt" }
-const _hoisted_475 = { class: "eb-note" }
+const _hoisted_475 = { class: "eb-tip" }
 const _hoisted_476 = { class: "foot" }
 const _hoisted_477 = { class: "body" }
 const _hoisted_478 = { class: "eb-field" }
@@ -4337,7 +4406,7 @@ const _hoisted_480 = { value: "1 / 1" }
 const _hoisted_481 = /*#__PURE__*/_createStaticVNode("<option value=\"4 / 3\">4 : 3</option><option value=\"3 / 2\">3 : 2</option><option value=\"16 / 9\">16 : 9</option><option value=\"3 / 4\">3 : 4</option><option value=\"2 / 3\">2 : 3</option>", 5)
 const _hoisted_486 = ["src"]
 const _hoisted_487 = { class: "hint" }
-const _hoisted_488 = { class: "eb-note" }
+const _hoisted_488 = { class: "eb-tip" }
 const _hoisted_489 = { class: "foot" }
 const _hoisted_490 = { class: "body" }
 const _hoisted_491 = { class: "eb-row eb-frow" }
@@ -4356,17 +4425,17 @@ const _hoisted_503 = { value: "topbottom" }
 const _hoisted_504 = { value: "left" }
 const _hoisted_505 = { class: "eb-field" }
 const _hoisted_506 = { class: "eb-field" }
-const _hoisted_507 = { class: "eb-note" }
+const _hoisted_507 = { class: "eb-tip" }
 const _hoisted_508 = { class: "foot" }
 const _hoisted_509 = { class: "body" }
 const _hoisted_510 = { class: "eb-field" }
 const _hoisted_511 = ["value"]
 const _hoisted_512 = { class: "eb-field" }
-const _hoisted_513 = { class: "eb-note" }
+const _hoisted_513 = { class: "eb-tip" }
 const _hoisted_514 = { class: "foot" }
 const _hoisted_515 = { class: "body" }
 const _hoisted_516 = { class: "eb-field" }
-const _hoisted_517 = { class: "eb-note" }
+const _hoisted_517 = { class: "eb-tip" }
 const _hoisted_518 = { class: "foot" }
 const _hoisted_519 = { class: "body" }
 const _hoisted_520 = { class: "eb-row" }
@@ -4376,7 +4445,7 @@ const _hoisted_523 = { value: 2 }
 const _hoisted_524 = { value: 3 }
 const _hoisted_525 = { value: 4 }
 const _hoisted_526 = { class: "eb-field" }
-const _hoisted_527 = { class: "eb-note" }
+const _hoisted_527 = { class: "eb-tip" }
 const _hoisted_528 = { class: "foot" }
 const _hoisted_529 = { class: "body" }
 const _hoisted_530 = { class: "eb-row" }
@@ -4387,7 +4456,7 @@ const _hoisted_534 = { class: "eb-row" }
 const _hoisted_535 = { class: "eb-field" }
 const _hoisted_536 = { class: "eb-field" }
 const _hoisted_537 = { class: "eb-field" }
-const _hoisted_538 = { class: "eb-note" }
+const _hoisted_538 = { class: "eb-tip" }
 const _hoisted_539 = { class: "foot" }
 const _hoisted_540 = { class: "body" }
 const _hoisted_541 = { class: "eb-row" }
@@ -4411,11 +4480,11 @@ const _hoisted_555 = { class: "eb-field" }
 const _hoisted_556 = { class: "colour-pair" }
 const _hoisted_557 = {
   key: 1,
-  class: "eb-note"
+  class: "eb-tip"
 }
 const _hoisted_558 = {
   key: 2,
-  class: "eb-note"
+  class: "eb-tip"
 }
 const _hoisted_559 = { class: "eb-row" }
 const _hoisted_560 = { class: "eb-field" }
@@ -4447,7 +4516,7 @@ const _hoisted_585 = ["value"]
 const _hoisted_586 = { class: "eb-field" }
 const _hoisted_587 = { class: "opt" }
 const _hoisted_588 = { class: "opt" }
-const _hoisted_589 = { class: "eb-note" }
+const _hoisted_589 = { class: "eb-tip" }
 const _hoisted_590 = { class: "foot" }
 const _hoisted_591 = ["disabled"]
 const _hoisted_592 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+X", -1 /* HOISTED */)
@@ -4535,28 +4604,28 @@ const _hoisted_673 = { class: "opt" }
 const _hoisted_674 = { class: "opt" }
 const _hoisted_675 = { class: "opt" }
 const _hoisted_676 = { class: "opt" }
-const _hoisted_677 = { class: "eb-note" }
+const _hoisted_677 = { class: "eb-tip" }
 const _hoisted_678 = { class: "foot" }
 const _hoisted_679 = { class: "body" }
 const _hoisted_680 = { class: "eb-field" }
-const _hoisted_681 = { class: "eb-note" }
+const _hoisted_681 = { class: "eb-tip" }
 const _hoisted_682 = { class: "foot" }
 const _hoisted_683 = { class: "body" }
 const _hoisted_684 = { class: "chips" }
 const _hoisted_685 = ["onClick"]
 const _hoisted_686 = { class: "eb-chargrid" }
 const _hoisted_687 = ["onClick"]
-const _hoisted_688 = { class: "eb-note" }
+const _hoisted_688 = { class: "eb-tip" }
 const _hoisted_689 = { class: "foot" }
 const _hoisted_690 = { class: "body" }
 const _hoisted_691 = { class: "eb-field" }
 const _hoisted_692 = ["placeholder"]
 const _hoisted_693 = { class: "eb-field" }
-const _hoisted_694 = { class: "eb-note" }
+const _hoisted_694 = { class: "eb-tip" }
 const _hoisted_695 = { class: "foot" }
 const _hoisted_696 = { class: "body" }
 const _hoisted_697 = { class: "eb-field" }
-const _hoisted_698 = { class: "eb-note" }
+const _hoisted_698 = { class: "eb-tip" }
 const _hoisted_699 = { class: "foot" }
 const _hoisted_700 = {
   key: 25,
@@ -5918,7 +5987,7 @@ return function render(_ctx, _cache) {
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Paper size')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
                     "onUpdate:modelValue": _cache[190] || (_cache[190] = $event => ((_ctx.doc.paper.size) = $event)),
-                    onChange: _cache[191] || (_cache[191] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[191] || (_cache[191] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, [
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.paperSizes, (p) => {
                       return (_openBlock(), _createElementBlock("option", {
@@ -5934,7 +6003,7 @@ return function render(_ctx, _cache) {
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Orientation')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
                     "onUpdate:modelValue": _cache[192] || (_cache[192] = $event => ((_ctx.doc.paper.orientation) = $event)),
-                    onChange: _cache[193] || (_cache[193] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[193] || (_cache[193] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, [
                     _createElementVNode("option", _hoisted_268, _toDisplayString(_ctx.t('Portrait')), 1 /* TEXT */),
                     _createElementVNode("option", _hoisted_269, _toDisplayString(_ctx.t('Landscape')), 1 /* TEXT */)
@@ -5952,7 +6021,7 @@ return function render(_ctx, _cache) {
                     max: "100",
                     step: "1",
                     "onUpdate:modelValue": _cache[194] || (_cache[194] = $event => ((_ctx.doc.paper.margin.top) = $event)),
-                    onChange: _cache[195] || (_cache[195] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[195] || (_cache[195] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -5970,7 +6039,7 @@ return function render(_ctx, _cache) {
                     max: "100",
                     step: "1",
                     "onUpdate:modelValue": _cache[196] || (_cache[196] = $event => ((_ctx.doc.paper.margin.bottom) = $event)),
-                    onChange: _cache[197] || (_cache[197] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[197] || (_cache[197] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -5988,7 +6057,7 @@ return function render(_ctx, _cache) {
                     max: "100",
                     step: "1",
                     "onUpdate:modelValue": _cache[198] || (_cache[198] = $event => ((_ctx.doc.paper.margin.left) = $event)),
-                    onChange: _cache[199] || (_cache[199] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[199] || (_cache[199] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -6006,7 +6075,7 @@ return function render(_ctx, _cache) {
                     max: "100",
                     step: "1",
                     "onUpdate:modelValue": _cache[200] || (_cache[200] = $event => ((_ctx.doc.paper.margin.right) = $event)),
-                    onChange: _cache[201] || (_cache[201] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[201] || (_cache[201] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -6026,7 +6095,7 @@ return function render(_ctx, _cache) {
                     max: "36",
                     step: "0.5",
                     "onUpdate:modelValue": _cache[202] || (_cache[202] = $event => ((_ctx.doc.paper.fontSize) = $event)),
-                    onChange: _cache[203] || (_cache[203] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[203] || (_cache[203] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -6044,7 +6113,7 @@ return function render(_ctx, _cache) {
                     max: "3",
                     step: "0.05",
                     "onUpdate:modelValue": _cache[204] || (_cache[204] = $event => ((_ctx.doc.paper.lineHeight) = $event)),
-                    onChange: _cache[205] || (_cache[205] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    onChange: _cache[205] || (_cache[205] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [
                       _vModelText,
@@ -6069,7 +6138,7 @@ return function render(_ctx, _cache) {
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Number the headings')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("select", {
                   "onUpdate:modelValue": _cache[207] || (_cache[207] = $event => ((_ctx.doc.paper.headingNumbers) = $event)),
-                  onChange: _cache[208] || (_cache[208] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                  onChange: _cache[208] || (_cache[208] = (...args) => (_ctx.touchSettings && _ctx.touchSettings(...args)))
                 }, [
                   _createElementVNode("option", _hoisted_283, _toDisplayString(_ctx.t('Not numbered')), 1 /* TEXT */),
                   _createElementVNode("option", _hoisted_284, _toDisplayString(_ctx.t('1. / 1.1 / 1.1.1')), 1 /* TEXT */),
@@ -8728,6 +8797,7 @@ return function render(_ctx, _cache) {
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
         review: false, showChanges: true, changes: 0,
+        prevSettings: '',
         cropOpen: false, cropSrc: '',
         crop: { ratio: '', x: 50, y: 50 },
         cellBorderOpen: false,
@@ -9058,6 +9128,7 @@ return function render(_ctx, _cache) {
           }
           this.applyDocStyles();
           history.reset();
+          this.prevSettings = history.state();
           this.dirty = false;
           this.savedAt = (d.mtime || 0) * 1000;
           this.refreshState();
@@ -9077,8 +9148,9 @@ return function render(_ctx, _cache) {
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
         return stripEditorArtefacts(clone.innerHTML);
       },
-      currentHtml() {
+      currentHtml(clean) {
         return buildHtml({
+          clean: !!clean,
           title: this.doc.title || this.t('Untitled document'),
           paper: this.doc.paper,
           styles: this.doc.styles,
@@ -9140,7 +9212,7 @@ return function render(_ctx, _cache) {
         this.menuOpen = false;
         downloadHtml(this.doc.name || (this.doc.title + '.html'), this.currentHtml());
       },
-      printDoc() { printHtml(this.currentHtml()); },
+      printDoc() { printHtml(this.currentHtml(!this.showChanges)); },
       showSource() {
         this.menuOpen = false;
         this.htmlText = this.currentHtml();
@@ -10190,7 +10262,9 @@ return function render(_ctx, _cache) {
         this.settleFrame();
       },
       setVertical(on) {
+        history.pushPrev(this.prevSettings);
         this.doc.paper.vertical = !!on;
+        this.prevSettings = history.state();
         this.touch();
         this.$nextTick(() => { this.fitZoom(); this.repaginate(); });
       },
@@ -10257,8 +10331,16 @@ return function render(_ctx, _cache) {
         this.stylesOpen = true;
       },
       closeStyles() { this.stylesOpen = false; },
+      /** A change to the paper or the styles is an undoable step like any other. */
+      touchSettings() {
+        history.pushPrev(this.prevSettings);
+        this.prevSettings = history.state();
+        this.touch();
+      },
       touchStyles() {
+        history.pushPrev(this.prevSettings);
         this.doc.styles = normaliseStyles(this.doc.styles);
+        this.prevSettings = history.state();
         this.applyDocStyles();
         this.touch();
       },
@@ -10465,8 +10547,10 @@ return function render(_ctx, _cache) {
       },
       openRunning() { this.menu = ''; this.runOpen = true; },
       clearRunning() {
+        history.pushPrev(this.prevSettings);
         this.doc.paper.header = { l: '', c: '', r: '' };
         this.doc.paper.footer = { l: '', c: '', r: '' };
+        this.prevSettings = history.state();
         this.touch();
       },
       setMarker(type) { this.blockRun(() => setListMarker(type)); },
@@ -10955,6 +11039,14 @@ return function render(_ctx, _cache) {
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
+      history.readState = () => JSON.stringify({ paper: this.doc.paper, styles: this.doc.styles });
+      history.applyState = (raw) => {
+        let v = null;
+        try { v = JSON.parse(raw); } catch (e) { return; }
+        this.doc.paper = normalisePaper(v.paper);
+        this.doc.styles = normaliseStyles(v.styles);
+        this.applyDocStyles();
+      };
       const style = document.createElement('style');
       style.id = 'eb-doc-style';
       style.textContent = DOC_CSS + EDITOR_CSS;
