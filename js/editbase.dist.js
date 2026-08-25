@@ -275,7 +275,7 @@
 .eb-doc, .eb-doc *, .eb-doc *::before, .eb-doc *::after { box-sizing: border-box; }
 .eb-doc {
   font-family: var(--eb-font-body, "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif);
-  font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: justify;
+  font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: left;
   word-break: normal; overflow-wrap: anywhere; hyphens: auto;
 }
 .eb-doc > *:first-child { margin-top: 0; }
@@ -364,6 +364,9 @@
 .eb-doc .eb-al-l { text-align: left; }
 .eb-doc .eb-al-c { text-align: center; }
 .eb-doc .eb-al-r { text-align: right; }
+/* The document is set ranged left, as a word processor's default paragraph is.
+   It used to be justified, which left the justify button with nothing to do:
+   pressing it set what was already set, and the writer saw no change. */
 .eb-doc .eb-al-j { text-align: justify; }
 .eb-doc .eb-in1 { margin-left: 2em; }
 .eb-doc .eb-in2 { margin-left: 4em; }
@@ -403,7 +406,7 @@
    rule that says "under" has to say "beside" instead: a heading's rule, a note's
    bar, a caption. The writing mode does the rest, because a browser has had this
    since 2016 and Japanese typesetting is what it was put there for. */
-.eb-doc.eb-tategaki { writing-mode: vertical-rl; text-orientation: mixed; text-align: justify; }
+.eb-doc.eb-tategaki { writing-mode: vertical-rl; text-orientation: mixed; text-align: left; }
 .eb-doc.eb-tategaki h2 { border-bottom: none; border-left: 1.5pt solid #222; padding-bottom: 0; padding-left: .2em; }
 .eb-doc.eb-tategaki blockquote { border-left: none; border-top: 3pt solid #999; padding: 0 .4em 0 .4em; margin: 0 1em; }
 .eb-doc.eb-tategaki .eb-note { border-left: none; border-top: 4pt solid #2563eb; padding: .9em .5em 0 .5em; margin: 0 1.1em; }
