@@ -267,6 +267,12 @@
   // editor cannot drift from the artefact. Everything is scoped to .eb-doc: in a
   // saved file that class sits on <body>, in the editor it sits on the canvas.
   const DOC_CSS = `
+/* The editor sits inside an interface stylesheet that sets border-box on
+   everything; a saved file, opened on its own, gets the browser's content-box.
+   A box 139.6mm wide with a border and padding then came out 150.2mm in the file
+   and 139.6mm in the editor, and everything below it moved. Say it here and the
+   two agree. */
+.eb-doc, .eb-doc *, .eb-doc *::before, .eb-doc *::after { box-sizing: border-box; }
 .eb-doc {
   font-family: var(--eb-font-body, "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif);
   font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: justify;
@@ -697,11 +703,15 @@
       + '.eb-doc { --eb-font-body: ' + fontStack(fonts.body, 'serif') + ';'
       + ' --eb-font-head: ' + fontStack(fonts.head, 'sans') + ';'
       + ' --eb-font-mono: ' + fontStack(fonts.mono, 'mono') + '; }\n'
-      + (paper.vertical
-        ? '@media screen { body.eb-doc { max-height: ' + (s.h - paper.margin.top - paper.margin.bottom) + 'mm;'
-          + ' margin: ' + paper.margin.top + 'mm ' + paper.margin.right + 'mm ' + paper.margin.bottom + 'mm ' + paper.margin.left + 'mm; } }'
-        : '@media screen { body.eb-doc { max-width: ' + (s.w - paper.margin.left - paper.margin.right) + 'mm;'
-          + ' margin: ' + paper.margin.top + 'mm auto ' + paper.margin.bottom + 'mm; padding: 0 8px; } }');
+      // On screen the body IS the sheet, exactly as the editor's page is: the
+      // paper's width, with the margins as padding. Setting the margins as CSS
+      // margins instead left the column 4mm narrower and let the first
+      // paragraph's margin collapse away through the top edge, so every line
+      // below it sat 3.3mm higher in the file than in the editor.
+      + '@media screen { body.eb-doc { margin: 0 auto; max-width: 100%;'
+      + (paper.vertical ? ' height: ' + s.h + 'mm;' : ' width: ' + s.w + 'mm;')
+      + ' padding: ' + paper.margin.top + 'mm ' + paper.margin.right + 'mm '
+      + paper.margin.bottom + 'mm ' + paper.margin.left + 'mm; } }';
     // The typeface travels with the document as a stylesheet link, so the file looks
     // the same on a machine that has none of these fonts installed. It is the only
     // thing in the file that points anywhere outside it, and it is left out entirely
@@ -3762,12 +3772,23 @@
   // ---- printing --------------------------------------------------------------------
   /** Print the artefact itself, in an isolated frame, so no application style can
    *  reach the page and what comes out is byte-for-byte what the file contains. */
-  function printHtml(html) {
+  function printHtml(html, rule) {
     const frame = document.createElement('iframe');
     frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;';
     document.body.appendChild(frame);
-    const done = () => { setTimeout(() => frame.remove(), 1000); };
+    // The sheet is printed from a frame, and a browser asked to print a frame may
+    // take its paper from the page around it -- which is the app's own page, and
+    // says nothing about paper. Then A4 came out on whatever the printer happened
+    // to default to. Say it on both documents for as long as the printing lasts.
+    let outer = null;
+    if (rule) {
+      outer = document.createElement('style');
+      outer.media = 'print';
+      outer.textContent = rule;
+      document.head.appendChild(outer);
+    }
+    const done = () => { setTimeout(() => { frame.remove(); if (outer) { outer.remove(); } }, 1000); };
     frame.onload = () => {
       try {
         frame.contentWindow.focus();
@@ -9251,6 +9272,11 @@ return function render(_ctx, _cache) {
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+        // An empty paragraph holds its line in the editor, where contenteditable
+        // gives it one; on a plain page it collapses to nothing and everything
+        // below moves up. Give it the line break the editor was drawing for free.
+        clone.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, td, th')
+          .forEach((el) => { if (!el.firstChild) { el.appendChild(document.createElement('br')); } });
         return stripEditorArtefacts(clone.innerHTML);
       },
       currentHtml(clean) {
@@ -9317,7 +9343,7 @@ return function render(_ctx, _cache) {
         this.menuOpen = false;
         downloadHtml(this.doc.name || (this.doc.title + '.html'), this.currentHtml());
       },
-      printDoc() { printHtml(this.currentHtml(!this.showChanges)); },
+      printDoc() { printHtml(this.currentHtml(!this.showChanges), pageRule(normalisePaper(this.doc.paper))); },
       showSource() {
         this.menuOpen = false;
         this.htmlText = this.currentHtml();
