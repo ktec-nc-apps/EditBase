@@ -393,9 +393,14 @@
   padding: 2mm; margin: 1.1em 0;
 }
 .eb-doc .eb-shape.eb-sh-round { border-radius: 4mm; }
-.eb-doc .eb-v-mid, .eb-doc .eb-v-bot { display: flex; flex-direction: column; }
-.eb-doc .eb-v-mid { justify-content: center; }
-.eb-doc .eb-v-bot { justify-content: flex-end; }
+/* Only on the things that are boxes to write in. Laying a table out as a column
+   of flex items would take it apart. */
+.eb-doc .eb-shape.eb-v-mid, .eb-doc .eb-frame.eb-v-mid, .eb-doc .eb-box.eb-v-mid,
+.eb-doc .eb-shape.eb-v-bot, .eb-doc .eb-frame.eb-v-bot, .eb-doc .eb-box.eb-v-bot {
+  display: flex; flex-direction: column;
+}
+.eb-doc .eb-shape.eb-v-mid, .eb-doc .eb-frame.eb-v-mid, .eb-doc .eb-box.eb-v-mid { justify-content: center; }
+.eb-doc .eb-shape.eb-v-bot, .eb-doc .eb-frame.eb-v-bot, .eb-doc .eb-box.eb-v-bot { justify-content: flex-end; }
 .eb-doc .eb-shape.eb-sh-ellipse { border-radius: 50%; }
 .eb-doc .eb-shape.eb-sh-line {
   min-height: 0; height: 0; padding: 0; border: none; border-top: 1pt solid #333333;
@@ -4902,7 +4907,10 @@ const _hoisted_570 = { value: "left" }
 const _hoisted_571 = { value: "center" }
 const _hoisted_572 = { value: "right" }
 const _hoisted_573 = { value: "free" }
-const _hoisted_574 = { class: "eb-field" }
+const _hoisted_574 = {
+  key: 0,
+  class: "eb-field"
+}
 const _hoisted_575 = { value: "" }
 const _hoisted_576 = { value: "eb-v-mid" }
 const _hoisted_577 = { value: "eb-v-bot" }
@@ -8225,18 +8233,20 @@ return function render(_ctx, _cache) {
                     [_vModelSelect, _ctx.fprops.place]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_574, [
-                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Text down the box')), 1 /* TEXT */),
-                  _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[356] || (_cache[356] = $event => ((_ctx.fprops.vpos) = $event))
-                  }, [
-                    _createElementVNode("option", _hoisted_575, _toDisplayString(_ctx.t('At the top')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_576, _toDisplayString(_ctx.t('In the middle')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_577, _toDisplayString(_ctx.t('At the bottom')), 1 /* TEXT */)
-                  ], 512 /* NEED_PATCH */), [
-                    [_vModelSelect, _ctx.fprops.vpos]
-                  ])
-                ]),
+                (_ctx.frameHoldsWords)
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_574, [
+                      _createElementVNode("label", null, _toDisplayString(_ctx.t('Text down the box')), 1 /* TEXT */),
+                      _withDirectives(_createElementVNode("select", {
+                        "onUpdate:modelValue": _cache[356] || (_cache[356] = $event => ((_ctx.fprops.vpos) = $event))
+                      }, [
+                        _createElementVNode("option", _hoisted_575, _toDisplayString(_ctx.t('At the top')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_576, _toDisplayString(_ctx.t('In the middle')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_577, _toDisplayString(_ctx.t('At the bottom')), 1 /* TEXT */)
+                      ], 512 /* NEED_PATCH */), [
+                        [_vModelSelect, _ctx.fprops.vpos]
+                      ])
+                    ]))
+                  : _createCommentVNode("v-if", true),
                 _createElementVNode("div", _hoisted_578, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Text inside it')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
@@ -9718,6 +9728,10 @@ return function render(_ctx, _cache) {
       /** Wrapping and free placement cannot both be true: CSS has only one answer. */
       freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
       /** What the frame is, in the writer's words, for the bar and the dialogue. */
+      /** Whether this object is a box with words in it, as against a table or a rule. */
+      frameHoldsWords() {
+        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT'].indexOf(this.frame.kind) >= 0;
+      },
       frameLabel() {
         const kind = this.frame.kind;
         const names = {
