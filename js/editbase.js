@@ -2671,6 +2671,23 @@
     ref.parentNode.insertBefore(host, after ? ref.nextSibling : ref);
     return true;
   }
+  /**
+   * Whether the caret is in this object's text, as opposed to the object simply
+   * being selected. It decides what Delete means: a character when someone is
+   * writing inside a frame or a caption, the whole object when its box is up and
+   * the caret is elsewhere. A formula is a unit -- the caret standing in its
+   * markup is nobody editing text.
+   */
+  function frameHoldsCaret(el) {
+    if (!el) { return false; }
+    const sel = getRange();
+    if (!sel || !el.contains(sel.startContainer)) { return false; }
+    let n = sel.startContainer;
+    n = n.nodeType === 3 ? n.parentElement : n;
+    if (n && n.closest && n.closest('.eb-math-block, math')) { return false; }
+    if (el.nodeName === 'FIGURE' && n && n.closest && !n.closest('figcaption')) { return false; }
+    return true;
+  }
   function deleteObject(el) {
     if (!el) { return; }
     const host = objectFree(el) ? el.parentNode : el;
@@ -5685,7 +5702,12 @@
       blockRun(fn) { blockBoxed = true; this.run(fn); },
       setBlock(tag) { this.blockRun(() => setBlockType(tag)); },
       list(tag) { this.blockRun(() => toggleList(tag)); },
-      align(cls) { this.blockRun(() => setBlockClass('align', cls)); },
+      align(cls) {
+        // An object with its box up is what is being aligned -- not whatever
+        // paragraph the caret was left in, somewhere else on the page.
+        if (framePinned && frameEl && this.alignObject(frameEl, cls)) { return; }
+        this.blockRun(() => setBlockClass('align', cls));
+      },
       indent(dir) { this.blockRun(() => stepIndent(dir)); },
       clearFmt() { this.run(() => clearFormatting()); },
       setColour(value) { this.colour = value; this.run(() => applyInlineStyle('color', value)); },
@@ -6525,6 +6547,33 @@
         this.settleFrame();
       },
       /** Everything a frame command changes ends the same way. */
+      /**
+       * Aligning an object is a matter of its margins, not of the text inside it:
+       * a picture pushed to the right margin, a frame centred in the column. It
+       * returns false for the ones this does not fit -- an object sitting in the
+       * run of a sentence, or one already parked where the writer put it by hand
+       * -- and the paragraph command runs instead.
+       */
+      alignObject(el, cls) {
+        if (!el || cls === 'eb-al-j') { return false; }
+        if (el.nodeName === 'SPAN' || objectFree(el)) { return false; }
+        const want = { 'eb-al-l': ['0', 'auto'], 'eb-al-c': ['auto', 'auto'], 'eb-al-r': ['auto', '0'] }[cls];
+        if (!want) { return false; }
+        const now = [el.style.marginLeft || '', el.style.marginRight || ''];
+        history.push(true);
+        el.style.removeProperty('float');
+        // Pressing the alignment it already has takes it off, as it does on a
+        // paragraph.
+        if (now[0] === want[0] && now[1] === want[1]) {
+          el.style.removeProperty('margin-left');
+          el.style.removeProperty('margin-right');
+        } else {
+          el.style.marginLeft = want[0];
+          el.style.marginRight = want[1];
+        }
+        this.settleFrame();
+        return true;
+      },
       settleFrame(fit) {
         normaliseCanvas(this.t('Page break'), this.t('Caption'));
         this.touch();
@@ -7354,6 +7403,15 @@
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
+        // A picture with its box up goes when Delete is pressed, the way it does
+        // in every word processor. Text being written inside a frame does not:
+        // there the key deletes a character, as it always has.
+        if ((e.key === 'Delete' || e.key === 'Backspace') && this.frame.on && frameEl
+          && !frameHoldsCaret(frameEl)) {
+          e.preventDefault();
+          this.frameCmd('delete');
+          return undefined;
+        }
         if (meta && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
           e.preventDefault();
           this.run(() => moveBlock(e.key === 'ArrowUp' ? -1 : 1));
