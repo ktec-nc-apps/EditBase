@@ -772,3 +772,11 @@
 #editbase-root .eb-objgrp { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; }
 #editbase-root .eb-objgrp .nm { font-weight: 600; opacity: .7; padding: 0 4px; white-space: nowrap; }
 #editbase-root .eb-objgrp .sep { width: 1px; height: 16px; margin: 0 2px; background: currentColor; opacity: .25; }
+
+/* A five millimetre grid to lay things out on. It is drawn on the sheet behind
+   the writing, and it is the editor's own: nothing of it is saved. */
+#editbase-root .eb-paperwrap.grid .eb-sheet {
+  background-image:
+    repeating-linear-gradient(to right, rgba(37, 99, 235, .13) 0 1px, transparent 1px 5mm),
+    repeating-linear-gradient(to bottom, rgba(37, 99, 235, .13) 0 1px, transparent 1px 5mm);
+}
