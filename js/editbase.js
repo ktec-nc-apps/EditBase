@@ -2842,6 +2842,17 @@
     return el;
   }
 
+  /** A table put down where it is dropped, with a shape to start from. */
+  function insertFreeTable() {
+    const t = insertTable(2, 2, true, '');
+    if (!t) { return null; }
+    setObjectFree(t, true);
+    t.style.left = '0mm';
+    t.style.top = '0mm';
+    t.style.width = '80mm';
+    return t;
+  }
+
   /** A frame of words put down where it is dropped, not where the text is. */
   function insertFreeFrame() {
     const box = insertFrame();
@@ -5842,7 +5853,8 @@
       },
       /** What stands on the shelf beside the paper. */
       paletteItems() {
-        return [{ kind: 'frame', label: this.t('Text frame'), icon: this.icons.frame }]
+        return [{ kind: 'frame', label: this.t('Text frame'), icon: this.icons.frame },
+          { kind: 'table', label: this.t('Insert table'), icon: this.icons.table }]
           .concat(this.shapes.map((sh) => ({ kind: sh.kind, label: sh.label, icon: '<span class="eb-shape-icon">' + sh.icon + '</span>' })));
       },
       /** The shapes that can be put on a page, drawn in CSS rather than in a font. */
@@ -7495,12 +7507,16 @@
         // is put down where it lands, which is what someone laying out a page
         // wants. Both are one gesture apart.
         if (kind === 'frame' && !ev) { this.addFrame(); return; }
+        if (kind === 'table' && !ev) { this.tableOpen = true; return; }
         if (ev) {
           const at2 = caretFromPoint(ev.clientX, ev.clientY);
           if (at2) { selectRange(at2); }
         }
         let made = null;
-        this.run(() => { made = kind === 'frame' ? insertFreeFrame() : insertShape(kind); });
+        this.run(() => {
+          made = kind === 'frame' ? insertFreeFrame()
+            : (kind === 'table' ? insertFreeTable() : insertShape(kind));
+        });
         this.$nextTick(() => {
           if (made && made.parentNode && ev) {
             this.moveFreeTo(made, ev.clientX, ev.clientY);
