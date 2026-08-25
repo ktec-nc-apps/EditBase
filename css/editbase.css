@@ -227,18 +227,22 @@
 .eb-paperwrap.flow .eb-pagespacer { display: none; }
 
 /* ---------- phones and narrow windows ---------- */
-@media (max-width: 860px) {
-  /* The sidebar becomes a drawer over the page, with something to tap to close it. */
-  /* Inside the app's own area, so it never covers Nextcloud's header. */
-  .eb-side {
-    position: absolute; top: 0; left: 0; bottom: 0; z-index: 60; height: auto;
-    width: min(86vw, var(--sidebar-w)); box-shadow: var(--shadow);
-  }
-  .eb-side.hidden { display: none; }
-  .eb-backdrop { position: absolute; inset: 0; z-index: 55; background: rgba(15, 23, 42, .45); }
-  .eb-side .brand { padding: 14px 12px 10px; }
-  .eb-side .brand .side-close { margin-left: auto; }
+/* The sidebar becomes a drawer over the page, inside the app's own area so that it
+   never covers Nextcloud's header. It is driven by a class rather than only by a
+   width: a phone asked for the desktop site reports about 980px, and the layout
+   still has to be the phone's. */
+.eb-shell.narrow .eb-side {
+  position: absolute; top: 0; left: 0; bottom: 0; z-index: 60; height: auto;
+  width: min(86vw, var(--sidebar-w)); box-shadow: var(--shadow);
+}
+.eb-shell.narrow .eb-side.hidden { display: none; }
+.eb-shell.narrow .eb-backdrop { position: absolute; inset: 0; z-index: 55; background: rgba(15, 23, 42, .45); }
+.eb-shell.narrow .eb-side .brand { padding: 14px 12px 10px; }
+.eb-shell.narrow .eb-side .brand .side-close { margin-left: auto; }
+.eb-menu-docs { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; }
+.eb-menu-docs .eb-btn.on { background: var(--surface-2); color: var(--text); }
 
+@media (max-width: 860px) {
   .eb-desk { padding: 12px 6px 40px; }
   .eb-topbar { gap: 6px; padding: 6px 8px; }
   .eb-topbar .state { display: none; }

@@ -2358,7 +2358,7 @@
   ];
 
   const TEMPLATE = `
-<div class="eb-shell">
+<div class="eb-shell" :class="{ narrow: narrow }">
   <div v-if="narrow && sideOpen" class="eb-backdrop" @click="sideOpen = false"></div>
   <aside class="eb-side" :class="{ hidden: !sideOpen }">
     <div class="brand">
@@ -2385,7 +2385,7 @@
 
   <section class="eb-main">
     <div class="eb-topbar">
-      <button class="eb-tb menu-btn" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
+      <button class="eb-tb menu-btn" @touchend.prevent="sideOpen = !sideOpen" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
       <input class="title-input" v-model="doc.title" :placeholder="t('Untitled document')" @change="applyTitle" :disabled="!doc.id">
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
       <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
@@ -2395,6 +2395,13 @@
         <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
           <h3>{{ doc.title || t('Untitled document') }}</h3>
           <div class="body" style="display:flex;flex-direction:column;gap:6px;padding-bottom:16px">
+            <template v-if="narrow">
+              <button class="eb-btn wide primary" @click="newDoc(); menuOpen = false">＋ {{ t('New document') }}</button>
+              <div class="eb-menu-docs" v-if="docs.length">
+                <button v-for="d in docs" :key="d.id" class="eb-btn wide ghost" :class="{ on: d.id === doc.id }" @click="openDoc(d.id); menuOpen = false">{{ d.title }}</button>
+              </div>
+              <div class="eb-menu-sep"></div>
+            </template>
             <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
             <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
             <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
@@ -4273,7 +4280,11 @@
        * starts at whatever makes it fit.
        */
       measureWidth() {
-        const narrow = window.innerWidth <= 860;
+        // Width alone is not enough: a phone asked for "desktop site" reports about
+        // 980px, and then none of this would apply on the very device that needs it.
+        // A coarse pointer is a finger, whatever the browser claims about width.
+        const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        const narrow = window.innerWidth <= 860 || (coarse && window.innerWidth <= 1100);
         const became = narrow && !this.narrow;
         this.narrow = narrow;
         if (became) { this.sideOpen = false; }
@@ -4286,7 +4297,7 @@
         // suits a desktop, and one browser profile may see both.
         const pref = this.flowPref[narrow ? 'narrow' : 'wide'];
         // A tablet still shows a whole A4 page at a readable size; a phone does not.
-        this.setFlow(pref == null ? window.innerWidth <= 700 : pref);
+        this.setFlow(pref == null ? (window.innerWidth <= 700 || (coarse && window.innerWidth <= 820)) : pref);
         this.fitZoom();
       },
       setFlow(on) {
@@ -4603,11 +4614,13 @@
       // the page opens the same menu: half a second, without the finger moving.
       let holdTimer = null;
       let holdAt = null;
+      let holdStart = 0;
       const cancelHold = () => { window.clearTimeout(holdTimer); holdTimer = null; };
       c.addEventListener('touchstart', (e) => {
         if (!e.touches || e.touches.length !== 1) { return cancelHold(); }
         const t = e.touches[0];
         holdAt = { x: t.clientX, y: t.clientY };
+        holdStart = Date.now();
         cancelHold();
         holdTimer = window.setTimeout(() => {
           this.openCtx({
@@ -4624,12 +4637,41 @@
         if (Math.abs(t.clientX - holdAt.x) > 8 || Math.abs(t.clientY - holdAt.y) > 8) { cancelHold(); }
       }, { passive: true });
       c.addEventListener('touchend', cancelHold, { passive: true });
-      c.addEventListener('touchcancel', cancelHold, { passive: true });
+      c.addEventListener('touchcancel', () => {
+        // Safari cancels the touch when it takes the gesture for its own callout.
+        // If the press was long enough, it was meant for our menu.
+        if (holdTimer && holdAt && Date.now() - holdStart > 400) {
+          const at = holdAt;
+          cancelHold();
+          this.openCtx({
+            clientX: at.x, clientY: at.y, shiftKey: false,
+            target: document.elementFromPoint(at.x, at.y),
+            preventDefault() { /* the browser has already given up the gesture */ },
+          });
+          return;
+        }
+        cancelHold();
+      }, { passive: true });
       c.addEventListener('dragstart', () => this.onDragStart());
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
       window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
+      // A swipe in from the left edge opens the drawer, as a phone expects.
+      let swipeFrom = null;
+      document.addEventListener('touchstart', (e) => {
+        const t = e.touches && e.touches[0];
+        swipeFrom = (t && this.narrow && t.clientX < 24) ? { x: t.clientX, y: t.clientY } : null;
+      }, { passive: true });
+      document.addEventListener('touchmove', (e) => {
+        const t = e.touches && e.touches[0];
+        if (!swipeFrom || !t) { return; }
+        if (t.clientX - swipeFrom.x > 40 && Math.abs(t.clientY - swipeFrom.y) < 40) {
+          this.sideOpen = true;
+          swipeFrom = null;
+        }
+      }, { passive: true });
+      document.addEventListener('touchend', () => { swipeFrom = null; }, { passive: true });
       if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', () => this.keepCaretVisible());
       }
