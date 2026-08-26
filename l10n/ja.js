@@ -486,6 +486,7 @@ OC.L10N.register(
     "Could not duplicate: {msg}": "複製できませんでした: {msg}",
     "Move \"{name}\" to the trash?": "「{name}」をゴミ箱に移動しますか？",
     "Could not delete: {msg}": "削除できませんでした: {msg}",
+    "Turn on “Background graphics” in the print dialogue, or the page’s colour and frame will not be printed.": "印刷ダイアログの「背景のグラフィック」を入にしてください。切のままだとページの色と枠は印刷されません。",
     "Postcard (100 x 148)": "はがき（100×148）",
     "Reply postcard (148 x 200)": "往復はがき（148×200）",
     "B4 (JIS 257 x 364)": "B4（JIS 257×364）",

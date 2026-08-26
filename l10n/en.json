@@ -485,6 +485,7 @@
         "Could not duplicate: {msg}": "Could not duplicate: {msg}",
         "Move \"{name}\" to the trash?": "Move \"{name}\" to the trash?",
         "Could not delete: {msg}": "Could not delete: {msg}",
+        "Turn on “Background graphics” in the print dialogue, or the page’s colour and frame will not be printed.": "Turn on “Background graphics” in the print dialogue, or the page’s colour and frame will not be printed.",
         "Postcard (100 x 148)": "Postcard (100 x 148)",
         "Reply postcard (148 x 200)": "Reply postcard (148 x 200)",
         "B4 (JIS 257 x 364)": "B4 (JIS 257 x 364)",
