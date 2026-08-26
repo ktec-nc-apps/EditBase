@@ -254,6 +254,8 @@
         "Language": "言語",
         "Check spelling while typing": "入力中につづりを確認する",
         "Turn an address into a link as it is typed": "入力したアドレスを自動でリンクにする",
+        "Paste into a box of its own": "貼り付けは枠付きのオブジェクトにする",
+        "What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.": "貼り付けたものは枠の付いたオブジェクトとして入り、そのまま好きな位置へ動かせます。Shiftを押しながら貼り付けると、文章の中へそのまま文字として入ります。",
         "Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.": "つづりの確認はブラウザ自身の機能で、ブラウザに設定された言語で行われます。修正候補は Shift+右クリック で表示できます。",
         "Save automatically while typing": "入力中に自動保存する",
         "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.": "これがFilesに保存される内容そのものです。1つのファイルにスタイルまで含まれており、開くのに他には何も要りません。",

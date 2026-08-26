@@ -980,6 +980,8 @@
   // The object the bounding box is drawn round. It is not Vue state: the canvas is
   // plain DOM, and this is a node in it.
   let frameEl = null;
+  // Whether the paste about to arrive was asked for with Shift held down.
+  let pastePlain = false;
   let framePinned = false;
   let frameDrag = null;
   let frameBox = null;
@@ -3861,15 +3863,56 @@
   }
 
   // ---- paste ---------------------------------------------------------------------
-  function handlePaste(e, plainOnly) {
+  function handlePaste(e, plainOnly, asObject) {
     const data = e.clipboardData;
-    if (!data) { return; }
+    if (!data) { return null; }
     e.preventDefault();
     const html = plainOnly ? '' : data.getData('text/html');
     const uri = (data.getData('text/uri-list') || '').split(/\r?\n/).find((l) => /^https?:/i.test(l)) || '';
     history.push(true);
-    if (html) { pasteHtmlAt(html, uri); } else { pasteTextAt(data.getData('text/plain') || ''); }
+    const made = html ? pasteHtmlAt(html, uri, asObject) : pasteTextAt(data.getData('text/plain') || '', asObject);
     normaliseCanvas();
+    return made;
+  }
+
+  /**
+   * What comes off the clipboard arrives as an object with a box round it, so it
+   * can be picked up and put where it belongs rather than being poured into the
+   * middle of the writing. Something that is already an object -- a picture, a
+   * table, a shape cut from the page -- comes back as itself.
+   */
+  function objectFromFragment(frag) {
+    const kids = Array.from(frag.childNodes).filter((n) => n.nodeType !== 3 || n.data.trim());
+    if (!kids.length) { return null; }
+    if (kids.length === 1 && kids[0].nodeType === 1 && kids[0].matches && kids[0].matches(OBJECT_SEL)) {
+      return kids[0];
+    }
+    // Blocks need a block to live in; a run of words stays on the line it lands on.
+    const hasBlock = kids.some((n) => n.nodeType === 1 && isBlock(n));
+    const box = document.createElement(hasBlock ? 'div' : 'span');
+    box.className = 'eb-frame';
+    box.appendChild(frag);
+    return box;
+  }
+  /** Put a pasted object in, and leave it standing there with its box up. */
+  function placePasted(box) {
+    if (!box) { return null; }
+    if (box.nodeName === 'SPAN' || !isBlock(box)) {
+      const frag = document.createDocumentFragment();
+      frag.appendChild(box);
+      insertFragmentAt(frag);
+    } else {
+      insertBlockNode(box);
+    }
+    return box;
+  }
+  /** The caret is somewhere a new box would be a box inside a box. */
+  function pasteWouldNest() {
+    const range = getRange();
+    const node = range && range.startContainer;
+    const el = node && (node.nodeType === 3 ? node.parentNode : node);
+    if (!el || !el.closest) { return false; }
+    return !!el.closest('.eb-frame, .eb-shape, .eb-box, .eb-note, .eb-math-block, td, th, figcaption');
   }
 
   /** Drop a fragment in at the caret and leave the caret after it. */
@@ -3988,7 +4031,7 @@
     return root;
   }
 
-  function pasteHtmlAt(html, base) {
+  function pasteHtmlAt(html, base, asObject) {
     const holder = document.createElement('div');
     holder.innerHTML = html;
     sanitiseInto(holder);
@@ -4004,7 +4047,9 @@
     stripFurniture(holder, true);
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
+    if (asObject) { return placePasted(objectFromFragment(frag)); }
     insertFragmentAt(frag);
+    return null;
   }
 
   /** Chrome and Safari put the page's own address in the clipboard markup. */
@@ -4013,13 +4058,15 @@
       || String(html || '').match(/<!--\s*(?:StartFragment|SourceURL)\s*:?\s*(https?:\/\/[^\s>-]+)/i);
     return m ? m[1] : '';
   }
-  function pasteTextAt(text) {
+  function pasteTextAt(text, asObject) {
     const frag = document.createDocumentFragment();
     String(text == null ? '' : text).split(/\r?\n/).forEach((line, i) => {
       if (i) { frag.appendChild(document.createElement('br')); }
       frag.appendChild(document.createTextNode(line));
     });
+    if (asObject) { return placePasted(objectFromFragment(frag)); }
     insertFragmentAt(frag);
+    return null;
   }
 
   // ---- other apps on this server -------------------------------------------------
@@ -5180,6 +5227,8 @@
         <div class="eb-field">
           <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
           <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
+          <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
+          <p class="eb-tip">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
           <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
         </div>
         <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
@@ -5918,6 +5967,7 @@
         mergeOpen: false,
         merge: { source: '', keys: [], count: 0, busy: false, separate: false },
         pickerOpen: false,
+        pasteObject: true,
         picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '', mode: 'insert' },
         table: { rows: 3, cols: 3, header: true, variant: '' },
         math: { source: '', block: true },
@@ -8561,7 +8611,19 @@
           return;
         }
         if (!html && !text) { return; }
-        this.run(() => { if (html) { pasteHtmlAt(html); } else { pasteTextAt(text); } });
+        // The right button's Paste behaves as Ctrl+V does, and its "as plain text"
+        // is the same escape hatch Shift gives on the keyboard.
+        const asObject = this.pasteObject && !plainOnly && !pasteWouldNest();
+        let made = null;
+        this.run(() => { made = html ? pasteHtmlAt(html, '', asObject) : pasteTextAt(text, asObject); });
+        if (made) {
+          frameEl = made;
+          frameMore = [];
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+        }
         this.repaginate();
       },
 
@@ -8712,6 +8774,10 @@
       },
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
+        // A paste event carries no keys of its own -- it is not a keyboard event --
+        // so the one that started it is remembered here. Shift is what says "into
+        // the writing, as plain text", as it does everywhere else.
+        if (meta && (e.key === 'v' || e.key === 'V')) { pastePlain = !!e.shiftKey; }
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
         // Arrow keys walk a parked frame about the page: a millimetre a press, five
         // with Shift, a fifth with Alt. Anywhere else they belong to the caret.
@@ -8826,6 +8892,7 @@
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
+      pasteObject(v) { window.localStorage.setItem('eb-paste-object', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
       review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
     },
@@ -8858,6 +8925,8 @@
       if (g != null) { this.guides = g === '1'; }
       const bx = window.localStorage.getItem('eb-boxes');
       if (bx != null) { this.boxes = bx === '1'; }
+      const po = window.localStorage.getItem('eb-paste-object');
+      if (po != null) { this.pasteObject = po === '1'; }
       const rl = window.localStorage.getItem('eb-ruler');
       if (rl != null) { this.ruler = rl === '1'; }
       const rv = window.localStorage.getItem('eb-review');
@@ -8901,7 +8970,18 @@
           this.insertPastedFiles(files);
           return;
         }
-        handlePaste(e, e.shiftKey);
+        const plain = pastePlain;
+        pastePlain = false;
+        const asObject = this.pasteObject && !plain && !pasteWouldNest();
+        const made = handlePaste(e, plain, asObject);
+        if (made) {
+          frameEl = made;
+          frameMore = [];
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+        }
         this.touch();
         this.recount();
       });
