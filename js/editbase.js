@@ -68,7 +68,21 @@
     header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
     headingNumbers: '',
     vertical: false,
+    // The paper itself: what it is painted with and what is drawn round it.
+    // '' on the colour means plain white paper, as it comes out of the tray.
+    bg: { colour: '', image: '', fit: 'cover', fade: 0, w: 0, h: 0 },
+    border: { style: 'none', width: 1, colour: '#333333', gap: 6, radius: 0 },
   };
+  const PAGE_FITS = ['cover', 'contain', 'stretch', 'tile'];
+  const PAGE_BORDERS = ['none', 'solid', 'dashed', 'dotted', 'double'];
+  /** A picture the file may carry: one it holds itself, or one it can fetch. */
+  function safeImageUrl(v) {
+    const s = String(v || '').trim();
+    if (!s || s.length > 8 * 1024 * 1024) { return ''; }
+    if (/^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+$/i.test(s)) { return s; }
+    if (/^https?:\/\/[^\s"'()<>]+$/i.test(s)) { return s; }
+    return '';
+  }
 
   function normalisePaper(p) {
     const out = JSON.parse(JSON.stringify(DEFAULT_PAPER));
@@ -93,6 +107,31 @@
       const v = Number(p.margin && p.margin[k]);
       if (v >= 0 && v <= 100) { out.margin[k] = v; }
     });
+    // The paper's own paint. A background picture is kept inside the file as a
+    // data URL, the same as any other picture here, so the artefact stays one file.
+    if (p.bg && typeof p.bg === 'object') {
+      if (typeof p.bg.colour === 'string' && /^#[0-9a-f]{6}$/i.test(p.bg.colour)) { out.bg.colour = p.bg.colour; }
+      out.bg.image = safeImageUrl(p.bg.image);
+      if (PAGE_FITS.indexOf(p.bg.fit) >= 0) { out.bg.fit = p.bg.fit; }
+      const fd = Number(p.bg.fade);
+      if (fd >= 0 && fd <= 90) { out.bg.fade = Math.round(fd); }
+      // The picture's own size in pixels, so that a tile can be laid at the size
+      // it was drawn rather than at a guess.
+      ['w', 'h'].forEach((k) => {
+        const n = Number(p.bg[k]);
+        if (n > 0 && n <= 20000) { out.bg[k] = Math.round(n); }
+      });
+    }
+    if (p.border && typeof p.border === 'object') {
+      if (PAGE_BORDERS.indexOf(p.border.style) >= 0) { out.border.style = p.border.style; }
+      const bw = Number(p.border.width);
+      if (bw >= 0.1 && bw <= 20) { out.border.width = Math.round(bw * 10) / 10; }
+      if (typeof p.border.colour === 'string' && /^#[0-9a-f]{6}$/i.test(p.border.colour)) { out.border.colour = p.border.colour; }
+      const bg2 = Number(p.border.gap);
+      if (bg2 >= 0 && bg2 <= 40) { out.border.gap = Math.round(bg2 * 10) / 10; }
+      const br = Number(p.border.radius);
+      if (br >= 0 && br <= 40) { out.border.radius = Math.round(br * 10) / 10; }
+    }
     // Plain text only: these go into the file as markup, and a running header is
     // not a place anyone needs to write markup.
     ['header', 'footer'].forEach((which) => {
@@ -104,6 +143,72 @@
     });
     return out;
   }
+  /**
+   * What the paper is painted with, drawn once as a picture of the page: the
+   * colour, the picture behind the writing and the frame, in that order, in
+   * millimetres on a canvas the size of the sheet.
+   *
+   * It is one picture rather than a set of CSS rules because of the printer. A
+   * background on the body or on html stops at the page margins when it is
+   * printed -- the paper's own edge is out of their reach -- and a fixed element
+   * is clipped to the same box on every page. The only box that is the whole
+   * sheet is the page box itself, and the one thing that can be put on it in
+   * every browser that supports it is a background image. The same picture then
+   * serves the editor's sheets and the saved file's screen view, so what is on
+   * the screen is what comes out of the printer.
+   */
+  function pageArt(paper) {
+    const s = sheet(paper);
+    const bg = paper.bg || {};
+    const bd = paper.border || {};
+    const hasBorder = bd.style && bd.style !== 'none' && bd.width > 0;
+    if (!bg.colour && !bg.image && !hasBorder) { return { url: '', any: false }; }
+    const q = (v) => String(v).replace(/#/g, '%23');
+    const box = "0 0 " + s.w + " " + s.h;
+    let art = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" + box + "' preserveAspectRatio='none'>";
+    if (bg.colour) { art += "<rect width='" + s.w + "' height='" + s.h + "' fill='" + q(bg.colour) + "'/>"; }
+    if (bg.image) {
+      if (bg.fit === 'tile') {
+        // A tile is the picture at its own size, so the paper is measured in
+        // millimetres and the picture in pixels: 96 of them to the inch.
+        const tw = round1((Number(bg.w) || 120) * MM) || 30;
+        const th = round1((Number(bg.h) || 120) * MM) || 30;
+        art += "<defs><pattern id='t' patternUnits='userSpaceOnUse' width='" + tw + "' height='" + th + "'>"
+          + "<image href='" + bg.image + "' width='" + tw + "' height='" + th + "' preserveAspectRatio='none'/>"
+          + "</pattern></defs>"
+          + "<rect width='" + s.w + "' height='" + s.h + "' fill='url(%23t)'/>";
+      } else {
+        const par = { cover: 'xMidYMid slice', contain: 'xMidYMid meet', stretch: 'none' }[bg.fit] || 'xMidYMid slice';
+        art += "<image href='" + bg.image + "' x='0' y='0' width='" + s.w + "' height='" + s.h
+          + "' preserveAspectRatio='" + par + "'/>";
+      }
+    }
+    // Fading is a sheet of white over the picture, not opacity: opacity would
+    // fade the words standing on it as well.
+    if (bg.image && bg.fade > 0) {
+      art += "<rect width='" + s.w + "' height='" + s.h + "' fill='%23ffffff' opacity='" + (bg.fade / 100).toFixed(2) + "'/>";
+    }
+    if (hasBorder) {
+      const w = bd.width;
+      const dash = { dashed: " stroke-dasharray='" + round1(w * 3) + " " + round1(w * 2) + "'",
+        dotted: " stroke-dasharray='0.01 " + round1(w * 2) + "' stroke-linecap='round'" }[bd.style] || '';
+      const rect = (inset, width) => "<rect x='" + round1(inset + width / 2) + "' y='" + round1(inset + width / 2)
+        + "' width='" + round1(s.w - 2 * inset - width) + "' height='" + round1(s.h - 2 * inset - width)
+        + "' rx='" + Math.max(0, round1(bd.radius - (inset - bd.gap))) + "' fill='none' stroke='" + q(bd.colour)
+        + "' stroke-width='" + width + "'" + dash + "/>";
+      if (bd.style === 'double') {
+        // Two lines and the space between them, each a third of the width, the
+        // way a double border is drawn.
+        const t = round1(w / 3);
+        art += rect(bd.gap, t) + rect(round1(bd.gap + 2 * t), t);
+      } else {
+        art += rect(bd.gap, w);
+      }
+    }
+    art += '</svg>';
+    return { url: 'data:image/svg+xml;utf8,' + art, any: true };
+  }
+
   /** Sheet size in mm with the orientation applied. */
   function sheet(paper) {
     const s = PAPERS[paper.size] || PAPERS.A4;
@@ -112,10 +217,26 @@
   /** The @page rule — the one piece of CSS that differs per document. */
   function pageRule(paper) {
     const s = PAPERS[paper.size] || PAPERS.A4;
+    const sh = sheet(paper);
     const m = paper.margin;
     const named = { A3: 'A3', A4: 'A4', A5: 'A5', B4: 'B4', B5: 'B5', Letter: 'letter', Legal: 'legal' }[paper.size];
-    const size = named ? named + ' ' + paper.orientation : (s.w + 'mm ' + s.h + 'mm');
-    return '@page { size: ' + size + '; margin: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm; }';
+    // A size given in millimetres carries its own orientation: saying "landscape"
+    // as well is not allowed, and leaving the paper's own width and height in
+    // portrait order printed a landscape postcard upright.
+    const size = named ? named + ' ' + paper.orientation : (sh.w + 'mm ' + sh.h + 'mm');
+    // The page's own paint goes on the page box, the only box that is the whole
+    // sheet when the file is printed. Its background starts at the text area, so
+    // it is given the paper's size and pulled back out to the paper's corner by
+    // the margins; the writing is not touched, and a browser that ignores it
+    // simply prints on white paper with everything in the same place.
+    const art = pageArt(paper);
+    const paint = art.any
+      ? ' background-image: url("' + art.url + '");'
+        + ' background-size: ' + sh.w + 'mm ' + sh.h + 'mm;'
+        + ' background-repeat: no-repeat;'
+        + ' background-position: ' + (-m.left) + 'mm ' + (-m.top) + 'mm;'
+      : '';
+    return '@page { size: ' + size + '; margin: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;' + paint + ' }';
   }
 
   // ---- typefaces ---------------------------------------------------------------
@@ -538,6 +659,19 @@
 .eb-paper figcaption:empty { display: block; min-height: 1.3em; }
 .eb-paper figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
 .eb-paper table.eb-table td:focus, .eb-paper table.eb-table th:focus { outline: 2px solid #2563eb33; }
+/* Every object carries a box, not only the one being worked on: on a page laid
+   out with things placed on it, a writer needs to see where each of them is
+   before clicking. It is an outline, so it takes up no room and moves nothing,
+   and it belongs to the editor -- the saved file has none of it. */
+.eb-paper.boxed figure.eb-img, .eb-paper.boxed table.eb-table, .eb-paper.boxed aside.eb-box,
+.eb-paper.boxed div.eb-note, .eb-paper.boxed div.eb-math-block, .eb-paper.boxed nav.eb-toc,
+.eb-paper.boxed div.eb-frame, .eb-paper.boxed span.eb-frame, .eb-paper.boxed div.eb-shape,
+.eb-paper.boxed hr {
+  outline: 1px dashed rgba(37, 99, 235, .40);
+  outline-offset: 1px;
+}
+/* A rule or a line is a hair thick and its box would sit on top of it. */
+.eb-paper.boxed hr, .eb-paper.boxed div.eb-sh-line, .eb-paper.boxed div.eb-sh-arrow { outline-offset: 3px; }
 `;
 
   // ---- the document's own styles ---------------------------------------------
@@ -743,6 +877,7 @@
     // On screen the file should read as a sheet of paper, the way the editor
     // draws it -- a white page on a grey ground -- not as a web page that happens
     // to be narrow. Print takes none of this: paper is already white.
+    const art = pageArt(paper);
     const page = 'html { background: #ffffff; }\n'
       + '@media screen { html { background: #f1f2f4; -webkit-print-color-adjust: exact; }\n'
       + '  body.eb-doc { background: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18); }\n'
@@ -756,10 +891,21 @@
       // margins instead left the column 4mm narrower and let the first
       // paragraph's margin collapse away through the top edge, so every line
       // below it sat 3.3mm higher in the file than in the editor.
+      // …and a sheet is a whole sheet, not a strip the height of its words: a page
+      // with a frame or a colour on it has to show the paper it is printed on.
       + '@media screen { body.eb-doc { margin: 0 auto; max-width: 100%;'
-      + (paper.vertical ? ' height: ' + s.h + 'mm;' : ' width: ' + s.w + 'mm;')
+      + (paper.vertical ? ' height: ' + s.h + 'mm; min-width: ' + s.w + 'mm;' : ' width: ' + s.w + 'mm; min-height: ' + s.h + 'mm;')
       + ' padding: ' + paper.margin.top + 'mm ' + paper.margin.right + 'mm '
-      + paper.margin.bottom + 'mm ' + paper.margin.left + 'mm; } }';
+      + paper.margin.bottom + 'mm ' + paper.margin.left + 'mm; } }'
+      // On screen the body is the sheet, so the same picture is laid on it, one
+      // sheet's worth at a time. In print it is on the page box instead.
+      + (art.any ? '\n/* the paper itself */\n'
+        // The white the page is normally printed on has to come off, or it is
+        // painted over the page box and the paint only shows in the margins.
+        + '@media print { html { background: transparent; } }\n'
+        + '@media screen { body.eb-doc { background-image: url("' + art.url + '");'
+        + ' background-size: ' + s.w + 'mm ' + s.h + 'mm; background-repeat: repeat-y;'
+        + ' background-position: center top; } }\n' : '');
     // The typeface travels with the document as a stylesheet link, so the file looks
     // the same on a machine that has none of these fonts installed. It is the only
     // thing in the file that points anywhere outside it, and it is left out entirely
@@ -782,8 +928,13 @@
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
       + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
-      + runningBlock('eb-runhead', paper.header)
+      // The writing comes first and nothing else does. The running header, the
+      // footer and the page's paint are all placed by CSS and could sit anywhere,
+      // but a document whose first element is not its first paragraph loses the
+      // rule that takes the space off the top of the page -- and every line in
+      // the file then sat 42.5px lower than the same line in the editor.
       + body + '\n'
+      + runningBlock('eb-runhead', paper.header)
       + runningBlock('eb-runfoot', paper.footer)
       + '</body>\n</html>\n';
   }
@@ -800,7 +951,7 @@
     const body = dom.body || dom.createElement('body');
     // The running header and footer are written out of the paper setup, so they
     // are not part of the text and must not come back into the canvas as blocks.
-    Array.from(body.querySelectorAll('.eb-runhead, .eb-runfoot')).forEach((n) => n.remove());
+    Array.from(body.querySelectorAll('.eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
     sanitiseInto(body);
     return {
       title: (dom.title || '').trim(),
@@ -4030,6 +4181,16 @@
       img.src = src;
     });
   }
+  /** How big a picture is in its own pixels. */
+  function imageSize(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
+      img.onerror = () => resolve({ w: 0, h: 0 });
+      img.src = url;
+    });
+  }
+
   async function shrinkImage(dataUrl, mime, maxEdge) {
     const limit = maxEdge || 2200;
     if (mime === 'image/svg+xml' || mime === 'image/gif') { return dataUrl; }
@@ -4147,6 +4308,7 @@
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
     grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
+    boxes: I('<rect x="2.6" y="3.6" width="10.8" height="8.8" rx=".6" stroke-dasharray="2 1.6"/><path d="M1.4 2.4h2.4M12.2 2.4h2.4M1.4 13.6h2.4M12.2 13.6h2.4"/>'),
     palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
     spread: I('<rect x="1" y="4" width="3.4" height="8" rx=".8"/><rect x="6.3" y="4" width="3.4" height="8" rx=".8"/><rect x="11.6" y="4" width="3.4" height="8" rx=".8"/>'),
     sameSize: I('<rect x="1.2" y="3" width="6" height="10" rx="1"/><rect x="8.8" y="3" width="6" height="10" rx="1" stroke-dasharray="2 1.6"/>'),
@@ -4223,7 +4385,6 @@
       </button>
     </div>
     <div class="side-foot">
-      <button class="eb-btn ghost wide" @click="paperOpen = true">🖹 {{ t('Paper setup') }}</button>
       <button class="eb-btn ghost wide" @click="settingsOpen = true">⚙ {{ t('Settings') }}</button>
     </div>
   </aside>
@@ -4383,6 +4544,7 @@
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
       <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
+      <button class="eb-tb" :class="{ on: boxes }" v-if="!flow" @mousedown.prevent @click="boxes = !boxes" :title="boxes ? t('Hide the box round every object') : t('Show the box round every object')"><span v-html="icons.boxes"></span></button>
       <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span v-html="flow ? icons.screenView : icons.pageView"></span>
@@ -4526,7 +4688,7 @@
             </div>
           </div>
         </div>
-        <div id="eb-canvas" class="eb-paper eb-doc" :class="numberClass"
+        <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow }]"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
         <!-- The line a frame has just snapped to, drawn while it is being dragged
@@ -4618,6 +4780,61 @@
             <option value="japanese">{{ t('Chapter 1 / Section 1 / (1), in Japanese') }}</option>
           </select>
           <p class="eb-tip">{{ t('The numbers are counted by the file itself, so adding a section renumbers everything after it. They are not part of the text and do not appear in a contents list.') }}</p>
+        </div>
+        <!-- The page as an object in its own right: what it is painted with and
+             what is drawn round it. -->
+        <div class="eb-field">
+          <label>{{ t('The page itself') }}</label>
+          <div class="eb-row">
+            <div class="eb-field">
+              <label>{{ t('Page colour') }}</label>
+              <div class="colour-pair">
+                <input type="color" :value="doc.paper.bg.colour || '#ffffff'" @input="doc.paper.bg.colour = $event.target.value; touchSettings()">
+                <button class="eb-btn ghost" :class="{ on: !doc.paper.bg.colour }" @click="doc.paper.bg.colour = ''; touchSettings()">{{ t('Plain paper') }}</button>
+              </div>
+            </div>
+            <div class="eb-field">
+              <label>{{ t('Picture behind the page') }}</label>
+              <div class="colour-pair">
+                <button class="eb-btn ghost" @click="openPageBg">{{ doc.paper.bg.image ? t('Change…') : t('Choose…') }}</button>
+                <button class="eb-btn ghost" v-if="doc.paper.bg.image" @click="doc.paper.bg.image = ''; touchSettings()">{{ t('Remove') }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="eb-row" v-if="doc.paper.bg.image">
+            <div class="eb-field">
+              <label>{{ t('How it sits on the page') }}</label>
+              <select v-model="doc.paper.bg.fit" @change="touchSettings">
+                <option value="cover">{{ t('Fill the page') }}</option>
+                <option value="contain">{{ t('Fit inside the page') }}</option>
+                <option value="stretch">{{ t('Stretch to the page') }}</option>
+                <option value="tile">{{ t('Repeat as a tile') }}</option>
+              </select>
+            </div>
+            <div class="eb-field">
+              <label>{{ t('Fade it (%)') }}</label>
+              <input type="number" min="0" max="90" step="5" v-model.number="doc.paper.bg.fade" @change="touchSettings">
+            </div>
+          </div>
+          <div class="eb-row">
+            <div class="eb-field">
+              <label>{{ t('Frame round the page') }}</label>
+              <select v-model="doc.paper.border.style" @change="touchSettings">
+                <option value="none">{{ t('None') }}</option>
+                <option value="solid">{{ t('Solid') }}</option>
+                <option value="dashed">{{ t('Dashed') }}</option>
+                <option value="dotted">{{ t('Dotted') }}</option>
+                <option value="double">{{ t('Double') }}</option>
+              </select>
+            </div>
+            <div class="eb-field"><label>{{ t('Thickness (mm)') }}</label><input type="number" min="0.1" max="20" step="0.1" v-model.number="doc.paper.border.width" @change="touchSettings" :disabled="doc.paper.border.style === 'none'"></div>
+            <div class="eb-field"><label>{{ t('Frame colour') }}</label><input type="color" v-model="doc.paper.border.colour" @change="touchSettings" :disabled="doc.paper.border.style === 'none'"></div>
+          </div>
+          <div class="eb-row" v-if="doc.paper.border.style !== 'none'">
+            <div class="eb-field"><label>{{ t('In from the edge (mm)') }}</label><input type="number" min="0" max="40" step="1" v-model.number="doc.paper.border.gap" @change="touchSettings"></div>
+            <div class="eb-field"><label>{{ t('Rounded corners (mm)') }}</label><input type="number" min="0" max="40" step="1" v-model.number="doc.paper.border.radius" @change="touchSettings"></div>
+          </div>
+          <p class="eb-tip">{{ t('The page colour, the picture and the frame are written into the file, and the file asks the browser to print them: in the print dialogue, background graphics must be left on. The frame is drawn on every page.') }}</p>
         </div>
         <p class="eb-tip">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
         <div class="eb-field">
@@ -4848,7 +5065,7 @@
   <!-- pictures from Files -->
   <div v-if="pickerOpen" class="eb-modal-back" @click="pickerOpen = false">
     <div class="eb-modal tall" @click.stop>
-      <h3><span v-html="icons.image"></span> {{ t('Insert picture') }}</h3>
+      <h3><span v-html="icons.image"></span> {{ picker.mode === 'pagebg' ? t('Picture behind the page') : t('Insert picture') }}</h3>
       <div class="body">
         <div class="fp-path">
           <button class="eb-btn ghost" :disabled="picker.parent === null || picker.loading" @click="pickerLoad(picker.parent)"><span v-html="icons.up"></span></button>
@@ -4870,7 +5087,7 @@
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="pickerOpen = false">{{ t('Cancel') }}</button>
-        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : t('Insert') }}</button>
+        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : (picker.mode === 'pagebg' ? t('Use for the page') : t('Insert')) }}</button>
       </div>
     </div>
   </div>
@@ -5428,6 +5645,7 @@
 
     <div class="sep"></div>
     <button class="ci" v-if="!flow" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
+    <button class="ci" v-if="!flow" @click="ctxDo('boxes')">{{ boxes ? t('Hide the box round every object') : t('Show the box round every object') }}</button>
     <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
   </div>
 
@@ -5666,7 +5884,7 @@
         tocTitle: '',
         spellcheck: false,
         autolink: true,
-        palette: true, grid: false, pendingDrop: null,
+        palette: true, grid: false, boxes: true, pendingDrop: null,
         webOpen: false, webUrl: '', webBusy: false,
         linkOpen: false,
         link: { url: '', text: '', editing: false },
@@ -5684,7 +5902,7 @@
         mergeOpen: false,
         merge: { source: '', keys: [], count: 0, busy: false, separate: false },
         pickerOpen: false,
-        picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '' },
+        picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '', mode: 'insert' },
         table: { rows: 3, cols: 3, header: true, variant: '' },
         math: { source: '', block: true },
         paperSizes: Object.keys(PAPERS),
@@ -5701,6 +5919,7 @@
         const p = normalisePaper(this.doc.paper);
         const s = sheet(p);
         const f = resolveFonts(p, this.doc.lang);
+        const art = pageArt(p);
         return {
           '--eb-paper-w': s.w + 'mm',
           '--eb-paper-h': s.h + 'mm',
@@ -5709,6 +5928,7 @@
           '--eb-mb': p.margin.bottom + 'mm',
           '--eb-ml': p.margin.left + 'mm',
           '--eb-pageh': (s.h - p.margin.top - p.margin.bottom) + 'mm',
+          '--eb-pageart': art.any ? 'url("' + art.url + '")' : 'none',
           '--eb-font-body': fontStack(f.body, 'serif'),
           '--eb-font-head': fontStack(f.head, 'sans'),
           '--eb-font-mono': fontStack(f.mono, 'mono'),
@@ -6692,6 +6912,14 @@
 
       // ---- pictures ----
       openPicker() {
+        this.picker.mode = 'insert';
+        this.pickerOpen = true;
+        this.picker.selected = null;
+        this.pickerLoad('');
+      },
+      /** The same picker, asked for the picture the page is printed on. */
+      openPageBg() {
+        this.picker.mode = 'pagebg';
         this.pickerOpen = true;
         this.picker.selected = null;
         this.pickerLoad('');
@@ -6721,8 +6949,19 @@
         try {
           const r = await api('files/' + chosen.id + '/image');
           const raw = 'data:' + r.mime + ';base64,' + r.data;
-          const url = await shrinkImage(raw, r.mime);
+          // A page background is stretched over the paper and printed at 300dpi
+          // at most; anything larger only makes the file heavier, and the file
+          // carries this one twice -- once for the screen, once for the printer.
+          const url = await shrinkImage(raw, r.mime, this.picker.mode === 'pagebg' ? 1600 : undefined);
           this.pickerOpen = false;
+          if (this.picker.mode === 'pagebg') {
+            const size = await imageSize(url);
+            this.doc.paper.bg.image = url;
+            this.doc.paper.bg.w = size.w;
+            this.doc.paper.bg.h = size.h;
+            this.touchSettings();
+            return;
+          }
           let made = null;
           this.run(() => { made = insertImage(url, r.name, 'eb-img-m'); });
           this.placeAtPendingDrop(made);
@@ -7937,6 +8176,7 @@
           frameBack: () => (frameEl ? this.frameCmd('stack', 'back') : this.textCmd('stack', 'back')),
           frameDel: () => this.frameCmd('delete'),
           guides: () => { this.guides = !this.guides; },
+          boxes: () => { this.boxes = !this.boxes; },
         };
         if (acts[kind]) { acts[kind](); }
       },
@@ -8533,6 +8773,7 @@
       'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
+      boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
       review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
     },
@@ -8563,6 +8804,8 @@
       if (al != null) { this.autolink = al === '1'; }
       const g = window.localStorage.getItem('eb-guides');
       if (g != null) { this.guides = g === '1'; }
+      const bx = window.localStorage.getItem('eb-boxes');
+      if (bx != null) { this.boxes = bx === '1'; }
       const rl = window.localStorage.getItem('eb-ruler');
       if (rl != null) { this.ruler = rl === '1'; }
       const rv = window.localStorage.getItem('eb-review');
