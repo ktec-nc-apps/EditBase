@@ -487,6 +487,8 @@
         "Could not delete: {msg}": "Could not delete: {msg}",
         "Postcard (100 x 148)": "Postcard (100 x 148)",
         "Reply postcard (148 x 200)": "Reply postcard (148 x 200)",
+        "B4 (JIS 257 x 364)": "B4 (JIS 257 x 364)",
+        "B5 (JIS 182 x 257)": "B5 (JIS 182 x 257)",
         "Could not read that page: {msg}": "Could not read that page: {msg}",
         "That is not valid MathML.": "That is not valid MathML.",
         "Latin": "Latin",
