@@ -630,7 +630,11 @@
 
 /* mathematics — native MathML, no images and no renderer to install */
 .eb-doc math { font-size: 1.06em; }
-.eb-doc .eb-math-block { display: block; margin: 1em 0; break-inside: avoid; }
+/* A formula does not reflow: it is set once, at the size it needs, and a box
+   narrower than that would simply have the formula hanging out of it -- which is
+   what a width dragged on to one used to do. The box is never smaller than the
+   formula in it; to make a formula smaller, its handles change its size. */
+.eb-doc .eb-math-block { display: block; margin: 1em 0; break-inside: avoid; min-width: max-content; }
 :where(.eb-doc .eb-math-block) { text-align: center; }
 
 /* an explicit page break: invisible on paper, a labelled line on screen */
@@ -11320,6 +11324,8 @@ return function render(_ctx, _cache) {
         history.push(true);
         frameDrag = {
           mode,
+          math: objectKind(frameEl) === 'MATH',
+          size0: parseFloat(getComputedStyle(frameEl).fontSize) || 14,
           z: this.frameZoom() || 1,
           x0: e.clientX, y0: e.clientY,
           w0: this.frame.w, h0: this.frame.h,
@@ -11415,6 +11421,20 @@ return function render(_ctx, _cache) {
         if (d.mode.indexOf('w') >= 0) { w = w0 - dx; if (d.free) { left = d.left + dx; } }
         if (d.mode.indexOf('s') >= 0) { h = h0 + dy; }
         if (d.mode.indexOf('n') >= 0) { h = h0 - dy; if (d.free) { top = d.top + dy; } }
+        // A formula is resized by being set larger or smaller, the way a formula
+        // in any word processor is: giving its box a width moves nothing, because
+        // nothing inside it wraps.
+        if (d.math) {
+          const k = d.mode === 'n' || d.mode === 's' ? (h / h0) : (w / w0);
+          const size = Math.min(200, Math.max(4, d.size0 * (k > 0 ? k : 1) * 0.75));
+          s.fontSize = round1(size) + 'pt';
+          s.removeProperty('width');
+          s.removeProperty('max-width');
+          s.removeProperty('min-height');
+          if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; this.keepOnPaper(frameEl); }
+          this.syncFrame();
+          return;
+        }
         w = Math.max(8, w);
         h = Math.max(5, h);
         // Nothing is made wider than the paper it is printed on.
