@@ -254,6 +254,8 @@
         "Language": "Language",
         "Check spelling while typing": "Check spelling while typing",
         "Turn an address into a link as it is typed": "Turn an address into a link as it is typed",
+        "Paste into a box of its own": "Paste into a box of its own",
+        "What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.": "What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.",
         "Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.": "Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.",
         "Save automatically while typing": "Save automatically while typing",
         "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.": "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.",
