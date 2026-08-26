@@ -6380,7 +6380,17 @@
         this.menuOpen = false;
         downloadHtml(this.doc.name || (this.doc.title + '.html'), this.currentHtml());
       },
-      printDoc() { printHtml(this.currentHtml(!this.showChanges), pageRule(normalisePaper(this.doc.paper))); },
+      printDoc() {
+        const paper = normalisePaper(this.doc.paper);
+        // A browser leaves the paper's own colour out of a printout unless the
+        // writer says otherwise, and the box that says so is in its own dialogue
+        // where we cannot reach it. Say so at the moment of printing, or a page
+        // that was decorated comes out of the printer plain white.
+        if (pageArt(paper).any) {
+          this.notify(this.t('Turn on “Background graphics” in the print dialogue, or the page’s colour and frame will not be printed.'));
+        }
+        printHtml(this.currentHtml(!this.showChanges), pageRule(paper));
+      },
       showSource() {
         this.menuOpen = false;
         this.htmlText = this.currentHtml();
