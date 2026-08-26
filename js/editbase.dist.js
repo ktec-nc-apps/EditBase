@@ -5221,7 +5221,7 @@ const _hoisted_628 = {
 const _hoisted_629 = { class: "eb-field" }
 const _hoisted_630 = { class: "eb-field" }
 const _hoisted_631 = { class: "eb-field" }
-const _hoisted_632 = { class: "colour-pair" }
+const _hoisted_632 = { class: "btn-pair" }
 const _hoisted_633 = {
   key: 1,
   class: "eb-tip"

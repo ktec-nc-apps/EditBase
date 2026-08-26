@@ -5507,7 +5507,7 @@
           <div class="eb-field"><label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y"></div>
           <div class="eb-field">
             <label>{{ t('Overlapping') }}</label>
-            <div class="colour-pair">
+            <div class="btn-pair">
               <button class="eb-btn ghost" @click="stackFromProps('front')">{{ t('Bring to front') }}</button>
               <button class="eb-btn ghost" @click="stackFromProps('back')">{{ t('Send to back') }}</button>
             </div>

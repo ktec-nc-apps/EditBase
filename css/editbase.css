@@ -565,9 +565,22 @@
   width: 100%; height: 38px; padding: 2px; border: 1px solid var(--border);
   border-radius: 9px; background: var(--surface-2); cursor: pointer;
 }
-.eb-field .colour-pair { display: flex; gap: 8px; align-items: center; }
-.eb-field .colour-pair input[type=color] { flex: 1 1 auto; min-width: 0; }
-#editbase-root .eb-field .colour-pair .eb-btn { flex: 0 0 auto; white-space: nowrap; }
+.eb-field .colour-pair { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* The swatch is the thing being clicked, so it keeps its size and the button
+   beside it gives way. Sharing the room evenly left the swatch 11px wide in a
+   four-column row -- a colour that could be seen and not chosen. */
+.eb-field .colour-pair input[type=color] { flex: 0 0 46px; width: 46px; }
+/* The button beside it says a whole word: it takes the rest of the line, and
+   drops to the next one rather than being clipped to "ransparen". */
+#editbase-root .eb-field .colour-pair .eb-btn { flex: 1 1 auto; min-width: 92px; white-space: nowrap; }
+.eb-field input[type=color] {
+  height: 36px; padding: 2px; border: 1px solid var(--border);
+  background: var(--surface-2); border-radius: 9px; cursor: pointer;
+}
+/* Two buttons in one field: they take the width between them and wrap rather
+   than run off the edge of the dialogue. */
+.eb-field .btn-pair { display: flex; gap: 8px; flex-wrap: wrap; }
+#editbase-root .eb-field .btn-pair .eb-btn { flex: 1 1 auto; min-width: 0; padding-left: 10px; padding-right: 10px; }
 /* The frame dialogue's border row: the words in it are longer than a number field. */
 .eb-frow .b-style { flex: 1.6 1 0; }
 
