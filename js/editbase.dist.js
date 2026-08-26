@@ -3501,6 +3501,18 @@
       p.appendChild(document.createElement('br'));
       c.appendChild(p);
     }
+    // An object placed by hand is held in an anchor, and that is the only thing
+    // that makes its left and top mean anything. Copied through the clipboard it
+    // arrives without one, and then it stands in the run of the text carrying a
+    // position nothing reads. Give it its anchor back.
+    Array.from(c.querySelectorAll(OBJECT_SEL)).forEach((o) => {
+      if (objectFree(o) || !o.style || !o.style.left || !o.style.top) { return; }
+      if (o.closest && o.closest('.eb-anchor')) { return; }
+      const anchor = document.createElement('div');
+      anchor.className = 'eb-anchor';
+      o.parentNode.insertBefore(anchor, o);
+      anchor.appendChild(o);
+    });
     c.querySelectorAll('.eb-pagebreak').forEach((el) => {
       el.setAttribute('contenteditable', 'false');
       if (pageBreakLabel) { el.setAttribute('data-label', pageBreakLabel); }
@@ -11715,11 +11727,31 @@ return function render(_ctx, _cache) {
         // the middle of the column, or to the right margin. This is also the way
         // back for one that has been dragged off the paper altogether.
         if (objectFree(el)) { return this.alignFree(el, cls); }
-        // A frame in the run of a sentence has no alignment of its own, and neither
-        // has one parked by hand. Say so and let the paragraph command run: a
-        // button that quietly does nothing is worse than one that moves the line
-        // the frame is standing in, which is what the writer sees anyway.
-        if (el.nodeName === 'SPAN' || objectFree(el)) { return false; }
+        // A frame standing in the run of a sentence is inline: margins of its own
+        // move it nowhere, and what decides where it sits is the alignment of the
+        // line it is on. So that is what is set -- on the block the frame is
+        // actually in, not on whatever paragraph the caret happens to be left in,
+        // which is somewhere else on the page as often as not.
+        if (el.nodeName === 'SPAN') {
+          const block = innerBlockOf(el.parentNode);
+          if (!block || !block.classList) { return false; }
+          history.push(true);
+          // Auto margins were written on to inline frames by an earlier reading of
+          // this and never moved anything. Take them off while we are here.
+          el.style.removeProperty('margin-left');
+          el.style.removeProperty('margin-right');
+          if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+          const already = alignOf(block) === cls;
+          ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j'].forEach((c) => block.classList.remove(c));
+          if (block.style) {
+            block.style.removeProperty('text-align');
+            if (!block.getAttribute('style')) { block.removeAttribute('style'); }
+          }
+          if (!already) { block.classList.add(cls); }
+          if (block.getAttribute('class') === '') { block.removeAttribute('class'); }
+          this.settleFrame();
+          return true;
+        }
         const want = { 'eb-al-l': ['0', 'auto'], 'eb-al-c': ['auto', 'auto'], 'eb-al-r': ['auto', '0'] }[cls];
         if (!want) { return false; }
         const now = [el.style.marginLeft || '', el.style.marginRight || ''];
