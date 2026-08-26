@@ -642,6 +642,21 @@
 .eb-doc .eb-math-block { display: block; margin: 1em 0; break-inside: avoid; min-width: max-content; }
 :where(.eb-doc .eb-math-block) { text-align: center; }
 
+/* A page from somewhere else, carried in a frame. It is the one thing in a
+   document that is not really part of the file: it is fetched when the file is
+   opened, and a printer cannot always be made to wait for it -- so on paper it
+   leaves its address behind rather than a blank rectangle. */
+.eb-doc .eb-embed { display: block; position: relative; width: 120mm; min-height: 70mm; margin: 1em 0; break-inside: avoid; }
+.eb-doc .eb-embed > iframe { display: block; width: 100%; height: 100%; min-height: inherit; border: 0; background: #f4f5f7; }
+.eb-doc .eb-embed:empty { border: .75pt dashed #98a2b3; }
+@media print {
+  .eb-doc .eb-embed > iframe { border: .75pt dashed #999; }
+  .eb-doc .eb-embed::after {
+    content: attr(data-url); position: absolute; left: 0; right: 0; bottom: .2em;
+    font-size: 8pt; color: #555; text-align: center; word-break: break-all;
+  }
+}
+
 /* an explicit page break: invisible on paper, a labelled line on screen */
 .eb-doc .eb-pagebreak { break-before: page; height: 0; margin: 0; border: none; }
 @media screen {
@@ -668,6 +683,18 @@
 .eb-paper figcaption:empty { display: block; min-height: 1.3em; }
 .eb-paper figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
 .eb-paper table.eb-table td:focus, .eb-paper table.eb-table th:focus { outline: 2px solid #2563eb33; }
+/* While it is being written, an embedded page is a labelled box: the address it
+   will show, and nothing fetched from anyone. The page itself is in the file. */
+.eb-paper .eb-embed {
+  background: repeating-linear-gradient(45deg, #f4f5f7 0 8px, #eceef2 8px 16px);
+  border: .75pt dashed #98a2b3;
+}
+.eb-paper .eb-embed::before {
+  content: attr(data-url); position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center; padding: 1em; text-align: center;
+  font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  font-size: 9pt; color: #475467; word-break: break-all;
+}
 /* Every object carries a box, not only the one being worked on: on a page laid
    out with things placed on it, a writer needs to see where each of them is
    before clicking. It is an outline, so it takes up no room and moves nothing,
@@ -773,7 +800,7 @@
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin)$/;
 
   function cleanStyle(value) {
@@ -793,7 +820,21 @@
     return kept.join('; ');
   }
 
-  function sanitiseInto(container) {
+  /**
+   * What the document cannot hold, recorded rather than silently thrown away, so
+   * that the writer can be asked what to do with it. Everything here is something
+   * a browser renders by running or fetching something else -- a frame, a film, a
+   * canvas -- which is the one kind of thing a printed page cannot be made of.
+   */
+  const FOREIGN = /^(IFRAME|OBJECT|EMBED|VIDEO|AUDIO|CANVAS|SVG)$/;
+  function foreignUrl(el) {
+    const src = el.getAttribute('src') || el.getAttribute('data') || '';
+    if (src) { return src; }
+    const kid = el.querySelector && el.querySelector('source[src]');
+    return kid ? kid.getAttribute('src') : '';
+  }
+  function sanitiseInto(container, opts) {
+    const found = (opts && opts.found) || null;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
     const drop = [];
     const unwrap = [];
@@ -801,8 +842,16 @@
     while (el) {
       const isMath = el.namespaceURI === 'http://www.w3.org/1998/Math/MathML';
       const name = isMath ? el.localName : el.nodeName;
+      // A frame never lives in the canvas: the box keeps the address, and the
+      // frame is made when the file is written. So an iframe arriving from
+      // anywhere -- the clipboard, a file being opened -- is dropped here, and
+      // only the box that was agreed to survives.
       if (isMath ? !MATHML_TAGS.has(name) : !HTML_TAGS.has(name)) {
         // Scripts and frames go entirely; anything else merely loses its tag.
+        const inOurBox = el.parentNode && el.parentNode.classList && el.parentNode.classList.contains('eb-embed');
+        if (found && !inOurBox && FOREIGN.test(el.nodeName.toUpperCase())) {
+          found.push({ kind: el.nodeName.toLowerCase(), url: foreignUrl(el) });
+        }
         (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|LINK|META|BASE|FORM|INPUT|BUTTON|SELECT|TEXTAREA|VIDEO|AUDIO|CANVAS|SVG)$/.test(el.nodeName) ? drop : unwrap).push(el);
       } else {
         Array.from(el.attributes).forEach((a) => {
@@ -962,6 +1011,7 @@
     // are not part of the text and must not come back into the canvas as blocks.
     Array.from(body.querySelectorAll('.eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
     sanitiseInto(body);
+    toObjects(body);
     return {
       title: (dom.title || '').trim(),
       lang: dom.documentElement.getAttribute('lang') || 'ja',
@@ -2790,7 +2840,7 @@
   // is one: a picture, a table, a callout, a formula, a contents list, a text frame.
   // A frame here is not a new kind of markup -- it is the object itself wearing
   // inline CSS -- so the file stays plain HTML and any browser lays it out the same.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, hr';
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, div.eb-embed, hr';
   /** Elements that may hold blocks of their own, so a frame can be dropped into them. */
   const BLOCK_HOSTS = 'aside.eb-box, div.eb-frame, div.eb-note, blockquote, li, td, th';
   const BORDER_STYLES = ['none', 'solid', 'dashed', 'dotted', 'double'];
@@ -2917,6 +2967,7 @@
     if (el.classList && el.classList.contains('eb-frame')) { return 'FRAME'; }
     if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
     if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
+    if (el.classList && el.classList.contains('eb-embed')) { return 'EMBED'; }
     return el.nodeName;
   }
   function objectFree(el) {
@@ -3385,7 +3436,7 @@
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
-    'eb-math-block', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
+    'eb-math-block', 'eb-embed', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
     'eb-pagebreak', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
     // not part of a document, but the editor's own page spacer lives in the canvas
     'eb-pagespacer',
@@ -3875,9 +3926,10 @@
     const html = plainOnly ? '' : data.getData('text/html');
     const uri = (data.getData('text/uri-list') || '').split(/\r?\n/).find((l) => /^https?:/i.test(l)) || '';
     history.push(true);
-    const made = html ? pasteHtmlAt(html, uri, asObject) : pasteTextAt(data.getData('text/plain') || '', asObject);
+    const out = html ? pasteHtmlAt(html, uri, asObject)
+      : { made: pasteTextAt(data.getData('text/plain') || '', asObject), foreign: [] };
     normaliseCanvas();
-    return made;
+    return out;
   }
 
   /**
@@ -4036,10 +4088,23 @@
     return root;
   }
 
-  function pasteHtmlAt(html, base, asObject) {
+  /**
+   * The one road in. Whatever arrives -- from the clipboard, from a web page, from
+   * a file -- comes through here and leaves as things this document can hold:
+   * blocks of writing, and objects with a box round them. Nothing is left as
+   * markup the editor cannot pick up.
+   *
+   * What cannot be made into either is not thrown away quietly: it is handed back
+   * so the writer can be asked whether to keep it as an inline frame.
+   */
+  function adoptContent(html, base) {
     const holder = document.createElement('div');
-    holder.innerHTML = html;
-    sanitiseInto(holder);
+    holder.innerHTML = String(html == null ? '' : html);
+    // A drawing is a picture: it can be carried in the file as one, so it never
+    // reaches the list of things that cannot be kept.
+    svgToPictures(holder);
+    const foreign = [];
+    sanitiseInto(holder, { found: foreign });
     holder.querySelectorAll('*').forEach((el) => {
       // Word and Google Docs paste a wall of inline styles; keep the structure only.
       if (el.hasAttribute('style')) {
@@ -4050,11 +4115,149 @@
     });
     webToDocument(holder, base || baseFromHtml(html));
     stripFurniture(holder, true);
+    toObjects(holder);
+    return { holder: holder, foreign: dedupeForeign(foreign) };
+  }
+
+  /** The same picture, twice over, is one thing to ask about. */
+  function dedupeForeign(list) {
+    const seen = new Set();
+    return list.filter((f) => {
+      const key = f.kind + '|' + (f.url || '');
+      if (seen.has(key)) { return false; }
+      seen.add(key);
+      return true;
+    }).slice(0, 12);
+  }
+
+  /** A drawing becomes a picture of itself, which the file can carry. */
+  function svgToPictures(root) {
+    Array.from(root.querySelectorAll('svg')).forEach((svg) => {
+      try {
+        if (svg.closest('svg') !== svg) { return; }
+        const box = svg.getAttribute('viewBox');
+        const w = Number(svg.getAttribute('width')) || (box ? Number(box.split(/[ ,]+/)[2]) : 0);
+        const h = Number(svg.getAttribute('height')) || (box ? Number(box.split(/[ ,]+/)[3]) : 0);
+        const clone = svg.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        // A drawing that runs on scripts is not a drawing this file can hold.
+        if (clone.querySelector('script, foreignObject')) { return; }
+        const text = new XMLSerializer().serializeToString(clone);
+        if (text.length > 512 * 1024) { return; }
+        const img = document.createElement('img');
+        img.setAttribute('src', 'data:image/svg+xml;utf8,' + text.replace(/#/g, '%23').replace(/"/g, "'"));
+        img.setAttribute('alt', svg.getAttribute('aria-label') || '');
+        if (w && h) { img.setAttribute('width', String(Math.round(w))); img.setAttribute('height', String(Math.round(h))); }
+        svg.parentNode.replaceChild(img, svg);
+      } catch (e) { /* leave it to be reported as something that cannot be kept */ }
+    });
+  }
+
+  /**
+   * The rule that makes the promise true: after this, everything in the tree is
+   * either writing or an object with a box. It runs until it finds nothing left
+   * to change, so markup nested inside markup cannot slip through.
+   */
+  function toObjects(root) {
+    for (let pass = 0; pass < 6; pass += 1) {
+      let changed = 0;
+      // A picture stands in a figure, so it can be picked up, captioned and moved.
+      root.querySelectorAll('img').forEach((img) => {
+        if (img.closest('td, th, figcaption')) { return; }
+        const fig = img.parentNode;
+        // Already in a figure of its own: make that figure the document's kind
+        // rather than putting a figure inside a figure.
+        if (fig && fig.nodeName === 'FIGURE') {
+          if (fig.classList.contains('eb-img')) { return; }
+          fig.classList.add('eb-img', 'eb-img-m');
+          if (!fig.querySelector('figcaption')) {
+            const c2 = document.createElement('figcaption');
+            c2.textContent = img.getAttribute('alt') || '';
+            fig.appendChild(c2);
+          }
+          changed += 1;
+          return;
+        }
+        const box = document.createElement('figure');
+        box.className = 'eb-img eb-img-m';
+        img.parentNode.insertBefore(box, img);
+        box.appendChild(img);
+        const cap = document.createElement('figcaption');
+        cap.textContent = img.getAttribute('alt') || '';
+        box.appendChild(cap);
+        changed += 1;
+      });
+      root.querySelectorAll('table').forEach((t) => {
+        if (t.classList.contains('eb-table')) { return; }
+        t.classList.add('eb-table');
+        changed += 1;
+      });
+      root.querySelectorAll('math').forEach((m) => {
+        const p = m.parentNode;
+        if (p && p.nodeType === 1 && p.classList && p.classList.contains('eb-math-block')) { return; }
+        const box = document.createElement('div');
+        box.className = 'eb-math-block';
+        m.parentNode.insertBefore(box, m);
+        box.appendChild(m);
+        changed += 1;
+      });
+      // Anything that was placed rather than written -- given a corner to sit in --
+      // is held in an anchor, which is what makes its position mean anything.
+      root.querySelectorAll(OBJECT_SEL).forEach((o) => {
+        if (!o.style || !o.style.left || !o.style.top) { return; }
+        if (o.parentNode && o.parentNode.classList && o.parentNode.classList.contains('eb-anchor')) { return; }
+        const anchor = document.createElement('div');
+        anchor.className = 'eb-anchor';
+        o.parentNode.insertBefore(anchor, o);
+        anchor.appendChild(o);
+        changed += 1;
+      });
+      if (!changed) { break; }
+    }
+    return root;
+  }
+
+  /**
+   * An inline frame, with a box round it like any other object -- but while it is
+   * being written, only its address is held. The frame itself is put in when the
+   * file is written.
+   *
+   * Two reasons. Nextcloud's own policy refuses to let its pages frame anything
+   * from elsewhere, so a live frame in the editor is an empty grey rectangle and
+   * an error in the console. And a document being written should not be fetching
+   * pages from other people's servers every time it is opened for editing.
+   */
+  function makeEmbed(url, wMm, hMm) {
+    const box = document.createElement('div');
+    box.className = 'eb-embed';
+    box.setAttribute('data-url', url);
+    box.style.width = (wMm || 120) + 'mm';
+    box.style.minHeight = (hMm || 70) + 'mm';
+    return box;
+  }
+  /** The frame itself, put in on the way out to the file. */
+  function fillEmbeds(root) {
+    root.querySelectorAll('div.eb-embed[data-url]').forEach((box) => {
+      Array.from(box.querySelectorAll('iframe')).forEach((f) => f.remove());
+      const url = box.getAttribute('data-url') || '';
+      if (!/^https:\/\//i.test(url)) { return; }
+      const frame = document.createElement('iframe');
+      frame.setAttribute('src', url);
+      frame.setAttribute('loading', 'lazy');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      box.appendChild(frame);
+    });
+    return root;
+  }
+
+  /** Everything that arrives comes through the one road: see adoptContent. */
+  function pasteHtmlAt(html, base, asObject) {
+    const taken = adoptContent(html, base);
+    const holder = taken.holder;
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
-    if (asObject) { return placePasted(objectFromFragment(frag)); }
-    insertFragmentAt(frag);
-    return null;
+    const made = asObject ? placePasted(objectFromFragment(frag)) : (insertFragmentAt(frag), null);
+    return { made: made, foreign: taken.foreign };
   }
 
   /** Chrome and Safari put the page's own address in the clipboard markup. */
@@ -4922,6 +5125,32 @@
       <div class="foot">
         <button class="eb-btn ghost" @click="saveDefaultPaper">{{ t('Use as default for new documents') }}</button>
         <button class="eb-btn primary" @click="paperOpen = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- something that arrived which a document cannot be made of -->
+  <div v-if="embedAsk.open" class="eb-modal-back" @click="embedAsk = { open: false, items: [] }">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('This could not be turned into a document') }}</h3>
+      <div class="body">
+        <p class="eb-tip">{{ t('These arrived with what you pasted. A document is made of writing and of objects that can be printed, and none of these is either: a browser draws them by fetching or running something else.') }}</p>
+        <ul class="eb-embed-list">
+          <li v-for="(f, i) in embedAsk.items" :key="i">
+            <span class="k">{{ embedLabel(f) }}</span>
+            <span class="u">{{ f.url }}</span>
+          </li>
+        </ul>
+        <p class="eb-tip warn">{{ t('They can be put in as inline frames. Read this first:') }}</p>
+        <ul class="eb-warn-list">
+          <li>{{ t('It is fetched from that address every time the document is opened, so the file is no longer one file that stands on its own, and it shows nothing without a network.') }}</li>
+          <li>{{ t('It may not print. A printer is given the page as it stands, and a frame that has not finished loading — or that refuses to be printed — comes out blank. The address is printed underneath it so the paper still says what was there.') }}</li>
+          <li>{{ t('The site may refuse to be framed at all, and then the frame stays empty.') }}</li>
+        </ul>
+      </div>
+      <div class="foot">
+        <button class="eb-btn" @click="embedAsk = { open: false, items: [] }">{{ t('Leave them out') }}</button>
+        <button class="eb-btn primary" @click="insertEmbeds">{{ t('Put them in as frames') }}</button>
       </div>
     </div>
   </div>
@@ -5973,6 +6202,7 @@
         merge: { source: '', keys: [], count: 0, busy: false, separate: false },
         pickerOpen: false,
         pasteObject: true,
+        embedAsk: { open: false, items: [] },
         picker: { path: '', parent: null, entries: [], selected: null, loading: false, busy: false, error: '', mode: 'insert' },
         table: { rows: 3, cols: 3, header: true, variant: '' },
         math: { source: '', block: true },
@@ -6309,6 +6539,7 @@
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+        fillEmbeds(clone);
         // An empty paragraph holds its line in the editor, where contenteditable
         // gives it one; on a plain page it collapses to nothing and everything
         // below moves up. Give it the line break the editor was drawing for free.
@@ -6550,7 +6781,19 @@
           this.webUrl = '';
           const c = canvas();
           if (c) { c.focus(); }
-          this.run(() => pasteHtmlAt(got.html || '', got.url || ''));
+          // The same road as the clipboard: what a page is made of that a
+          // document cannot be made of is asked about, not thrown away.
+          let out = {};
+          this.run(() => { out = pasteHtmlAt(got.html || '', got.url || '', this.pasteObject); });
+          if (out.made) {
+            frameEl = out.made;
+            frameMore = [];
+            framePinned = true;
+            frameTaken = true;
+            this.frame.bar = true;
+            this.settleFrame();
+          }
+          this.askAboutForeign(out.foreign);
         } catch (e) {
           this.notify(this.t('Could not read that page: {msg}', { msg: e.message }));
         } finally { this.webBusy = false; }
@@ -7001,6 +7244,45 @@
         this.picker.selected = null;
         this.pickerLoad('');
       },
+      /**
+       * Something arrived that a document cannot be made of -- a frame, a film, a
+       * canvas. It is not thrown away without asking: the writer decides whether
+       * to keep it as an inline frame, knowing what that costs.
+       */
+      askAboutForeign(list) {
+        const items = (list || []).filter((f) => /^https:\/\//i.test(f.url || ''));
+        if (!items.length) { return; }
+        this.embedAsk = { open: true, items: items };
+      },
+      embedLabel(f) {
+        const kind = { iframe: this.t('An embedded page'), video: this.t('A film'), audio: this.t('Sound'),
+          object: this.t('An embedded page'), embed: this.t('An embedded page'), canvas: this.t('A drawing made by a script') }[f.kind] || f.kind;
+        let host = '';
+        try { host = new URL(f.url).host; } catch (e) { host = ''; }
+        return host ? kind + ' — ' + host : kind;
+      },
+      insertEmbeds() {
+        const items = this.embedAsk.items.slice();
+        this.embedAsk = { open: false, items: [] };
+        if (!items.length) { return; }
+        let last = null;
+        this.run(() => {
+          items.forEach((f) => {
+            const box = makeEmbed(f.url);
+            insertBlockNode(box);
+            last = box;
+          });
+        });
+        if (last) {
+          frameEl = last;
+          frameMore = [];
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+        }
+      },
+
       /** The same picker, asked for the picture the page is printed on. */
       openPageBg() {
         this.picker.mode = 'pagebg';
@@ -8632,10 +8914,10 @@
         // The right button's Paste behaves as Ctrl+V does, and its "as plain text"
         // is the same escape hatch Shift gives on the keyboard.
         const asObject = this.pasteObject && !plainOnly && !pasteWouldNest();
-        let made = null;
-        this.run(() => { made = html ? pasteHtmlAt(html, '', asObject) : pasteTextAt(text, asObject); });
-        if (made) {
-          frameEl = made;
+        let out = {};
+        this.run(() => { out = html ? pasteHtmlAt(html, '', asObject) : { made: pasteTextAt(text, asObject), foreign: [] }; });
+        if (out.made) {
+          frameEl = out.made;
           frameMore = [];
           framePinned = true;
           frameTaken = true;
@@ -8643,6 +8925,7 @@
           this.settleFrame();
         }
         this.repaginate();
+        this.askAboutForeign(out.foreign);
       },
 
       // ---- links ---------------------------------------------------------------
@@ -8991,9 +9274,9 @@
         const plain = pastePlain;
         pastePlain = false;
         const asObject = this.pasteObject && !plain && !pasteWouldNest();
-        const made = handlePaste(e, plain, asObject);
-        if (made) {
-          frameEl = made;
+        const out = handlePaste(e, plain, asObject) || {};
+        if (out.made) {
+          frameEl = out.made;
           frameMore = [];
           framePinned = true;
           frameTaken = true;
@@ -9002,6 +9285,7 @@
         }
         this.touch();
         this.recount();
+        this.askAboutForeign(out.foreign);
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));

@@ -799,3 +799,12 @@
     repeating-linear-gradient(to right, rgba(37, 99, 235, .13) 0 1px, transparent 1px 5mm),
     repeating-linear-gradient(to bottom, rgba(37, 99, 235, .13) 0 1px, transparent 1px 5mm);
 }
+
+/* What arrived that a document cannot be made of, and what it costs to keep it. */
+.eb-embed-list { margin: 8px 0; padding: 0; list-style: none; }
+.eb-embed-list li { padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 6px; }
+.eb-embed-list .k { display: block; font-size: 13px; }
+.eb-embed-list .u { display: block; font-size: 11.5px; color: var(--muted); word-break: break-all; }
+.eb-tip.warn { color: var(--text); font-weight: 600; margin-top: 12px; }
+.eb-warn-list { margin: 4px 0 0; padding-left: 1.2em; font-size: 12.5px; color: var(--muted); }
+.eb-warn-list li { margin-bottom: 5px; }
