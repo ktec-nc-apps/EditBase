@@ -219,7 +219,12 @@
     const s = PAPERS[paper.size] || PAPERS.A4;
     const sh = sheet(paper);
     const m = paper.margin;
-    const named = { A3: 'A3', A4: 'A4', A5: 'A5', B4: 'B4', B5: 'B5', Letter: 'letter', Legal: 'legal' }[paper.size];
+    // B4 and B5 are deliberately not in this list. CSS's own B4 and B5 are the
+    // ISO sizes -- 250x353 and 176x250 -- while the B4 and B5 sold and printed on
+    // in Japan are the JIS ones, 257x364 and 182x257. Naming them would have the
+    // editor draw one sheet and the printer produce another, 6mm narrower and 7mm
+    // shorter, so they are printed as the millimetres they actually are.
+    const named = { A3: 'A3', A4: 'A4', A5: 'A5', Letter: 'letter', Legal: 'legal' }[paper.size];
     // A size given in millimetres carries its own orientation: saying "landscape"
     // as well is not allowed, and leaving the paper's own width and height in
     // portrait order printed a landscape postcard upright.
@@ -6505,6 +6510,9 @@
       paperName(key) {
         if (key === 'Postcard') { return this.t('Postcard (100 x 148)'); }
         if (key === 'Postcard2') { return this.t('Reply postcard (148 x 200)'); }
+        // Which B this is matters: the ISO one is 6mm narrower.
+        if (key === 'B4') { return this.t('B4 (JIS 257 x 364)'); }
+        if (key === 'B5') { return this.t('B5 (JIS 182 x 257)'); }
         return key;
       },
       addTable() {

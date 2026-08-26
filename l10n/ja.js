@@ -488,6 +488,8 @@ OC.L10N.register(
     "Could not delete: {msg}": "削除できませんでした: {msg}",
     "Postcard (100 x 148)": "はがき（100×148）",
     "Reply postcard (148 x 200)": "往復はがき（148×200）",
+    "B4 (JIS 257 x 364)": "B4（JIS 257×364）",
+    "B5 (JIS 182 x 257)": "B5（JIS 182×257）",
     "Could not read that page: {msg}": "そのページを読めませんでした: {msg}",
     "That is not valid MathML.": "正しいMathMLではありません。",
     "Latin": "ラテン文字",
