@@ -13776,9 +13776,21 @@ return function render(_ctx, _cache) {
       },
 
       // ---- dragging ------------------------------------------------------------
-      onDragStart() {
+      /**
+       * A browser drags a picture by itself, and hands the drop a copy of it. Left
+       * alone, dropping it somewhere else in the same document put a second copy
+       * in and left the first where it was. What is being dragged is remembered
+       * here, so the drop can move that very element instead of copying it.
+       */
+      onDragStart(e) {
         const r = getRange();
         dragRange = r && !r.collapsed ? r.cloneRange() : null;
+        const t = e && e.target && e.target.nodeType === 1 ? e.target : null;
+        const el = t && t.closest ? (t.closest(OBJECT_SEL) || (t.nodeName === 'IMG' ? t.closest('figure') : null)) : null;
+        dragObject = el && inCanvas(el) ? el : null;
+        // The object itself is what moves; a selection inside it would be moved
+        // twice over.
+        if (dragObject) { dragRange = null; }
       },
       onDragOver(e) {
         if (!this.doc.id) { return; }
@@ -13791,6 +13803,7 @@ return function render(_ctx, _cache) {
       onDrop(e) {
         if (!this.doc.id) { return; }
         e.preventDefault();
+        dropY = e.clientY;
         const point = caretFromPoint(e.clientX, e.clientY);
         const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
         if (files.some((f) => /^image\//.test(f.type))) {
@@ -13803,10 +13816,11 @@ return function render(_ctx, _cache) {
         let ok = false;
         this.run(() => { ok = dropAt(point, data); });
         dragRange = null;
+        dragObject = null;
         if (!ok) { this.notify(this.t('There is nowhere to drop that.')); }
         this.repaginate();
       },
-      onDragEnd() { dragRange = null; },
+      onDragEnd() { dragRange = null; dragObject = null; },
 
       // ---- clipboard -----------------------------------------------------------
       clipboard(kind) {
@@ -14274,7 +14288,7 @@ return function render(_ctx, _cache) {
         }
         cancelHold();
       }, { passive: true });
-      c.addEventListener('dragstart', () => this.onDragStart());
+      c.addEventListener('dragstart', (e) => this.onDragStart(e));
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
@@ -14342,6 +14356,19 @@ return function render(_ctx, _cache) {
   // paragraphs, computed styles come along for the ride, and nothing reaches the
   // undo history. So the drop is done here, through the same path as every edit.
   let dragRange = null;
+  let dragObject = null;
+  let dropY = null;
+  /** The block a drop landed on, at the level the object would stand at. */
+  function blockUnder(node) {
+    const c = canvas();
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    while (n && n !== c && n.nodeType === 1) {
+      const parent = n.parentNode;
+      if (parent === c || (parent && parent.matches && parent.matches(BLOCK_HOSTS))) { return n; }
+      n = parent;
+    }
+    return null;
+  }
 
   /** Is the drop point inside the thing being dragged? Then there is nowhere to put it. */
   function pointInsideRange(range, point) {
@@ -14389,6 +14416,16 @@ return function render(_ctx, _cache) {
    */
   function dropAt(point, data) {
     if (!point || !inCanvas(point.startContainer)) { return false; }
+    // Something from this document, dragged: it moves. The browser would hand us
+    // a copy of it and leave the original standing.
+    if (dragObject) {
+      if (dragObject.contains(point.startContainer)) { return false; }
+      const ref = blockUnder(point.startContainer);
+      if (!ref) { return false; }
+      const r = ref.getBoundingClientRect ? ref.getBoundingClientRect() : null;
+      const after = !!(r && dropY != null && dropY > r.top + r.height / 2);
+      return moveObjectTo(dragObject, ref, after);
+    }
     if (dragRange && pointInsideRange(dragRange, point)) { return false; }
     const frag = dragRange ? dragRange.extractContents() : fragmentFromTransfer(data);
     if (!frag || !frag.firstChild) { return false; }
@@ -14442,6 +14479,10 @@ return function render(_ctx, _cache) {
   window.__eb_pasteHtmlAt = pasteHtmlAt;
   // moving a frame is driven by the pointer, which jsdom has no layout for
   window.__eb_moveObjectTo = moveObjectTo;
+  // dragging within the document: jsdom has no drag and no caretRangeFromPoint,
+  // so the two halves are driven straight
+  window.__eb_dropAt = dropAt;
+  window.__eb_dragObject = () => dragObject;
   // where a picture lands is decided without any layout, so it is testable
   window.__eb_insertImage = insertImage;
   window.__eb_captionPlace = captionPlace;
