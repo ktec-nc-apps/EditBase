@@ -3311,6 +3311,12 @@ ${insideObjects('.eb-paper.boxed')} {
   // and the writing to put anything in. Measured, both ways, before it was cut.
   const WRAP_MODES = ['none', 'optimal', 'left', 'right', 'through'];
   const WRAP_GAP = 3;
+  // LibreOffice's own rule for the optimal wrap, read off its source: a side is
+  // only wrapped on if at least TEXT_MIN of column is left there, and TEXT_MIN is
+  // 1134 twips -- twenty millimetres. Narrower than that and the words would come
+  // out three to a line, so it wraps on neither side and goes above and below
+  // instead. (sw/source/core/text/txtfly.cxx, GetSurroundForTextWrap.)
+  const WRAP_MIN_COLUMN = 20;
   function wrapMode(el) {
     const m = el && el.getAttribute ? (el.getAttribute('data-wrap') || '') : '';
     return WRAP_MODES.indexOf(m) >= 0 ? m : 'through';
@@ -3437,13 +3443,23 @@ ${insideObjects('.eb-paper.boxed')} {
             if (done.has(rootEl)) { return; }
             done.add(rootEl);
             const room = cb.right - cb.left;
-            const side = mode === 'optimal'
-              ? ((or.left - cb.left) >= (cb.right - or.right) ? 'left' : 'right')
-              : mode;
-            const floatSide = mode === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
+            let side = mode;
+            let how = mode;
+            if (mode === 'optimal') {
+              const leftRoom = (or.left - gapPx - cb.left) * MM / z;
+              const rightRoom = (cb.right - (or.right + gapPx)) * MM / z;
+              const best = Math.max(leftRoom, rightRoom);
+              if (best < WRAP_MIN_COLUMN) {
+                // Neither side is worth writing in: the words go above and below.
+                how = 'none';
+              } else {
+                side = leftRoom >= rightRoom ? 'left' : 'right';
+              }
+            }
+            const floatSide = how === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
             const key = b;
             const taken = held.get(key) || { left: 0, right: 0 };
-            let w = mode === 'none' ? room
+            let w = how === 'none' ? room
               : (floatSide === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
             w = Math.min(Math.max(w - taken[floatSide], 0), room);
             const h = (or.bottom + gapPx) - cb.top;
