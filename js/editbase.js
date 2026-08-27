@@ -3521,12 +3521,17 @@ ${insideObjects('.eb-paper.boxed')} {
     // A window-sized pixel width means nothing on paper: it is chrome that was
     // dropped in, and it is what covered the page. Pictures and tables may size
     // themselves; a paragraph or a bare div may not.
+    // The editor writes every size it sets in millimetres, because it is setting
+    // a size on paper. A width in pixels or percent came in from a web page and
+    // means nothing here -- so that is the one that goes, and a paragraph the
+    // writer has sized by its own box keeps what it was given.
+    const paperSize = (v) => /mm$/.test(String(v || '').trim());
     Array.from(c.querySelectorAll('[style]')).forEach((el) => {
       if (/^(IMG|FIGURE|TABLE|TD|TH|COL|COLGROUP)$/.test(el.nodeName)) { return; }
       // A frame is allowed its own size: that is the whole point of a frame.
       if (el.matches && el.matches(OBJECT_SEL)) { return; }
-      el.style.removeProperty('width');
-      el.style.removeProperty('height');
+      if (!paperSize(el.style.width)) { el.style.removeProperty('width'); }
+      if (!paperSize(el.style.height)) { el.style.removeProperty('height'); }
       if (!el.getAttribute('style')) { el.removeAttribute('style'); }
     });
     Array.from(c.querySelectorAll('math')).forEach((math) => {
@@ -8141,6 +8146,18 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       frameCmd(kind, arg) {
         if (!frameEl) { return; }
+        // What holds a piece of writing selected is the caret being inside it.
+        // Every command here moves the block in the markup -- into an anchor, out
+        // of one, to another place in the text -- and a moved block loses the
+        // caret, so the box let go the instant the writer touched the bar and the
+        // next button pressed did nothing at all. The caret is put back where it
+        // was: the words themselves have not moved, only their surroundings.
+        const r0 = getRange();
+        const caret = r0 && frameEl.contains(r0.startContainer) ? r0.cloneRange() : null;
+        const keepCaret = () => {
+          const c = canvas();
+          if (caret && c && c.contains(caret.startContainer)) { selectRange(caret); }
+        };
         // Where the frame itself sits in the column, as against what the words
         // inside it do. These two are the whole of the difference between the
         // frame's own bar and the alignment buttons above the page.
@@ -8149,6 +8166,7 @@ ${insideObjects('.eb-paper.boxed')} {
           frameTaken = true;
           if (frameMore.length) { this.alignGroup(arg); return; }
           if (!this.alignObject(frameEl, arg)) { this.blockRun(() => setBlockClass('align', arg)); }
+          keepCaret();
           return;
         }
         if (kind === 'spread' || kind === 'sameSize') {
@@ -8168,11 +8186,17 @@ ${insideObjects('.eb-paper.boxed')} {
               if (box) { this.nudgeFree(o, box.left - o.getBoundingClientRect().left); }
             }
           });
+          keepCaret();
           this.settleFrame();
           return;
         }
         const el = frameEl;
         framePinned = true;
+        // Using the bar is taking hold of the object, exactly as a click on it is.
+        // Without this the box let go of a piece of writing the moment the markup
+        // moved under it -- the caret was left behind on the page -- and the next
+        // button pressed found nothing selected and did nothing at all.
+        frameTaken = true;
         history.push(true);
         if (kind === 'free') {
           if (objectFree(el)) {
@@ -8231,7 +8255,10 @@ ${insideObjects('.eb-paper.boxed')} {
         } else if (kind === 'delete') {
           deleteObject(el);
           this.clearFrame();
+          this.settleFrame();
+          return;
         }
+        keepCaret();
         this.settleFrame(el);
       },
       /**
