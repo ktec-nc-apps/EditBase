@@ -392,6 +392,15 @@
     if (link.getAttribute('href') !== url) { link.setAttribute('href', url); }
   }
 
+  // ---- what counts as an object ---------------------------------------------
+  // The one list of everything that is an object rather than writing. Every part
+  // of the app that has to know -- the box round it, the handles, the properties,
+  // the anchor that makes its position mean anything -- reads this and only this,
+  // so a new kind of object cannot be added and end up without its box.
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, div.eb-embed, hr';
+  /** The same list, as the selector for one state of the canvas. */
+  const objectRule = (prefix) => OBJECT_SEL.split(', ').map((s) => prefix + ' ' + s).join(', ');
+
   // ---- the document stylesheet ----------------------------------------------
   // Written into every saved file *and* applied to the editor canvas, so the
   // editor cannot drift from the artefact. Everything is scoped to .eb-doc: in a
@@ -699,10 +708,7 @@
    out with things placed on it, a writer needs to see where each of them is
    before clicking. It is an outline, so it takes up no room and moves nothing,
    and it belongs to the editor -- the saved file has none of it. */
-.eb-paper.boxed figure.eb-img, .eb-paper.boxed table.eb-table, .eb-paper.boxed aside.eb-box,
-.eb-paper.boxed div.eb-note, .eb-paper.boxed div.eb-math-block, .eb-paper.boxed nav.eb-toc,
-.eb-paper.boxed div.eb-frame, .eb-paper.boxed span.eb-frame, .eb-paper.boxed div.eb-shape,
-.eb-paper.boxed hr {
+${objectRule('.eb-paper.boxed')} {
   outline: 1px dashed rgba(37, 99, 235, .40);
   outline-offset: 1px;
 }
@@ -2840,7 +2846,6 @@
   // is one: a picture, a table, a callout, a formula, a contents list, a text frame.
   // A frame here is not a new kind of markup -- it is the object itself wearing
   // inline CSS -- so the file stays plain HTML and any browser lays it out the same.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, div.eb-embed, hr';
   /** Elements that may hold blocks of their own, so a frame can be dropped into them. */
   const BLOCK_HOSTS = 'aside.eb-box, div.eb-frame, div.eb-note, blockquote, li, td, th';
   const BORDER_STYLES = ['none', 'solid', 'dashed', 'dotted', 'double'];
@@ -10517,7 +10522,7 @@ return function render(_ctx, _cache) {
           FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
           NOTE: this.t('Note'), FRAME: this.t('Frame'), TEXT: this.t('Phrase'),
-          SHAPE: this.t('Shape'),
+          SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
         };
         return names[kind] || this.t('Frame');
       },
