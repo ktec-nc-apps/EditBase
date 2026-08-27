@@ -9477,6 +9477,7 @@ ${insideObjects('.eb-paper.boxed')} {
       onDrop(e) {
         if (!this.doc.id) { return; }
         e.preventDefault();
+        dropX = e.clientX;
         dropY = e.clientY;
         const point = caretFromPoint(e.clientX, e.clientY);
         const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
@@ -10032,6 +10033,7 @@ ${insideObjects('.eb-paper.boxed')} {
   let dragRange = null;
   let dragObject = null;
   let dropY = null;
+  let dropX = null;
   /** The block a drop landed on, at the level the object would stand at. */
   function blockUnder(node) {
     const c = canvas();
@@ -10088,18 +10090,30 @@ ${insideObjects('.eb-paper.boxed')} {
    * A move inside the document takes the markup itself rather than the browser's
    * copy of it, so a formula or a table arrives exactly as it left.
    */
+  /**
+   * The block the pointer is over, when the caret cannot be read from the point.
+   * A browser only answers caretRangeFromPoint for what is on the screen, so a
+   * drop just past the bottom edge came back with nothing and the drop was
+   * refused -- "there is nowhere to drop that" over a perfectly good paragraph.
+   */
+  function blockAtPointer() {
+    if (dropX == null || dropY == null || !document.elementFromPoint) { return null; }
+    const el = document.elementFromPoint(dropX, dropY);
+    return el && inCanvas(el) ? blockUnder(el) : null;
+  }
   function dropAt(point, data) {
-    if (!point || !inCanvas(point.startContainer)) { return false; }
     // Something from this document, dragged: it moves. The browser would hand us
     // a copy of it and leave the original standing.
     if (dragObject) {
-      if (dragObject.contains(point.startContainer)) { return false; }
-      const ref = blockUnder(point.startContainer);
-      if (!ref) { return false; }
+      const at = point && inCanvas(point.startContainer) ? point.startContainer : null;
+      if (at && dragObject.contains(at)) { return false; }
+      const ref = (at ? blockUnder(at) : null) || blockAtPointer();
+      if (!ref || ref === dragObject || dragObject.contains(ref)) { return false; }
       const r = ref.getBoundingClientRect ? ref.getBoundingClientRect() : null;
       const after = !!(r && dropY != null && dropY > r.top + r.height / 2);
       return moveObjectTo(dragObject, ref, after);
     }
+    if (!point || !inCanvas(point.startContainer)) { return false; }
     if (dragRange && pointInsideRange(dragRange, point)) { return false; }
     const frag = dragRange ? dragRange.extractContents() : fragmentFromTransfer(data);
     if (!frag || !frag.firstChild) { return false; }
