@@ -8279,7 +8279,11 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frameDragEndGuides();
         if (!d || !frameEl) { return; }
         if (!d.moved) { return; }
-        if (d.mode === 'move' && !d.free && d.ref) { moveObjectTo(frameEl, d.ref, d.after); }
+        if (d.mode === 'move' && !d.free && d.ref) {
+          window.__eb_lastDrop = { refIndex: Array.prototype.indexOf.call(canvas().children, d.ref),
+            ref: d.ref.nodeName, after: d.after, by: 'the box' };
+          moveObjectTo(frameEl, d.ref, d.after);
+        }
         this.settleFrame();
       },
       /** Everything a frame command changes ends the same way. */
@@ -10111,6 +10115,9 @@ ${insideObjects('.eb-paper.boxed')} {
       if (!ref || ref === dragObject || dragObject.contains(ref)) { return false; }
       const r = ref.getBoundingClientRect ? ref.getBoundingClientRect() : null;
       const after = !!(r && dropY != null && dropY > r.top + r.height / 2);
+      // What the drop decided, so a check can hold the result against it.
+      window.__eb_lastDrop = { refIndex: Array.prototype.indexOf.call(canvas().children, ref),
+        ref: ref.nodeName, after: after, dropY: dropY };
       return moveObjectTo(dragObject, ref, after);
     }
     if (!point || !inCanvas(point.startContainer)) { return false; }

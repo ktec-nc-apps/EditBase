@@ -522,11 +522,14 @@
    is also what the right button opens the properties on. */
 .eb-fsel { position: absolute; z-index: 20; pointer-events: none; }
 .eb-fsel .box { position: absolute; inset: 0; border: 1px dashed var(--primary); }
+/* The bands an object is dragged by lie entirely OUTSIDE it. Straddling the
+   edge, they covered the object's own first line -- the top row of a table could
+   not be clicked into at all, because the band was over it and took the click. */
 .eb-fsel .ed { position: absolute; pointer-events: auto; cursor: move; touch-action: none; }
-.eb-fsel .ed.t { left: -5px; right: -5px; top: -5px; height: 10px; }
-.eb-fsel .ed.b { left: -5px; right: -5px; bottom: -5px; height: 10px; }
-.eb-fsel .ed.l { top: -5px; bottom: -5px; left: -5px; width: 10px; }
-.eb-fsel .ed.r { top: -5px; bottom: -5px; right: -5px; width: 10px; }
+.eb-fsel .ed.t { left: -8px; right: -8px; top: -8px; height: 8px; }
+.eb-fsel .ed.b { left: -8px; right: -8px; bottom: -8px; height: 8px; }
+.eb-fsel .ed.l { top: -8px; bottom: -8px; left: -8px; width: 8px; }
+.eb-fsel .ed.r { top: -8px; bottom: -8px; right: -8px; width: 8px; }
 .eb-fsel .hd {
   position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
   background: var(--surface); border: 1.5px solid var(--primary); border-radius: 2px;
@@ -587,10 +590,10 @@
 /* A finger is not a mouse pointer: the border band and the handles have to be
    big enough to take hold of without a magnifier. */
 @media (hover: none) {
-  .eb-fsel .ed.t { left: -9px; right: -9px; top: -9px; height: 18px; }
-  .eb-fsel .ed.b { left: -9px; right: -9px; bottom: -9px; height: 18px; }
-  .eb-fsel .ed.l { top: -9px; bottom: -9px; left: -9px; width: 18px; }
-  .eb-fsel .ed.r { top: -9px; bottom: -9px; right: -9px; width: 18px; }
+  .eb-fsel .ed.t { left: -14px; right: -14px; top: -14px; height: 14px; }
+  .eb-fsel .ed.b { left: -14px; right: -14px; bottom: -14px; height: 14px; }
+  .eb-fsel .ed.l { top: -14px; bottom: -14px; left: -14px; width: 14px; }
+  .eb-fsel .ed.r { top: -14px; bottom: -14px; right: -14px; width: 14px; }
   .eb-fsel .hd { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
   #editbase-root .eb-fsel .bar .eb-tb { height: 32px; min-width: 32px; }
 }
