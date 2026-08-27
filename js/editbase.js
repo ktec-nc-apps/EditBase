@@ -3201,7 +3201,12 @@ ${insideObjects('.eb-paper.boxed')} {
   // One thing LibreOffice does that no browser can: run a single line of text
   // down BOTH sides of an object. A line box is one unbroken run, so the words
   // go to one side or the other. "Optimal" picks whichever side has more room.
-  const WRAP_MODES = ['none', 'optimal', 'left', 'right', 'through', 'behind'];
+  // There is no "in background" here. An object standing over the text can be
+  // painted over it, and that is all: give it z-index 0 and it covers the words,
+  // give it -1 and it disappears behind the page's own white. A browser paints
+  // the root background under everything, so there is no layer between the paper
+  // and the writing to put anything in. Measured, both ways, before it was cut.
+  const WRAP_MODES = ['none', 'optimal', 'left', 'right', 'through'];
   const WRAP_GAP = 3;
   function wrapMode(el) {
     const m = el && el.getAttribute ? (el.getAttribute('data-wrap') || '') : '';
@@ -5944,7 +5949,6 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="optimal">{{ t('Optimal page wrap') }}</option>
               <option value="left">{{ t('Wrap on the left') }}</option>
               <option value="right">{{ t('Wrap on the right') }}</option>
-              <option value="behind">{{ t('In background') }}</option>
             </select>
           </div>
           <div class="eb-field">
@@ -6177,7 +6181,6 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Wrap on the right') }}</button>
           <div class="sep"></div>
           <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Wrap through') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'behind' }" @click="ctxDo('wrapMode','behind')">{{ t('In background') }}</button>
           <div class="sep"></div>
           <button class="ci" @click="ctxDo('frameProps')">{{ t('Edit wrap…') }}</button>
         </div>
@@ -8458,8 +8461,6 @@ ${insideObjects('.eb-paper.boxed')} {
             // Standing over the text: a float would not reach it, so the room is
             // taken out of the writing itself. See applyWrap.
             el.style.removeProperty('float');
-            if (mode === 'behind') { el.style.zIndex = '0'; }
-            else if (el.style.zIndex === '0') { el.style.removeProperty('z-index'); }
           } else {
             // Still in the run of the text: a float is the wrap, and it is the
             // better one -- the words reflow round it as they are written.

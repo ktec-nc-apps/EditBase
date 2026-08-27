@@ -331,7 +331,6 @@ OC.L10N.register(
     "In the flow, at the right": "In the flow, at the right",
     "Placed freely": "Placed freely",
     "Wrap": "Wrap",
-    "In background": "In background",
     "Gap to the text (mm)": "Gap to the text (mm)",
     "Text down the box": "Text down the box",
     "At the top": "At the top",
