@@ -571,6 +571,25 @@
    HTML has no coordinate system that spans pages, but a box positioned against a
    paragraph goes wherever that paragraph goes. */
 .eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; }
+/* Where the words under a picture stand. Below it is the default and needs no
+   rule; above it is a matter of which comes first in the markup; inside it is a
+   band laid over the foot of the picture itself. */
+.eb-doc figure.eb-img.eb-cap-in { position: relative; }
+/* An inline picture sits on a text line, and the line leaves a few pixels under
+   it for descenders -- so a band pinned to the foot of the figure hangs past the
+   foot of the picture. Made a block, the picture is the whole of the box. */
+.eb-doc figure.eb-img.eb-cap-in > img { display: block; margin-left: auto; margin-right: auto; }
+.eb-doc figure.eb-img.eb-cap-in > figcaption {
+  position: absolute; left: 0; right: 0; bottom: 0; margin: 0;
+  background: rgba(0, 0, 0, .48); color: #ffffff; padding: .35em .6em;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+/* Above the picture. The markup is always picture-then-words -- that is what a
+   figure is -- so the class alone turns it round, and a file that carries the
+   class shows it the same way whatever order it was written in. */
+.eb-doc figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
+.eb-doc figure.eb-img.eb-cap-t > figcaption { margin: 0 0 .4em; width: 100%; }
+.eb-doc figure.eb-img.eb-cap-none > figcaption { display: none; }
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
    beyond the float: it is the wrap itself, written down. */
 .eb-doc span.eb-flow { display: block; pointer-events: none; }
@@ -829,17 +848,42 @@ ${insideObjects('.eb-paper.boxed')} {
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
+  /**
+   * Split a style attribute into its declarations. Not on every semicolon: a
+   * picture the document carries is written url("data:image/png;base64,…"), and
+   * cutting that at its semicolon threw the picture away and left half a URI.
+   */
+  function styleDecls(value) {
+    const out = [];
+    let depth = 0; let quote = ''; let start = 0;
+    const text = String(value == null ? '' : value);
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (quote) { if (ch === quote && text[i - 1] !== '\\') { quote = ''; } continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '(') { depth += 1; continue; }
+      if (ch === ')') { depth = Math.max(0, depth - 1); continue; }
+      if (ch === ';' && !depth) { out.push(text.slice(start, i)); start = i + 1; }
+    }
+    out.push(text.slice(start));
+    return out;
+  }
   function cleanStyle(value) {
     const kept = [];
-    String(value).split(';').forEach((decl) => {
+    styleDecls(value).forEach((decl) => {
       const i = decl.indexOf(':');
       if (i < 0) { return; }
       const prop = decl.slice(0, i).trim().toLowerCase();
       const val = decl.slice(i + 1).trim();
       if (!STYLE_OK.test(prop)) { return; }
-      if (/url\s*\(|expression|javascript:/i.test(val)) { return; }
+      // A picture the document carries is written into the document: url(data:image/…)
+      // and nothing else. Anything that would send the reader's browser off to
+      // fetch something is dropped, which is the whole of the rule that was here
+      // before -- it just could not tell the two apart.
+      if (/expression|javascript:/i.test(val)) { return; }
+      if (/url\s*\(/i.test(val) && !/^url\(\s*["']?data:image\/[a-z+.-]+[,;]/i.test(val)) { return; }
       // A document may lay its own frames out; it may not pin anything to the
       // window, which in the editor means over the app's own chrome.
       if (prop === 'position' && !/^(static|relative|absolute)$/i.test(val)) { return; }
@@ -1945,8 +1989,24 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
 
+  /**
+   * Put a block where the caret is standing. Inside a cell or a box that means
+   * inside it -- a picture dropped into a table belongs in the cell it was
+   * dropped into, not after the whole table -- so the innermost thing that can
+   * hold blocks is what it goes into.
+   */
   function insertBlockNode(node) {
     const range = getRange();
+    const inner = range ? innerBlockOf(range.startContainer) : null;
+    const host = inner && inner.parentNode
+      && (inner.matches('td, th') || (inner.parentNode.matches && inner.parentNode.matches(BLOCK_HOSTS)))
+      ? inner : null;
+    if (host) {
+      // In a cell, the block goes in beside the words; in a box, after the
+      // paragraph the caret is in.
+      if (host.matches('td, th')) { host.appendChild(node); } else { host.parentNode.insertBefore(node, host.nextSibling); }
+      return node;
+    }
     const blocks = selectedBlocks();
     const anchor = blocks.length ? blocks[blocks.length - 1] : null;
     if (anchor) {
@@ -1957,6 +2017,15 @@ ${insideObjects('.eb-paper.boxed')} {
       canvas().appendChild(node);
     }
     return node;
+  }
+  /** Somewhere to type after a block, but only when there is nowhere already. */
+  function landingAfter(node) {
+    const next = node.nextElementSibling;
+    if (next && !next.matches(OBJECT_SEL) && isBlock(next)) { return null; }
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    node.parentNode.insertBefore(p, node.nextSibling);
+    return p;
   }
 
   function insertTable(rows, cols, withHeader, variant) {
@@ -1995,13 +2064,47 @@ ${insideObjects('.eb-paper.boxed')} {
     fig.appendChild(img);
     const cap = document.createElement('figcaption');
     fig.appendChild(cap);
+    const range = getRange();
+    if (range && !range.collapsed) { range.deleteContents(); }
     insertBlockNode(fig);
-    const after = document.createElement('p');
-    after.appendChild(document.createElement('br'));
-    fig.parentNode.insertBefore(after, fig.nextSibling);
+    landingAfter(fig);
     placeCaretIn(cap);
     return fig;
   }
+  /**
+   * Where the caption stands: under the picture (the way a figure reads), over
+   * it, or inside it as a band across the foot -- and none at all. Which one it
+   * is, is which order the two are written in plus a class, so the saved file
+   * needs no help to show it.
+   */
+  const CAPTION_PLACES = ['below', 'above', 'inside', 'none'];
+  function captionPlace(fig) {
+    if (!fig) { return 'below'; }
+    const cap = fig.querySelector('figcaption');
+    if (!cap || fig.classList.contains('eb-cap-none')) { return 'none'; }
+    if (fig.classList.contains('eb-cap-in')) { return 'inside'; }
+    if (fig.classList.contains('eb-cap-t')) { return 'above'; }
+    return 'below';
+  }
+  function setCaptionPlace(fig, place) {
+    if (!fig || CAPTION_PLACES.indexOf(place) < 0) { return; }
+    const img = fig.querySelector(':scope > img');
+    let cap = fig.querySelector(':scope > figcaption');
+    if (!cap) { cap = document.createElement('figcaption'); }
+    fig.classList.remove('eb-cap-t', 'eb-cap-in', 'eb-cap-none');
+    if (place === 'none') {
+      // The words are kept, not thrown away: turning it back on brings them back.
+      fig.classList.add('eb-cap-none');
+      if (!cap.parentNode) { fig.appendChild(cap); }
+      return;
+    }
+    if (place === 'above') { fig.classList.add('eb-cap-t'); }
+    if (place === 'inside') { fig.classList.add('eb-cap-in'); }
+    // The words always come after the picture in the markup; which class is on
+    // the figure is what decides where they are shown.
+    if (cap.parentNode !== fig || cap.previousElementSibling !== img) { fig.appendChild(cap); }
+  }
+
   // Cropping without cutting the picture: the frame is given a shape, the picture
   // fills it, and which part of it shows is a position. Three CSS properties, no
   // second copy of the image and nothing lost -- the whole picture is still in the
@@ -3399,13 +3502,24 @@ ${insideObjects('.eb-paper.boxed')} {
         : ((el.classList && el.classList.contains('eb-v-bot')) ? 'eb-v-bot' : ''),
       shadow: !!(el.classList && el.classList.contains('eb-shadow')),
       keep: s.breakInside === 'avoid',
+      bgImage: (() => { const m = /url\(["']?(data:image\/[^"')]+)["']?\)/.exec(s.backgroundImage || ''); return m ? m[1] : ''; })(),
+      bgFit: s.backgroundRepeat === 'repeat' ? 'tile' : (s.backgroundSize === 'contain' ? 'contain' : 'cover'),
+      strokeWidth: (() => { const m = /^([\d.]+)mm/.exec(s.getPropertyValue('-webkit-text-stroke-width') || ''); return m ? Number(m[1]) : ''; })(),
+      strokeColour: rgbToHex(s.getPropertyValue('-webkit-text-stroke-color')) || '#000000',
+      textShadow: !!(s.textShadow && s.textShadow !== 'none'),
+      shadowX: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[1]) : ''; })(),
+      shadowY: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[2]) : ''; })(),
+      shadowBlur: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[3]) : ''; })(),
+      shadowColour: (() => { const m = /(#[0-9a-f]{6}|rgba?\([^)]+\))\s*$/i.exec(s.textShadow || ''); return m ? (rgbToHex(m[1]) || m[1]) : '#808080'; })(),
     };
   }
 
   const FRAME_PROPS = ['left', 'top', 'float', 'width', 'max-width', 'height', 'min-height',
     'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
     'padding-top', 'padding-bottom', 'padding-left', 'padding-right',
-    'border', 'border-radius', 'background-color', 'break-inside', 'z-index'];
+    'border', 'border-radius', 'background-color', 'break-inside', 'z-index',
+    'background-image', 'background-size', 'background-repeat', 'background-position',
+    'text-shadow', '-webkit-text-stroke', 'paint-order'];
 
   /** Write the dialogue back on to the element, as CSS the file carries with it. */
   function setObjectProps(el, v) {
@@ -3499,6 +3613,30 @@ ${insideObjects('.eb-paper.boxed')} {
       ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j'].forEach((c) => el.classList.remove(c));
       s.removeProperty('text-align');
       if (v.inner) { el.classList.add(v.inner); }
+    }
+    // A picture behind the words. It is written into the document as a data: URI,
+    // so the file still opens on its own with nothing to fetch.
+    if (v.bgImage) {
+      s.backgroundImage = 'url("' + v.bgImage + '")';
+      s.backgroundRepeat = v.bgFit === 'tile' ? 'repeat' : 'no-repeat';
+      s.backgroundSize = v.bgFit === 'tile' ? 'auto' : (v.bgFit === 'contain' ? 'contain' : 'cover');
+      s.backgroundPosition = 'center center';
+      el.classList.add('eb-ink');
+    }
+    // The outline round each letter. paint-order puts it behind the letter so the
+    // stroke grows outwards and the shape of the type is not eaten into.
+    const stroke = num(v.strokeWidth);
+    if (stroke != null && stroke > 0) {
+      s.setProperty('-webkit-text-stroke', round1(stroke) + 'mm '
+        + (/^#[0-9a-f]{6}$/i.test(v.strokeColour || '') ? v.strokeColour : '#000000'));
+      s.paintOrder = 'stroke fill';
+    }
+    // The shadow under the letters: how far across, how far down, how soft.
+    if (v.textShadow) {
+      const sx = num(v.shadowX); const sy = num(v.shadowY); const blur = num(v.shadowBlur);
+      s.textShadow = (sx == null ? 1 : sx) + 'pt ' + (sy == null ? 1 : sy) + 'pt '
+        + (blur == null ? 1.5 : blur) + 'pt '
+        + (/^#[0-9a-f]{6}$/i.test(v.shadowColour || '') ? v.shadowColour : '#808080');
     }
     if (v.keep) { s.breakInside = 'avoid'; }
     if (!el.getAttribute('style')) { el.removeAttribute('style'); }
@@ -3659,6 +3797,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
+    'eb-cap-t', 'eb-cap-in', 'eb-cap-none',
     'eb-math-block', 'eb-embed', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
     'eb-pagebreak', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
     // not part of a document, but the editor's own page spacer lives in the canvas
@@ -5594,7 +5733,7 @@ ${insideObjects('.eb-paper.boxed')} {
   <!-- pictures from Files -->
   <div v-if="pickerOpen" class="eb-modal-back" @click="pickerOpen = false">
     <div class="eb-modal tall" @click.stop>
-      <h3><span v-html="icons.image"></span> {{ picker.mode === 'pagebg' ? t('Picture behind the page') : t('Insert picture') }}</h3>
+      <h3><span v-html="icons.image"></span> {{ picker.mode === 'pagebg' ? t('Picture behind the page') : (picker.mode === 'objectbg' ? t('Picture behind the words') : t('Insert picture')) }}</h3>
       <div class="body">
         <div class="fp-path">
           <button class="eb-btn ghost" :disabled="picker.parent === null || picker.loading" @click="pickerLoad(picker.parent)"><span v-html="icons.up"></span></button>
@@ -5616,7 +5755,7 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="pickerOpen = false">{{ t('Cancel') }}</button>
-        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : (picker.mode === 'pagebg' ? t('Use for the page') : t('Insert')) }}</button>
+        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : (picker.mode === 'pagebg' ? t('Use for the page') : (picker.mode === 'objectbg' ? t('Use behind the words') : t('Insert'))) }}</button>
       </div>
     </div>
   </div>
@@ -5963,6 +6102,44 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="eb-v-bot">{{ t('At the bottom') }}</option>
             </select>
           </div>
+        </div>
+        <!-- How the writing itself is dressed: a picture behind it, an outline
+             round each letter, a shadow under them. Written as CSS on the object,
+             so the saved file carries the look with it. -->
+        <div class="eb-row eb-frow" v-if="frameHoldsWords">
+          <div class="eb-field">
+            <label>{{ t('Picture behind the words') }}</label>
+            <div class="btn-pair">
+              <button class="eb-btn" @click="openObjectBg()">{{ fprops.bgImage ? t('Change…') : t('Choose…') }}</button>
+              <button class="eb-btn" :disabled="!fprops.bgImage" @click="clearObjectBg()">{{ t('None') }}</button>
+            </div>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('How it fills') }}</label>
+            <select v-model="fprops.bgFit" :disabled="!fprops.bgImage">
+              <option value="cover">{{ t('Fill the box') }}</option>
+              <option value="contain">{{ t('Fit inside') }}</option>
+              <option value="tile">{{ t('Tiled') }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Outline (mm)') }}</label>
+            <input type="number" min="0" max="3" step="0.05" v-model="fprops.strokeWidth" placeholder="0">
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Outline colour') }}</label>
+            <input type="color" v-model="fprops.strokeColour">
+          </div>
+        </div>
+        <div class="eb-row eb-frow" v-if="frameHoldsWords">
+          <div class="eb-field">
+            <label>{{ t('Shadow under the letters') }}</label>
+            <label class="opt"><input type="checkbox" v-model="fprops.textShadow"> {{ t('On') }}</label>
+          </div>
+          <div class="eb-field"><label>{{ t('Across (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowX" :disabled="!fprops.textShadow"></div>
+          <div class="eb-field"><label>{{ t('Down (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowY" :disabled="!fprops.textShadow"></div>
+          <div class="eb-field"><label>{{ t('Softness (pt)') }}</label><input type="number" min="0" max="30" step="0.5" v-model="fprops.shadowBlur" :disabled="!fprops.textShadow"></div>
+          <div class="eb-field"><label>{{ t('Shadow colour') }}</label><input type="color" v-model="fprops.shadowColour" :disabled="!fprops.textShadow"></div>
           <div class="eb-field">
             <label>{{ t('Text inside it') }}</label>
             <select v-model="fprops.inner">
@@ -6161,6 +6338,11 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="ci" @click="ctxDo('float','')">{{ t('No text wrap') }}</button>
           <button class="ci" @click="ctxDo('float','left')">{{ t('Wrap text on the right') }}</button>
           <button class="ci" @click="ctxDo('float','right')">{{ t('Wrap text on the left') }}</button>
+          <div class="sep"></div>
+          <button class="ci" :class="{ on: ctxCaption === 'below' }" @click="ctxDo('caption','below')">{{ t('Caption under the picture') }}</button>
+          <button class="ci" :class="{ on: ctxCaption === 'above' }" @click="ctxDo('caption','above')">{{ t('Caption over the picture') }}</button>
+          <button class="ci" :class="{ on: ctxCaption === 'inside' }" @click="ctxDo('caption','inside')">{{ t('Caption inside the picture') }}</button>
+          <button class="ci" :class="{ on: ctxCaption === 'none' }" @click="ctxDo('caption','none')">{{ t('No caption') }}</button>
           <div class="sep"></div>
           <button class="ci" @click="ctxDo('alt')">{{ t('Alternative text…') }}</button>
           <button class="ci" @click="ctxDo('imageDel')">{{ t('Delete the picture') }}</button>
@@ -6430,7 +6612,7 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
@@ -6693,6 +6875,8 @@ ${insideObjects('.eb-paper.boxed')} {
           'PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
       /** Writing: a block that stands in the text rather than an object put on the page. */
+      /** Where the caption of the picture under the pointer stands. */
+      ctxCaption() { return this.ctx.open && this.ctx.image ? this.ctx.captionPlace : ''; },
       frameIsWriting() {
         return ['PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
@@ -7578,6 +7762,15 @@ ${insideObjects('.eb-paper.boxed')} {
         }
       },
 
+      /** The same picker again, asked for the picture behind one object's words. */
+      openObjectBg() {
+        this.picker.mode = 'objectbg';
+        this.fpropsOpen = false;
+        this.pickerOpen = true;
+        this.picker.selected = null;
+        this.pickerLoad('');
+      },
+      clearObjectBg() { this.fprops.bgImage = ''; },
       /** The same picker, asked for the picture the page is printed on. */
       openPageBg() {
         this.picker.mode = 'pagebg';
@@ -7615,6 +7808,13 @@ ${insideObjects('.eb-paper.boxed')} {
           // carries this one twice -- once for the screen, once for the printer.
           const url = await shrinkImage(raw, r.mime, this.picker.mode === 'pagebg' ? 1600 : undefined);
           this.pickerOpen = false;
+          if (this.picker.mode === 'objectbg') {
+            // Straight back into the dialogue that asked for it: the writer
+            // presses OK there and it is applied with the rest.
+            this.fprops.bgImage = url;
+            this.fpropsOpen = true;
+            return;
+          }
           if (this.picker.mode === 'pagebg') {
             const size = await imageSize(url);
             this.doc.paper.bg.image = url;
@@ -7633,6 +7833,10 @@ ${insideObjects('.eb-paper.boxed')} {
       imageCmd(kind, arg) {
         if (kind === 'size') { this.run(() => setImageSize(arg)); }
         if (kind === 'delete') { this.run(() => deleteImage()); }
+        if (kind === 'caption') {
+          this.run(() => setCaptionPlace(imageAt(), arg));
+          this.$nextTick(() => this.syncFrame());
+        }
       },
       /**
        * A picture dragged off the shelf cannot be put down until it has been
@@ -8575,6 +8779,9 @@ ${insideObjects('.eb-paper.boxed')} {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
           wrapMode: 'through', wrapGap: '',
+          bgImage: '', bgFit: 'cover',
+          strokeWidth: '', strokeColour: '#000000',
+          textShadow: false, shadowX: 1, shadowY: 1, shadowBlur: 1.5, shadowColour: '#808080',
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
         };
       },
@@ -8829,6 +9036,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const range = getRange();
         this.ctx.table = !!cellAt(at);
         this.ctx.image = !!imageAt(at);
+        this.ctx.captionPlace = this.ctx.image ? captionPlace(imageAt(at)) : '';
         // The right button acts on what it is over, so it also picks the frame up.
         // Writing counts: a paragraph is an object like any other, and the menu is
         // where its wrap, its arrangement and its size are set.
@@ -8941,6 +9149,7 @@ ${insideObjects('.eb-paper.boxed')} {
           merge: () => this.doMerge(),
           split: () => this.doSplit(),
           image: () => this.imageCmd('size', arg),
+          caption: () => this.imageCmd('caption', arg),
           float: () => this.run(() => setImageFloat(arg)),
           alt: () => this.openAlt(),
           imageDel: () => this.imageCmd('delete'),
@@ -9891,6 +10100,9 @@ ${insideObjects('.eb-paper.boxed')} {
   window.__eb_pasteHtmlAt = pasteHtmlAt;
   // moving a frame is driven by the pointer, which jsdom has no layout for
   window.__eb_moveObjectTo = moveObjectTo;
+  // where a picture lands is decided without any layout, so it is testable
+  window.__eb_insertImage = insertImage;
+  window.__eb_captionPlace = captionPlace;
   // the 文節 rule, which is arithmetic over the script and testable on its own
   window.__eb_bunsetsu = (text) => {
     const out = [];
