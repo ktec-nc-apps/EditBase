@@ -400,6 +400,16 @@
   const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, div.eb-embed, hr';
   /** The same list, as the selector for one state of the canvas. */
   const objectRule = (prefix) => OBJECT_SEL.split(', ').map((s) => prefix + ' ' + s).join(', ');
+  // Writing is an object too. A paragraph, a heading, a list, a quotation: each
+  // one is a block on the page with a size and a place, and a writer laying a
+  // page out has to see where it ends -- so each one wears a box like anything
+  // else. Only the blocks that stand on the page themselves; the ones inside a
+  // table cell or a shape are part of that object's box, not boxes of their own.
+  const TEXT_SEL = 'p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, dl, div.eb-cols';
+  const textRule = (prefix) => TEXT_SEL.split(', ').map((s) => prefix + ' ' + s).join(', ');
+  /** Every text block that stands inside an object: each object crossed with each block. */
+  const insideObjects = (prefix) => OBJECT_SEL.split(', ')
+    .map((o) => textRule(prefix + ' ' + o)).join(',\n');
 
   // ---- the document stylesheet ----------------------------------------------
   // Written into every saved file *and* applied to the editor canvas, so the
@@ -711,6 +721,15 @@
 ${objectRule('.eb-paper.boxed')} {
   outline: 1px dashed rgba(37, 99, 235, .40);
   outline-offset: 1px;
+}
+${textRule('.eb-paper.boxed')} {
+  outline: 1px dashed rgba(37, 99, 235, .26);
+  outline-offset: 1px;
+}
+/* Inside an object, the writing is that object's business and the object's box
+   is already round it. Two boxes a millimetre apart say nothing extra. */
+${insideObjects('.eb-paper.boxed')} {
+  outline: none;
 }
 /* A rule or a line is a hair thick and its box would sit on top of it. */
 .eb-paper.boxed hr, .eb-paper.boxed div.eb-sh-line, .eb-paper.boxed div.eb-sh-arrow { outline-offset: 3px; }
@@ -2973,7 +2992,25 @@ ${objectRule('.eb-paper.boxed')} {
     if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
     if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
     if (el.classList && el.classList.contains('eb-embed')) { return 'EMBED'; }
+    if (el.classList && el.classList.contains('eb-cols')) { return 'COLUMNS'; }
+    if (/^H[1-6]$/.test(el.nodeName)) { return 'HEADING'; }
+    if (el.nodeName === 'P') { return 'PARA'; }
+    if (el.nodeName === 'UL' || el.nodeName === 'OL' || el.nodeName === 'DL') { return 'LIST'; }
+    if (el.nodeName === 'BLOCKQUOTE') { return 'QUOTE'; }
+    if (el.nodeName === 'PRE') { return 'PRE'; }
     return el.nodeName;
+  }
+  /** Writing is an object as well: the block the caret is in, when nothing else holds it. */
+  function textBlockAt(node) {
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    const c = canvas();
+    while (n && n !== c && n.nodeType === 1) {
+      // An object holds its own writing: that object is what is taken hold of.
+      if (n.matches && n.matches(OBJECT_SEL)) { return null; }
+      if (n.matches && n.matches(TEXT_SEL)) { return n; }
+      n = n.parentNode;
+    }
+    return null;
   }
   function objectFree(el) {
     const p = el && el.parentNode;
@@ -7078,14 +7115,14 @@ return function render(_ctx, _cache) {
                 (_ctx.frame.dragging)
                   ? (_openBlock(), _createElementBlock("div", _hoisted_290, _toDisplayString(_ctx.frame.mm), 1 /* TEXT */))
                   : _createCommentVNode("v-if", true),
-                (_openBlock(), _createElementBlock(_Fragment, null, _renderList(['t','r','b','l'], (e) => {
-                  return _createElementVNode("div", {
+                (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.frameEdges, (e) => {
+                  return (_openBlock(), _createElementBlock("div", {
                     key: 'e' + e,
                     class: _normalizeClass(["ed", e]),
                     onPointerdown: _cache[199] || (_cache[199] = _withModifiers($event => (_ctx.frameGrab($event, 'move')), ["prevent"])),
                     onContextmenu: _cache[200] || (_cache[200] = _withModifiers((...args) => (_ctx.openFrameProps && _ctx.openFrameProps(...args)), ["prevent","stop"]))
-                  }, null, 34 /* CLASS, NEED_HYDRATION */)
-                }), 64 /* STABLE_FRAGMENT */)),
+                  }, null, 34 /* CLASS, NEED_HYDRATION */))
+                }), 128 /* KEYED_FRAGMENT */)),
                 (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.frameHandles, (h) => {
                   return (_openBlock(), _createElementBlock("span", {
                     key: h,
@@ -10508,13 +10545,30 @@ return function render(_ctx, _cache) {
           { type: 'hiragana-iroha', sample: 'い、', label: this.t('I, ro, ha in hiragana') },
         ];
       },
-      frameHandles() { return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']; },
+      frameHandles() {
+        if (this.frameIsWriting && !this.frame.free) { return ['e', 'w']; }
+        return ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+      },
+      /**
+       * The bands along the edges are what an object is dragged by. Round writing
+       * that is still in the flow they would lie over the line above and the line
+       * below, and a click meant for the text would start a drag instead. Writing
+       * is moved by writing; once it is placed freely it is moved like anything else.
+       */
+      frameEdges() {
+        return this.frameIsWriting && !this.frame.free ? [] : ['t', 'r', 'b', 'l'];
+      },
       /** Wrapping and free placement cannot both be true: CSS has only one answer. */
       freePlacement() { return this.fprops.place === 'free' && !this.fprops.wrap; },
       /** What the frame is, in the writer's words, for the bar and the dialogue. */
       /** Whether this object is a box with words in it, as against a table or a rule. */
       frameHoldsWords() {
-        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT'].indexOf(this.frame.kind) >= 0;
+        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT',
+          'PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
+      },
+      /** Writing: a block that stands in the text rather than an object put on the page. */
+      frameIsWriting() {
+        return ['PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
       frameLabel() {
         const kind = this.frame.kind;
@@ -10523,6 +10577,8 @@ return function render(_ctx, _cache) {
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
           NOTE: this.t('Note'), FRAME: this.t('Frame'), TEXT: this.t('Phrase'),
           SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
+          PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
+          QUOTE: this.t('Quotation'), PRE: this.t('Preformatted text'), COLUMNS: this.t('Column layout'),
         };
         return names[kind] || this.t('Frame');
       },
@@ -11539,7 +11595,8 @@ return function render(_ctx, _cache) {
         }
         if (!framePinned) {
           const range = getRange();
-          const at = range && inCanvas(range.startContainer) ? objectAt(range.startContainer) : null;
+          const at = range && inCanvas(range.startContainer)
+            ? (objectAt(range.startContainer) || textBlockAt(range.startContainer)) : null;
           if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
         }
         const el = frameEl;
