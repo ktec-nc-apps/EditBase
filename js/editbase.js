@@ -571,6 +571,9 @@
    HTML has no coordinate system that spans pages, but a box positioned against a
    paragraph goes wherever that paragraph goes. */
 .eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; }
+/* The room an object takes out of the writing. Empty, no ink, no room of its own
+   beyond the float: it is the wrap itself, written down. */
+.eb-doc span.eb-flow { display: block; pointer-events: none; }
 .eb-doc span.eb-anchor { position: relative; display: inline; }
 .eb-doc .eb-anchor > * { position: absolute; margin: 0; }
 /* Browsers leave background colours out of a printout unless the page insists. */
@@ -825,7 +828,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin)$/;
 
   function cleanStyle(value) {
@@ -1062,6 +1065,7 @@ ${insideObjects('.eb-paper.boxed')} {
   let frameEl = null;
   // Whether the paste about to arrive was asked for with Shift held down.
   let pastePlain = false;
+  let wrapTimer = null;
   let framePinned = false;
   let frameDrag = null;
   let frameBox = null;
@@ -3181,6 +3185,178 @@ ${insideObjects('.eb-paper.boxed')} {
     order.forEach((x, k) => { x.n.style.zIndex = String(k + 1); });
   }
 
+  // ---- 折り返し: how the words get round an object ----------------------------
+  // LibreOffice calls it 折り返し. A browser has one tool for it -- the float --
+  // and a float only holds words off from the edge of the column, and only the
+  // words that come after it. An object parked over the middle of a paragraph
+  // pushes nothing at all: the words run straight underneath.
+  //
+  // So the wrap is written into the document itself. Where an object stands over
+  // a piece of writing, a spacer is floated at the head of that writing: no words
+  // in it and no ink, exactly wide and tall enough to hold the lines off the
+  // object, with shape-outside cutting away the part above it so the lines before
+  // it keep their full width. It is plain HTML and plain CSS, so the saved file
+  // wraps in any browser with nothing to run.
+  //
+  // One thing LibreOffice does that no browser can: run a single line of text
+  // down BOTH sides of an object. A line box is one unbroken run, so the words
+  // go to one side or the other. "Optimal" picks whichever side has more room.
+  const WRAP_MODES = ['none', 'optimal', 'left', 'right', 'through', 'behind'];
+  const WRAP_GAP = 3;
+  function wrapMode(el) {
+    const m = el && el.getAttribute ? (el.getAttribute('data-wrap') || '') : '';
+    return WRAP_MODES.indexOf(m) >= 0 ? m : 'through';
+  }
+  function wrapGap(el) {
+    const g = parseFloat(el && el.getAttribute ? el.getAttribute('data-wrap-gap') : '');
+    return isFinite(g) && g >= 0 ? g : WRAP_GAP;
+  }
+  /** Where a float actually sits: inside the block's content, not its border. */
+  function contentBox(el) {
+    const r = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    const n = (v) => parseFloat(v) || 0;
+    return {
+      left: r.left + n(cs.borderLeftWidth) + n(cs.paddingLeft),
+      right: r.right - n(cs.borderRightWidth) - n(cs.paddingRight),
+      top: r.top + n(cs.borderTopWidth) + n(cs.paddingTop),
+      bottom: r.bottom - n(cs.borderBottomWidth) - n(cs.paddingBottom),
+    };
+  }
+  /** A float reaches only the lines in its own formatting context. */
+  function flowRoot(el) {
+    const c = canvas();
+    let n = el && el.parentNode;
+    while (n && n.nodeType === 1 && n !== c) {
+      const cs = window.getComputedStyle(n);
+      if (cs.overflow !== 'visible' || cs.float !== 'none' || cs.position === 'absolute'
+        || /flex|grid|table|inline-block|flow-root/.test(cs.display)) { return n; }
+      n = n.parentNode;
+    }
+    return c;
+  }
+  /**
+   * Clear the formatting inside a block, the way LibreOffice's 直接設定した書式の
+   * クリア does: the words and the paragraphs stay, everything laid on top of them
+   * goes. Text that arrived as a <pre> -- pasted from a terminal or a plain file --
+   * becomes real paragraphs, because a <pre> never wraps and so can never flow
+   * round anything.
+   */
+  const PLAIN_KEEP = /^(width|height|min-height|max-width|float|clear|position|left|top|right|bottom|margin|margin-left|margin-right|margin-top|margin-bottom|z-index|break-inside|shape-outside)$/;
+  function plainBlock(el) {
+    if (!el) { return; }
+    Array.from(el.querySelectorAll('pre')).forEach((pre) => {
+      const parent = pre.parentNode;
+      const lines = String(pre.textContent || '').replace(/\t/g, ' ').split(/\r?\n/);
+      // A run of blank lines between two paragraphs is one break, not five.
+      const out = [];
+      lines.forEach((line) => {
+        const text = line.replace(/\s+$/, '');
+        if (!text.trim() && !out.length) { return; }
+        if (!text.trim() && out.length && !out[out.length - 1]) { return; }
+        out.push(text.trim() ? text : '');
+      });
+      while (out.length && !out[out.length - 1]) { out.pop(); }
+      out.forEach((line) => {
+        const p = document.createElement('p');
+        if (line) { p.textContent = line; } else { p.appendChild(document.createElement('br')); }
+        parent.insertBefore(p, pre);
+      });
+      parent.removeChild(pre);
+    });
+    // Everything laid over the words: unwrapped, the words themselves left behind.
+    for (let pass = 0; pass < 20; pass += 1) {
+      const dressed = el.querySelector('b, i, u, s, em, strong, code, mark, font, small, big, sub, sup, span:not(.eb-flow):not(.eb-frame)');
+      if (!dressed) { break; }
+      const parent = dressed.parentNode;
+      while (dressed.firstChild) { parent.insertBefore(dressed.firstChild, dressed); }
+      parent.removeChild(dressed);
+    }
+    Array.from(el.querySelectorAll('[style], [class]')).forEach((kid) => {
+      if (kid.classList && kid.classList.contains('eb-flow')) { return; }
+      kid.removeAttribute('style');
+      const keep = Array.from(kid.classList || []).filter((c) => /^eb-al-/.test(c));
+      if (keep.length) { kid.setAttribute('class', keep.join(' ')); } else { kid.removeAttribute('class'); }
+    });
+    // The block itself keeps its size and its place; only the ink goes.
+    const style = el.style;
+    Array.from(style).slice().forEach((prop) => {
+      if (!PLAIN_KEEP.test(prop)) { style.removeProperty(prop); }
+    });
+    if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+  }
+
+  function clearWrapSpacers(root) {
+    if (root) { Array.from(root.querySelectorAll('span.eb-flow')).forEach((s) => s.remove()); }
+  }
+  /**
+   * Write the spacers. Measured, so it must run after the page has been laid out.
+   * An object hangs off an anchor that stands in the text, so making the text
+   * taller moves the object -- which changes the spacer that made it taller. Two
+   * or three passes settle it; if they do not, the last one stands.
+   */
+  function applyWrap(root, zoom) {
+    if (!root) { return; }
+    const z = zoom || 1;
+    const mm = (px) => Math.round(px / z * MM * 10) / 10;
+    for (let pass = 0; pass < 3; pass += 1) {
+      clearWrapSpacers(root);
+      const objects = Array.from(root.querySelectorAll('[data-wrap]'))
+        .filter((o) => objectFree(o) && ['none', 'optimal', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
+      if (!objects.length) { return; }
+      const before = objects.map((o) => o.getBoundingClientRect().top);
+      const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
+        .filter((b) => !b.closest('.eb-anchor') && !b.querySelector('.eb-anchor'));
+      // Nearest first, so two objects over the same paragraph reserve their room
+      // one after the other instead of both measuring from the same edge.
+      const held = new Map();
+      objects.slice().sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+        .forEach((o) => {
+          const or = o.getBoundingClientRect();
+          if (!or.width || !or.height) { return; }
+          const mode = wrapMode(o);
+          const gapPx = wrapGap(o) / MM * z;
+          const done = new Set();
+          blocks.forEach((b) => {
+            if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
+            const cb = contentBox(b);
+            if (cb.bottom <= or.top - gapPx || cb.top >= or.bottom + gapPx) { return; }
+            if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
+            const rootEl = flowRoot(b);
+            // One spacer to each formatting context: a float goes on holding the
+            // lines below it off, so the paragraphs after this one are already
+            // taken care of.
+            if (done.has(rootEl)) { return; }
+            done.add(rootEl);
+            const room = cb.right - cb.left;
+            const side = mode === 'optimal'
+              ? ((or.left - cb.left) >= (cb.right - or.right) ? 'left' : 'right')
+              : mode;
+            const floatSide = mode === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
+            const key = b;
+            const taken = held.get(key) || { left: 0, right: 0 };
+            let w = mode === 'none' ? room
+              : (floatSide === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
+            w = Math.min(Math.max(w - taken[floatSide], 0), room);
+            const h = (or.bottom + gapPx) - cb.top;
+            if (w <= 0 || h <= 0) { return; }
+            taken[floatSide] += w;
+            held.set(key, taken);
+            const inset = Math.max(0, (or.top - gapPx) - cb.top);
+            const spacer = document.createElement('span');
+            spacer.className = 'eb-flow';
+            spacer.setAttribute('contenteditable', 'false');
+            spacer.setAttribute('aria-hidden', 'true');
+            spacer.setAttribute('style', 'float:' + floatSide + ';width:' + mm(w) + 'mm;height:' + mm(h) + 'mm;'
+              + (inset > 0.5 ? 'shape-outside:inset(' + mm(inset) + 'mm 0 0 0);' : ''));
+            b.insertBefore(spacer, b.firstChild);
+          });
+        });
+      const after = objects.map((o) => o.getBoundingClientRect().top);
+      if (after.every((t, i) => Math.abs(t - before[i]) < 0.5)) { return; }
+    }
+  }
+
   function unitOf(value, unit) {
     const m = /^(-?[\d.]+)([a-z%]*)$/.exec(String(value == null ? '' : value).trim());
     return m && m[2] === unit ? Number(m[1]) : '';
@@ -3471,7 +3647,7 @@ ${insideObjects('.eb-paper.boxed')} {
   const DOC_CLASSES = new Set([
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
-    'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow',
+    'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-v-mid', 'eb-v-bot',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
@@ -4625,6 +4801,8 @@ ${insideObjects('.eb-paper.boxed')} {
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    wrapBoth: I('<rect x="5.6" y="4.5" width="4.8" height="7" rx="1"/><path d="M1.6 5.4h3M1.6 8h3M1.6 10.6h3M11.4 5.4h3M11.4 8h3M11.4 10.6h3"/>'),
+    wrapThrough: I('<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M1.6 5.4h12.8M1.6 8h12.8M1.6 10.6h12.8"/>'),
     grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
     boxes: I('<rect x="2.6" y="3.6" width="10.8" height="8.8" rx=".6" stroke-dasharray="2 1.6"/><path d="M1.4 2.4h2.4M12.2 2.4h2.4M1.4 13.6h2.4M12.2 13.6h2.4"/>'),
     palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
@@ -4874,9 +5052,11 @@ ${insideObjects('.eb-paper.boxed')} {
       <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="openFrameProps">
       <span class="nm">{{ frameLabel }}</span>
       <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', '')" :title="t('No text wrap')"><span v-html="icons.wrapNone"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', 'left')" :title="t('Wrap text on the right')"><span v-html="icons.wrapLeft"></span></button>
-      <button class="eb-tb" @click="frameCmd('wrap', 'right')" :title="t('Wrap text on the left')"><span v-html="icons.wrapRight"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('No wrap')"><span v-html="icons.wrapNone"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Wrap on the right')"><span v-html="icons.wrapLeft"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Wrap on the left')"><span v-html="icons.wrapRight"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'optimal' }" @click="frameCmd('wrapMode', 'optimal')" :title="t('Optimal page wrap')"><span v-html="icons.wrapBoth"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Wrap through')"><span v-html="icons.wrapThrough"></span></button>
       <span class="sep"></span>
       <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
       <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
@@ -5756,6 +5936,21 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="free">{{ t('Placed freely') }}</option>
             </select>
           </div>
+          <div class="eb-field">
+            <label>{{ t('Wrap') }}</label>
+            <select v-model="fprops.wrapMode">
+              <option value="through">{{ t('Wrap through') }}</option>
+              <option value="none">{{ t('No wrap') }}</option>
+              <option value="optimal">{{ t('Optimal page wrap') }}</option>
+              <option value="left">{{ t('Wrap on the left') }}</option>
+              <option value="right">{{ t('Wrap on the right') }}</option>
+              <option value="behind">{{ t('In background') }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Gap to the text (mm)') }}</label>
+            <input type="number" min="0" max="60" step="0.5" v-model="fprops.wrapGap" :placeholder="'3'">
+          </div>
           <div class="eb-field" v-if="frameHoldsWords">
             <label>{{ t('Text down the box') }}</label>
             <select v-model="fprops.vpos">
@@ -5969,24 +6164,54 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </template>
 
+    <!-- What a writer who knows LibreOffice reaches for when they right-click a
+         thing on the page: the wrap, the arrangement, the anchor, the size. -->
     <template v-if="ctx.frame || ctx.text">
       <div class="sep"></div>
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ ctx.frame ? t('Frame') : t('This phrase') }}</span><span class="s">›</span>
+        <span>{{ t('Wrap') }}</span><span class="s">›</span>
         <div class="fly">
-          <button class="ci" @click="ctxDo('frameProps')">{{ t('Frame properties…') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('No wrap') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'optimal' }" @click="ctxDo('wrapMode','optimal')">{{ t('Optimal page wrap') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Wrap on the left') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Wrap on the right') }}</button>
           <div class="sep"></div>
-          <button class="ci" @click="ctxDo('frameFree')">{{ t('Place it freely') }}</button>
-          <button class="ci" @click="ctxDo('frameWrap','')">{{ t('No text wrap') }}</button>
-          <button class="ci" @click="ctxDo('frameWrap','left')">{{ t('Wrap text on the right') }}</button>
-          <button class="ci" @click="ctxDo('frameWrap','right')">{{ t('Wrap text on the left') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Wrap through') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'behind' }" @click="ctxDo('wrapMode','behind')">{{ t('In background') }}</button>
           <div class="sep"></div>
-          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
-          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
-          <div class="sep"></div>
-          <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+          <button class="ci" @click="ctxDo('frameProps')">{{ t('Edit wrap…') }}</button>
         </div>
       </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Arrange') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
+          <button class="ci" @click="ctxDo('stackStep',1)">{{ t('Forward one') }}</button>
+          <button class="ci" @click="ctxDo('stackStep',-1)">{{ t('Back one') }}</button>
+          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
+        </div>
+      </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Align') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-l')">{{ t('Put the frame at the left margin') }}</button>
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-c')">{{ t('Centre the frame in the column') }}</button>
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-r')">{{ t('Put the frame at the right margin') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('frameFit')">{{ t('Make the frame the width of the column') }}</button>
+        </div>
+      </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Anchor') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" :class="{ on: !frame.free }" @click="ctxDo('frameInFlow')">{{ t('As character') }}</button>
+          <button class="ci" :class="{ on: frame.free }" @click="ctxDo('frameToPage')">{{ t('To paragraph') }}</button>
+        </div>
+      </div>
+      <div class="sep"></div>
+      <button class="ci" v-if="ctx.frame" @click="ctxDo('framePlain')">{{ t('Clear the formatting inside') }}</button>
+      <button class="ci" @click="ctxDo('frameProps')">{{ t('Position and size…') }}</button>
+      <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
     </template>
 
     <div class="sep"></div>
@@ -6203,7 +6428,7 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlText: '',
         defaultPaper: normalisePaper(null),
         ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, link: false, list: false, selection: false, frame: false, text: false },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -6592,6 +6817,7 @@ ${insideObjects('.eb-paper.boxed')} {
           this.savedAt = (d.mtime || 0) * 1000;
           this.refreshState();
           this.recount();
+          this.$nextTick(() => this.reflowWrap());
           if (window.innerWidth < 860) { this.sideOpen = false; }
           if (parsed.foreign) {
             this.notify(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
@@ -7530,6 +7756,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frame.padX = this.frame.w < 10 ? (10 - this.frame.w) : 0;
         this.frame.padY = this.frame.h < 10 ? (10 - this.frame.h) : 0;
         this.frame.free = objectFree(el);
+        this.frame.wrap = wrapMode(el);
         this.frame.kind = objectKind(el);
         this.frame.on = true;
         frameBox = a;
@@ -8141,8 +8368,23 @@ ${insideObjects('.eb-paper.boxed')} {
         this.refreshState();
         this.$nextTick(() => {
           if (fit) { this.fitFrameWidth(fit); }
+          this.reflowWrap();
           this.syncFrame();
         });
+      },
+      /**
+       * Redraw the room the objects take out of the writing. It is measured, so it
+       * runs after the page is laid out -- and it runs often: as the writer types,
+       * the lines move and the room has to move with them.
+       */
+      reflowWrap() {
+        const c = canvas();
+        if (!c) { return; }
+        applyWrap(c, this.frameZoom());
+      },
+      queueWrap() {
+        if (wrapTimer) { window.clearTimeout(wrapTimer); }
+        wrapTimer = window.setTimeout(() => { wrapTimer = null; this.reflowWrap(); }, 160);
       },
       frameCmd(kind, arg) {
         if (!frameEl) { return; }
@@ -8206,6 +8448,34 @@ ${insideObjects('.eb-paper.boxed')} {
             el.style.left = '0mm';
             el.style.top = '0mm';
           }
+        } else if (kind === 'wrapMode') {
+          // 折り返し, LibreOffice's word for it. It says what the words do when
+          // they meet this object, and nothing else: where the object stands is
+          // the placement's business, not the wrap's.
+          const mode = WRAP_MODES.indexOf(arg) >= 0 ? arg : 'through';
+          el.setAttribute('data-wrap', mode);
+          if (objectFree(el)) {
+            // Standing over the text: a float would not reach it, so the room is
+            // taken out of the writing itself. See applyWrap.
+            el.style.removeProperty('float');
+            if (mode === 'behind') { el.style.zIndex = '0'; }
+            else if (el.style.zIndex === '0') { el.style.removeProperty('z-index'); }
+          } else {
+            // Still in the run of the text: a float is the wrap, and it is the
+            // better one -- the words reflow round it as they are written.
+            el.style.removeProperty('float');
+            el.style.removeProperty('margin-left');
+            el.style.removeProperty('margin-right');
+            if (mode === 'right' || mode === 'optimal') {
+              el.style.cssFloat = 'left';
+              el.style.marginRight = wrapGap(el) + 'mm';
+            } else if (mode === 'left') {
+              el.style.cssFloat = 'right';
+              el.style.marginLeft = wrapGap(el) + 'mm';
+            }
+          }
+        } else if (kind === 'plain') {
+          plainBlock(el);
         } else if (kind === 'wrap') {
           // Pressing the side it is already wrapped on takes the wrapping off.
           if (arg && (el.style.cssFloat || el.style.float) === arg) { arg = ''; }
@@ -8290,6 +8560,8 @@ ${insideObjects('.eb-paper.boxed')} {
         if (frameEl) {
           const props = objectProps(frameEl);
           if (props) { this.fprops = Object.assign({}, this.fprops, props); }
+          this.fprops.wrapMode = wrapMode(frameEl);
+          this.fprops.wrapGap = frameEl.getAttribute('data-wrap-gap') || '';
         } else {
           // Nothing is written on the text yet, so the dialogue starts empty; the
           // run of words only becomes a frame if the settings are applied.
@@ -8301,6 +8573,7 @@ ${insideObjects('.eb-paper.boxed')} {
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
+          wrapMode: 'through', wrapGap: '',
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
         };
       },
@@ -8315,8 +8588,15 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         if (!frameEl) { return; }
         framePinned = true;
+        frameTaken = true;
         history.push(true);
         setObjectProps(frameEl, v);
+        if (v.wrapGap === '' || v.wrapGap == null) { frameEl.removeAttribute('data-wrap-gap'); }
+        else { frameEl.setAttribute('data-wrap-gap', String(v.wrapGap)); }
+        // Only if the writer actually changed it: the wrap and the placement are
+        // set in the same dialogue, and the wrap must not undo what the placement
+        // just did.
+        if ((v.wrapMode || 'through') !== wrapMode(frameEl)) { this.frameCmd('wrapMode', v.wrapMode || 'through'); }
         this.settleFrame(frameEl);
       },
       /** The two overlap buttons in the dialogue act at once, like a menu item. */
@@ -8549,20 +8829,23 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.table = !!cellAt(at);
         this.ctx.image = !!imageAt(at);
         // The right button acts on what it is over, so it also picks the frame up.
-        const obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY);
+        // Writing counts: a paragraph is an object like any other, and the menu is
+        // where its wrap, its arrangement and its size are set.
+        const obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
+          || textBlockAt(e.target) || textBlockAt(at);
         // The right button on an object shows that object's settings, whatever the
         // object is -- not only on the thin band of its border. Inside something
         // written in, a cell or a caption, the menu for text is what is wanted.
+        // The right button on an object takes hold of it and shows its menu -- the
+        // wrap, the arrangement, the size -- which is where a writer who knows a
+        // word processor looks for them. The properties dialogue is one item in it,
+        // not the whole answer to a right click.
         if (obj && takesClick(obj, e.target, e.clientX, e.clientY)) {
           frameEl = obj;
           framePinned = true;
           frameTaken = true;
           this.frame.bar = true;
-          this.syncFrame();
-          this.openFrameProps();
-          return;
-        }
-        if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
+        } else if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
         this.ctx.frame = !!obj;
         this.syncFrame();
         this.ctx.text = !obj && !!textRange;
@@ -8663,6 +8946,13 @@ ${insideObjects('.eb-paper.boxed')} {
           frameProps: () => this.openFrameProps(),
           frameFree: () => (frameEl ? this.frameCmd('free') : this.textCmd('free')),
           frameWrap: () => (frameEl ? this.frameCmd('wrap', arg) : this.textCmd('wrap', arg)),
+          wrapMode: () => (frameEl ? this.frameCmd('wrapMode', arg) : this.textCmd('wrapMode', arg)),
+          framePlain: () => this.frameCmd('plain'),
+          frameAlign: () => (frameEl ? this.frameCmd('align', arg) : this.textCmd('align', arg)),
+          frameFit: () => (frameEl ? this.frameCmd('fit') : this.textCmd('fit')),
+          stackStep: () => (frameEl ? this.frameCmd('stack', arg) : this.textCmd('stack', arg)),
+          frameInFlow: () => { if (frameEl && objectFree(frameEl)) { this.frameCmd('free'); } },
+          frameToPage: () => { if (frameEl && !objectFree(frameEl)) { this.frameCmd('free'); } },
           frameFront: () => (frameEl ? this.frameCmd('stack', 'front') : this.textCmd('stack', 'front')),
           frameBack: () => (frameEl ? this.frameCmd('stack', 'back') : this.textCmd('stack', 'back')),
           frameDel: () => this.frameCmd('delete'),
@@ -9189,6 +9479,14 @@ ${insideObjects('.eb-paper.boxed')} {
             return undefined;
           }
         }
+        // A block still in the run of the text is not walked about with the arrows:
+        // the caret is. Let go of it, so the box follows the caret to wherever it
+        // goes rather than staying behind on the paragraph the bar was last used on.
+        if (frameEl && !objectFree(frameEl) && !meta
+          && /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/.test(e.key)) {
+          frameTaken = false;
+          framePinned = false;
+        }
         // Ctrl+D leaves a copy a few millimetres down and across, ready to be
         // dragged off -- the quickest way to lay out a row of the same thing.
         if (meta && !e.altKey && e.key.toLowerCase() === 'd' && frameTaken && frameEl) {
@@ -9351,6 +9649,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (this.review) { tidyMarks(); this.changes = countChanges(); }
         this.touch();
         this.recount();
+        this.queueWrap();
         this.keepCaretVisible();
       });
       c.addEventListener('paste', (e) => {
