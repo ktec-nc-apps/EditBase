@@ -7554,8 +7554,7 @@ ${insideObjects('.eb-paper.boxed')} {
           // after every reload until something was edited.
           this.$nextTick(() => {
             this.reflowWrap();
-            this.repaginate();
-            this.$nextTick(() => { this.refreshLayers(); this.refreshPreview(); });
+            this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); });
           });
           if (window.innerWidth < 860) { this.sideOpen = false; }
           if (parsed.foreign) {
@@ -7678,21 +7677,36 @@ ${insideObjects('.eb-paper.boxed')} {
        * Lay the text over the sheets and keep the right number of sheets under it.
        * Runs on the next frame so the measurements are of the layout as it now is,
        * and once more afterwards because adding a sheet can change what fits.
+       *
+       * It settles late -- a timer, then a tick, then possibly a second count --
+       * so anything that needs the true number of pages has to be told when the
+       * counting is done rather than run straight after the call. The page bar
+       * was drawn before the count and showed one page for a document of two.
        */
-      repaginate() {
-        if (!canvas()) { return; }
+      repaginate(then) {
+        if (!canvas()) { if (then) { then(); } return; }
         if (this.flow) {
           // Take out the spacers the page view left behind, and stop measuring.
           Array.from(canvas().querySelectorAll('.eb-pagespacer')).forEach((n) => n.remove());
           this.pageCount = 1;
+          if (then) { this.$nextTick(then); }
           return;
         }
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
+          const was = this.pageCount;
           const pages = paginate();
+          const done = () => {
+            // A changed page count makes the page bar wrong wherever the change
+            // came from, so it is redrawn here as well as by whoever asked.
+            if (this.pageCount !== was) { this.refreshPreview(); this.refreshLayers(); }
+            if (then) { then(); }
+          };
           if (pages !== this.pageCount) {
             this.pageCount = pages;
-            this.$nextTick(() => { this.pageCount = paginate(); });
+            this.$nextTick(() => { this.pageCount = paginate(); this.$nextTick(done); });
+          } else {
+            this.$nextTick(done);
           }
           this.syncFrame();
         }, 60);
@@ -9943,29 +9957,57 @@ ${insideObjects('.eb-paper.boxed')} {
         for (let n = 1; n <= Math.max(1, this.pageCount); n += 1) {
           pages.push({ n: n, ratio: Math.round((pageH / width) * 1000) / 10, blocks: [] });
         }
+        /**
+         * A block belongs to every page it covers, cut at each fold -- not only to
+         * the page it began on. A page brought in from the web arrives as one tall
+         * div, so filing it under its first page alone left nineteen pages of the
+         * plan blank while the document plainly had writing on them.
+         */
         const put = (el, kind) => {
           const r = el.getBoundingClientRect();
           if (!r.width || !r.height) { return; }
-          const y = (r.top - top0) / z;
-          const n = Math.floor(y / pageH) + 1;
-          const pg = pages[n - 1];
-          if (!pg) { return; }
-          pg.blocks.push({
-            kind: kind,
-            x: Math.max(0, Math.round(((r.left - left) / z / width) * 1000) / 10),
-            y: Math.max(0, Math.round((((y % pageH)) / pageH) * 1000) / 10),
-            w: Math.min(100, Math.round(((r.width / z) / width) * 1000) / 10),
-            h: Math.min(100, Math.round(((r.height / z) / pageH) * 1000) / 10),
-          });
+          const y0 = (r.top - top0) / z;
+          const y1 = y0 + r.height / z;
+          if (y1 <= 0) { return; }
+          const x = Math.max(0, Math.round(((r.left - left) / z / width) * 1000) / 10);
+          const w = Math.min(100, Math.round(((r.width / z) / width) * 1000) / 10);
+          const first = Math.max(1, Math.floor(y0 / pageH) + 1);
+          const last = Math.min(pages.length, Math.floor((y1 - 0.5) / pageH) + 1);
+          for (let n = first; n <= last; n += 1) {
+            const pg = pages[n - 1];
+            if (!pg) { continue; }
+            const top = Math.max(y0, (n - 1) * pageH);
+            const bottom = Math.min(y1, n * pageH);
+            if (bottom - top < 0.5) { continue; }
+            pg.blocks.push({
+              kind: kind,
+              x: x,
+              w: w,
+              y: Math.round(((top - (n - 1) * pageH) / pageH) * 1000) / 10,
+              h: Math.round(((bottom - top) / pageH) * 1000) / 10,
+            });
+          }
         };
-        Array.from(c.children).forEach((el) => {
+        /**
+         * A container taller than a page is drawn as the things inside it, so the
+         * plan shows lines of writing rather than one grey slab down every sheet.
+         */
+        const walk = (el, kind, depth) => {
+          if (el.nodeType !== 1) { return; }
           if (el.classList && el.classList.contains('eb-pagespacer')) { return; }
           if (el.classList && el.classList.contains('eb-anchor')) {
             Array.from(el.children).forEach((o) => put(o, 'obj'));
             return;
           }
-          put(el, 'text');
-        });
+          const kids = Array.from(el.children).filter((k) => k.nodeType === 1);
+          const tall = el.getBoundingClientRect().height / z > pageH * 0.9;
+          if (depth < 5 && kids.length && tall) {
+            kids.forEach((k) => walk(k, kind, depth + 1));
+            return;
+          }
+          put(el, kind);
+        };
+        Array.from(c.children).forEach((el) => walk(el, 'text', 0));
         this.preview = pages;
       },
       goToPage(n) {
