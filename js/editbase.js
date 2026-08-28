@@ -9036,12 +9036,16 @@ ${insideObjects('.eb-paper.boxed')} {
       // ---- the context menu ----------------------------------------------------
       /**
        * LibreOffice puts its own menu on the right button, and so does this: the
-       * items are the ones that apply where the pointer is. Shift+right-click is
-       * left alone, which is how a reader still reaches the browser's own menu
-       * (spelling suggestions live there).
+       * items are the ones that apply where the pointer is.
+       *
+       * The browser's own menu never appears anywhere inside the app -- not over
+       * the page, not over the toolbar, not over the shelf or the margins. A word
+       * processor that shows "Back / Reload / View source" over its own page is
+       * not a word processor. Suppressing it is done once, on the app's root, so
+       * there is no corner of the app where it can still get through.
        */
       openCtx(e) {
-        if (e.shiftKey || !this.doc.id) { return; }
+        if (!this.doc.id) { return; }
         const c = canvas();
         if (!c || !inCanvas(e.target)) { return; }
         e.preventDefault();
@@ -9967,6 +9971,12 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         cancelHold();
       }, { passive: true });
+      // The browser's own menu, everywhere in the app at once. The canvas has its
+      // own handler above; this one runs after it and refuses the browser's menu
+      // whatever was clicked -- the toolbar, the shelf, the paper's margins, a
+      // dialogue, the list of documents. One place, so there is no corner left.
+      const appRoot = document.getElementById('editbase-root') || c;
+      appRoot.addEventListener('contextmenu', (e) => { e.preventDefault(); });
       c.addEventListener('dragstart', (e) => this.onDragStart(e));
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
