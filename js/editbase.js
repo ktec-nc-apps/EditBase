@@ -5352,6 +5352,34 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
     </div>
 
+    <!-- What is done to the object that is chosen. It is a row of its own, under
+         the top row, and it is there only while something is chosen: in the rail
+         it stood thirteen buttons tall and pushed the tools off the screen. -->
+    <div class="eb-toolbar sub objbar" v-if="doc.id && frame.on">
+      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
+      <span class="nm">{{ frameLabel }}</span>
+      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('Above and below')"><span v-html="icons.wrapNone"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Words to its left')"><span v-html="icons.wrapRight"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Words to its right')"><span v-html="icons.wrapLeft"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Words underneath it')"><span v-html="icons.wrapThrough"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
+      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
+      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+      <span class="sep" v-if="frame.extras.length"></span>
+      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('spread')" :title="t('Space them evenly')"><span v-html="icons.spread"></span></button>
+      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('sameSize')" :title="t('Make them the same size')"><span v-html="icons.sameSize"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
+      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
+      </span>
+    </div>
+
     <div class="eb-find" v-if="doc.id && find.open">
       <span class="ic" v-html="icons.search"></span>
       <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
@@ -5432,7 +5460,6 @@ ${insideObjects('.eb-paper.boxed')} {
          The shelf of things to put on the page is at the foot of it. -->
     <div class="eb-workarea">
     <div class="eb-rail" v-if="doc.id">
-      <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.bold }" @mousedown.prevent @click="inline('bold')" :title="t('Bold') + ' (Ctrl+B)'"><span class="b">B</span></button>
       <button class="eb-tb" :class="{ on: fmt.italic }" @mousedown.prevent @click="inline('italic')" :title="t('Italic') + ' (Ctrl+I)'"><span class="i">I</span></button>
       <button class="eb-tb" :class="{ on: fmt.underline }" @mousedown.prevent @click="inline('underline')" :title="t('Underline') + ' (Ctrl+U)'"><span class="u">U</span></button>
@@ -5527,28 +5554,6 @@ ${insideObjects('.eb-paper.boxed')} {
            here rather than in one of its own: a new row appearing pushed the
            paper down 43 pixels every time an object was picked up, and the
            thing just clicked jumped out from under the pointer. -->
-      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
-      <span class="nm">{{ frameLabel }}</span>
-      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('Above and below')"><span v-html="icons.wrapNone"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Words to its left')"><span v-html="icons.wrapRight"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Words to its right')"><span v-html="icons.wrapLeft"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Words underneath it')"><span v-html="icons.wrapThrough"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
-      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
-      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
-      <span class="sep" v-if="frame.extras.length"></span>
-      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('spread')" :title="t('Space them evenly')"><span v-html="icons.spread"></span></button>
-      <button class="eb-tb" v-if="frame.extras.length" @click="frameCmd('sameSize')" :title="t('Make them the same size')"><span v-html="icons.sameSize"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
-      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
-      </span>
 
       <div class="rail-shelf" v-if="palette">
         <button v-for="it in paletteItems" :key="it.kind" class="eb-tb"
