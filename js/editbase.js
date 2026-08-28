@@ -1110,6 +1110,8 @@ ${insideObjects('.eb-paper.boxed')} {
   // Whether the paste about to arrive was asked for with Shift held down.
   let pastePlain = false;
   let wrapTimer = null;
+  let wordsRange = null;
+  let wordsWas = null;
   let framePinned = false;
   let frameDrag = null;
   let frameBox = null;
@@ -1419,6 +1421,78 @@ ${insideObjects('.eb-paper.boxed')} {
       el.appendChild(n);
     });
     reselectNodes(nodes);
+  }
+
+  /**
+   * What is written on a chosen run of words, read back off it. Where the run is
+   * not all of one mind -- half of it bold, say -- the answer is left empty, and
+   * an empty answer is one the dialogue will not write back.
+   */
+  const RUN_PROPS = ['fontFamily', 'fontSize', 'color', 'backgroundColor', 'fontWeight',
+    'fontStyle', 'textDecorationLine', 'letterSpacing', 'verticalAlign',
+    'webkitTextStrokeWidth', 'webkitTextStrokeColor', 'textShadow'];
+  function readRun() {
+    const range = getRange();
+    if (!range || range.collapsed) { return null; }
+    const nodes = textNodesInRange(range).filter((n) => n.data && n.data.trim());
+    if (!nodes.length) { return null; }
+    const seen = {};
+    nodes.forEach((n) => {
+      const cs = window.getComputedStyle(n.parentNode);
+      RUN_PROPS.forEach((prop) => {
+        const v = cs[prop] == null ? '' : String(cs[prop]);
+        if (!(prop in seen)) { seen[prop] = v; } else if (seen[prop] !== v) { seen[prop] = null; }
+      });
+    });
+    const one = (prop) => (seen[prop] == null ? '' : seen[prop]);
+    const shadow = one('textShadow');
+    const parts = /(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px/.exec(shadow || '');
+    const pt = (px) => Math.round((parseFloat(px) || 0) * 72 / 96 * 10) / 10;
+    return {
+      family: one('fontFamily').replace(/^["\']|["\']$/g, '').split(',')[0].trim(),
+      size: one('fontSize') ? Math.round(parseFloat(one('fontSize')) * 72 / 96 * 10) / 10 : '',
+      colour: rgbToHex(one('color')) || '#000000',
+      fill: rgbToHex(one('backgroundColor')) || '',
+      bold: /^(bold|[6-9]00)$/.test(one('fontWeight')),
+      italic: one('fontStyle') === 'italic',
+      underline: /underline/.test(one('textDecorationLine')),
+      strike: /line-through/.test(one('textDecorationLine')),
+      spacing: one('letterSpacing') && one('letterSpacing') !== 'normal' ? pt(one('letterSpacing')) : '',
+      raise: one('verticalAlign') === 'super' ? 'super' : (one('verticalAlign') === 'sub' ? 'sub' : ''),
+      strokeWidth: one('webkitTextStrokeWidth') ? Math.round(parseFloat(one('webkitTextStrokeWidth')) * 25.4 / 96 * 100) / 100 : '',
+      strokeColour: rgbToHex(one('webkitTextStrokeColor')) || '#000000',
+      shadow: !!(shadow && shadow !== 'none'),
+      shadowX: parts ? pt(parts[1]) : 1,
+      shadowY: parts ? pt(parts[2]) : 1,
+      shadowBlur: parts ? pt(parts[3]) : 1.5,
+      shadowColour: rgbToHex(shadow) || '#808080',
+    };
+  }
+  /** Write the dialogue back on to the chosen words, one property at a time. */
+  function writeRun(v, was) {
+    const changed = (key) => was && JSON.stringify(v[key]) !== JSON.stringify(was[key]);
+    const set = (prop, value) => applyInlineStyle(prop, value);
+    if (changed('family')) { set('fontFamily', v.family ? "'" + v.family + "'" : ''); }
+    if (changed('size')) { set('fontSize', v.size ? v.size + 'pt' : ''); }
+    if (changed('colour')) { set('color', v.colour || ''); }
+    if (changed('fill')) { set('backgroundColor', v.fill || ''); }
+    if (changed('bold')) { set('fontWeight', v.bold ? '700' : ''); }
+    if (changed('italic')) { set('fontStyle', v.italic ? 'italic' : ''); }
+    if (changed('underline') || changed('strike')) {
+      const line = [v.underline ? 'underline' : '', v.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+      set('textDecorationLine', line);
+    }
+    if (changed('spacing')) { set('letterSpacing', v.spacing === '' ? '' : v.spacing + 'pt'); }
+    if (changed('raise')) { set('verticalAlign', v.raise || ''); }
+    if (changed('strokeWidth') || changed('strokeColour')) {
+      set('webkitTextStroke', v.strokeWidth ? v.strokeWidth + 'mm ' + (v.strokeColour || '#000000') : '');
+      set('paintOrder', v.strokeWidth ? 'stroke fill' : '');
+    }
+    if (changed('shadow') || changed('shadowX') || changed('shadowY') || changed('shadowBlur') || changed('shadowColour')) {
+      set('textShadow', v.shadow
+        ? (v.shadowX || 0) + 'pt ' + (v.shadowY || 0) + 'pt ' + (v.shadowBlur || 0) + 'pt ' + (v.shadowColour || '#808080')
+        : '');
+    }
   }
 
   // ---- size and typeface -----------------------------------------------------------
@@ -3309,7 +3383,7 @@ ${insideObjects('.eb-paper.boxed')} {
   // give it -1 and it disappears behind the page's own white. A browser paints
   // the root background under everything, so there is no layer between the paper
   // and the writing to put anything in. Measured, both ways, before it was cut.
-  const WRAP_MODES = ['none', 'optimal', 'left', 'right', 'through'];
+  const WRAP_MODES = ['none', 'left', 'right', 'through'];
   const WRAP_GAP = 3;
   // LibreOffice's own rule for the optimal wrap, read off its source: a side is
   // only wrapped on if at least TEXT_MIN of column is left there, and TEXT_MIN is
@@ -3317,9 +3391,15 @@ ${insideObjects('.eb-paper.boxed')} {
   // out three to a line, so it wraps on neither side and goes above and below
   // instead. (sw/source/core/text/txtfly.cxx, GetSurroundForTextWrap.)
   const WRAP_MIN_COLUMN = 20;
+  /**
+   * Every object stands clear of the writing unless it is told otherwise: the
+   * words stop above it and start again below. That is what a picture dropped on
+   * a page does in any word processor, and it is the one arrangement that never
+   * hides anything.
+   */
   function wrapMode(el) {
     const m = el && el.getAttribute ? (el.getAttribute('data-wrap') || '') : '';
-    return WRAP_MODES.indexOf(m) >= 0 ? m : 'through';
+    return WRAP_MODES.indexOf(m) >= 0 ? m : 'none';
   }
   function wrapGap(el) {
     const g = parseFloat(el && el.getAttribute ? el.getAttribute('data-wrap-gap') : '');
@@ -3415,8 +3495,10 @@ ${insideObjects('.eb-paper.boxed')} {
     const mm = (px) => Math.round(px / z * MM * 10) / 10;
     for (let pass = 0; pass < 3; pass += 1) {
       clearWrapSpacers(root);
-      const objects = Array.from(root.querySelectorAll('[data-wrap]'))
-        .filter((o) => objectFree(o) && ['none', 'optimal', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
+      // Every object standing over the page, not only the ones that have been
+      // told what to do: standing clear of the writing is the default.
+      const objects = Array.from(root.querySelectorAll('.eb-anchor > *'))
+        .filter((o) => o.nodeType === 1 && ['none', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
       if (!objects.length) { return; }
       const before = objects.map((o) => o.getBoundingClientRect().top);
       const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
@@ -3445,16 +3527,14 @@ ${insideObjects('.eb-paper.boxed')} {
             const room = cb.right - cb.left;
             let side = mode;
             let how = mode;
-            if (mode === 'optimal') {
-              const leftRoom = (or.left - gapPx - cb.left) * MM / z;
-              const rightRoom = (cb.right - (or.right + gapPx)) * MM / z;
-              const best = Math.max(leftRoom, rightRoom);
-              if (best < WRAP_MIN_COLUMN) {
-                // Neither side is worth writing in: the words go above and below.
-                how = 'none';
-              } else {
-                side = leftRoom >= rightRoom ? 'left' : 'right';
-              }
+            // A column too narrow to write in is no wrap at all: LibreOffice's own
+            // rule is twenty millimetres (TEXT_MIN, 1134 twips), and below that it
+            // puts the words above and below instead. See WRAP_MIN_COLUMN.
+            if (mode === 'left' || mode === 'right') {
+              const room = mode === 'left'
+                ? (or.left - gapPx - cb.left) * MM / z
+                : (cb.right - (or.right + gapPx)) * MM / z;
+              if (room < WRAP_MIN_COLUMN) { how = 'none'; }
             }
             const floatSide = how === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
             const key = b;
@@ -5212,11 +5292,10 @@ ${insideObjects('.eb-paper.boxed')} {
       <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
       <span class="nm">{{ frameLabel }}</span>
       <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('No wrap')"><span v-html="icons.wrapNone"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Wrap on the right')"><span v-html="icons.wrapLeft"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Wrap on the left')"><span v-html="icons.wrapRight"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'optimal' }" @click="frameCmd('wrapMode', 'optimal')" :title="t('Optimal page wrap')"><span v-html="icons.wrapBoth"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Wrap through')"><span v-html="icons.wrapThrough"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('Above and below')"><span v-html="icons.wrapNone"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Words to its left')"><span v-html="icons.wrapRight"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Words to its right')"><span v-html="icons.wrapLeft"></span></button>
+      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Words underneath it')"><span v-html="icons.wrapThrough"></span></button>
       <span class="sep"></span>
       <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
       <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
@@ -6085,6 +6164,7 @@ ${insideObjects('.eb-paper.boxed')} {
     <div class="eb-modal" @click.stop>
       <h3>{{ t('{name} properties', { name: frameLabel }) }}</h3>
       <div class="body">
+        <h4 class="eb-sect">{{ t('Where it stands') }}</h4>
         <div class="eb-row">
           <div class="eb-field">
             <label>{{ t('Placement') }}</label>
@@ -6096,15 +6176,14 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="free">{{ t('Placed freely') }}</option>
             </select>
           </div>
-          <div class="eb-field">
-            <label>{{ t('Wrap') }}</label>
-            <select v-model="fprops.wrapMode">
-              <option value="through">{{ t('Wrap through') }}</option>
-              <option value="none">{{ t('No wrap') }}</option>
-              <option value="optimal">{{ t('Optimal page wrap') }}</option>
-              <option value="left">{{ t('Wrap on the left') }}</option>
-              <option value="right">{{ t('Wrap on the right') }}</option>
-            </select>
+          <div class="eb-field wide">
+            <label>{{ t('Where the words go') }}</label>
+            <div class="eb-pick">
+              <button v-for="w in wrapChoices" :key="w.kind" class="eb-pickitem"
+                :class="{ on: fprops.wrapMode === w.kind }" @click="fprops.wrapMode = w.kind" :title="w.label">
+                <span v-html="w.icon"></span><span class="nm">{{ w.label }}</span>
+              </button>
+            </div>
           </div>
           <div class="eb-field">
             <label>{{ t('Gap to the text (mm)') }}</label>
@@ -6122,6 +6201,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <!-- How the writing itself is dressed: a picture behind it, an outline
              round each letter, a shadow under them. Written as CSS on the object,
              so the saved file carries the look with it. -->
+        <h4 class="eb-sect" v-if="frameHoldsWords">{{ t('How the words are dressed') }}</h4>
         <div class="eb-row eb-frow" v-if="frameHoldsWords">
           <div class="eb-field">
             <label>{{ t('Picture behind the words') }}</label>
@@ -6188,17 +6268,20 @@ ${insideObjects('.eb-paper.boxed')} {
         </div>
         <p class="eb-tip" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
         <p class="eb-tip" v-else-if="fprops.wrap">{{ t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.') }}</p>
+        <h4 class="eb-sect">{{ t('How big it is') }}</h4>
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')"></div>
           <div class="eb-field"><label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')"></div>
           <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" :placeholder="t('auto')"></div>
         </div>
+        <h4 class="eb-sect">{{ t('The room round it') }}</h4>
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Space above (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mt"></div>
           <div class="eb-field"><label>{{ t('Space below (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mb"></div>
           <div class="eb-field"><label>{{ t('Space left (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.ml"></div>
           <div class="eb-field"><label>{{ t('Space right (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mr"></div>
         </div>
+        <h4 class="eb-sect">{{ t('Its own look') }}</h4>
         <div class="eb-row eb-frow">
           <div class="eb-field b-style">
             <label>{{ t('Border') }}</label>
@@ -6373,14 +6456,10 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Wrap') }}</span><span class="s">›</span>
         <div class="fly">
-          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('No wrap') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'optimal' }" @click="ctxDo('wrapMode','optimal')">{{ t('Optimal page wrap') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Wrap on the left') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Wrap on the right') }}</button>
-          <div class="sep"></div>
-          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Wrap through') }}</button>
-          <div class="sep"></div>
-          <button class="ci" @click="ctxDo('frameProps')">{{ t('Edit wrap…') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('Above and below') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Words to its left') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Words to its right') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Words underneath it') }}</button>
         </div>
       </div>
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -6410,15 +6489,80 @@ ${insideObjects('.eb-paper.boxed')} {
         </div>
       </div>
       <div class="sep"></div>
+      <button class="ci strong" @click="ctxDo('frameProps')">{{ t('Object properties…') }}</button>
       <button class="ci" v-if="ctx.frame" @click="ctxDo('framePlain')">{{ t('Clear the formatting inside') }}</button>
-      <button class="ci" @click="ctxDo('frameProps')">{{ t('Position and size…') }}</button>
       <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+    </template>
+
+    <template v-if="ctx.selection">
+      <div class="sep"></div>
+      <button class="ci strong" @click="ctxDo('runProps')">{{ t('Properties of the chosen words…') }}</button>
     </template>
 
     <div class="sep"></div>
     <button class="ci" v-if="!flow" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
     <button class="ci" v-if="!flow" @click="ctxDo('boxes')">{{ boxes ? t('Hide the box round every object') : t('Show the box round every object') }}</button>
     <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
+  </div>
+
+  <!-- The properties of a chosen run of words. Everything here is written on the
+       words themselves, so one letter can be dressed differently from the next. -->
+  <div v-if="wordsOpen" class="eb-modal-back" @click="wordsOpen = false">
+    <div class="eb-modal" style="width:min(720px,100%)" @click.stop>
+      <h3>{{ t('Properties of the chosen words…') }}</h3>
+      <div class="body">
+        <p class="eb-tip">{{ t('“{words}” — what is set here is written on these words alone.', { words: wordsSample }) }}</p>
+        <div class="eb-row eb-frow">
+          <div class="eb-field"><label>{{ t('Typeface') }}</label>
+            <select v-model="wordsFmt.family">
+              <option value="">{{ t('Unchanged') }}</option>
+              <option v-for="f in fontChoices" :key="f" :value="f">{{ f }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Size (pt)') }}</label><input type="number" min="4" max="300" step="0.5" v-model="wordsFmt.size"></div>
+          <div class="eb-field"><label>{{ t('Colour') }}</label><input type="color" v-model="wordsFmt.colour"></div>
+          <div class="eb-field"><label>{{ t('Highlight') }}</label>
+            <div class="colour-pair">
+              <input type="color" v-model="wordsFmt.fill">
+              <button class="eb-btn" @click="wordsFmt.fill = ''">{{ t('None') }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="eb-row eb-frow">
+          <div class="eb-field"><label>{{ t('Weight and slope') }}</label>
+            <label class="opt"><input type="checkbox" v-model="wordsFmt.bold"> {{ t('Bold') }}</label>
+            <label class="opt"><input type="checkbox" v-model="wordsFmt.italic"> {{ t('Italic') }}</label>
+          </div>
+          <div class="eb-field"><label>{{ t('Lines') }}</label>
+            <label class="opt"><input type="checkbox" v-model="wordsFmt.underline"> {{ t('Underline') }}</label>
+            <label class="opt"><input type="checkbox" v-model="wordsFmt.strike"> {{ t('Strikethrough') }}</label>
+          </div>
+          <div class="eb-field"><label>{{ t('Raised or lowered') }}</label>
+            <select v-model="wordsFmt.raise">
+              <option value="">{{ t('On the line') }}</option>
+              <option value="super">{{ t('Raised') }}</option>
+              <option value="sub">{{ t('Lowered') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Letter spacing (pt)') }}</label><input type="number" min="-5" max="30" step="0.1" v-model="wordsFmt.spacing"></div>
+        </div>
+        <div class="eb-row eb-frow">
+          <div class="eb-field"><label>{{ t('Outline (mm)') }}</label><input type="number" min="0" max="3" step="0.05" v-model="wordsFmt.strokeWidth"></div>
+          <div class="eb-field"><label>{{ t('Outline colour') }}</label><input type="color" v-model="wordsFmt.strokeColour"></div>
+          <div class="eb-field"><label>{{ t('Shadow under the letters') }}</label>
+            <label class="opt"><input type="checkbox" v-model="wordsFmt.shadow"> {{ t('On') }}</label>
+          </div>
+          <div class="eb-field"><label>{{ t('Across (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="wordsFmt.shadowX" :disabled="!wordsFmt.shadow"></div>
+          <div class="eb-field"><label>{{ t('Down (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="wordsFmt.shadowY" :disabled="!wordsFmt.shadow"></div>
+          <div class="eb-field"><label>{{ t('Softness (pt)') }}</label><input type="number" min="0" max="30" step="0.5" v-model="wordsFmt.shadowBlur" :disabled="!wordsFmt.shadow"></div>
+          <div class="eb-field"><label>{{ t('Shadow colour') }}</label><input type="color" v-model="wordsFmt.shadowColour" :disabled="!wordsFmt.shadow"></div>
+        </div>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="wordsOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyRunProps">{{ t('Apply') }}</button>
+      </div>
+    </div>
   </div>
 
   <!-- paragraph properties, written as inline styles so the file carries them -->
@@ -6620,6 +6764,11 @@ ${insideObjects('.eb-paper.boxed')} {
         runOpen: false,
         brush: null,
         toast: '',
+        wordsOpen: false, wordsSample: '',
+        wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
+          underline: false, strike: false, spacing: '', raise: '',
+          strokeWidth: '', strokeColour: '#000000',
+          shadow: false, shadowX: 1, shadowY: 1, shadowBlur: 1.5, shadowColour: '#808080' },
         menuOpen: false, paperOpen: false, tableOpen: false, mathOpen: false,
         settingsOpen: false, hlOpen: false, boxOpen: false, ruleOpen: false,
         // The file as text, and the panel that reads another app on this server:
@@ -6762,6 +6911,28 @@ ${insideObjects('.eb-paper.boxed')} {
         });
       },
       fontPageItems() { return this.fontResults.slice(0, this.fontPage * 24); },
+      /** Typefaces for the run dialogue: the ones the document already uses first. */
+      /** The four ways the words can meet an object, with the picture of each. */
+      wrapChoices() {
+        return [
+          { kind: 'none', label: this.t('Above and below'), icon: this.icons.wrapNone },
+          { kind: 'left', label: this.t('Words to its left'), icon: this.icons.wrapRight },
+          { kind: 'right', label: this.t('Words to its right'), icon: this.icons.wrapLeft },
+          { kind: 'through', label: this.t('Words underneath it'), icon: this.icons.wrapThrough },
+        ];
+      },
+      fontChoices() {
+        const used = [];
+        const c = canvas();
+        if (c) {
+          c.querySelectorAll('[style*="font-family"]').forEach((el) => {
+            const f = (el.style.fontFamily || '').replace(/["']/g, '').split(',')[0].trim();
+            if (f && used.indexOf(f) < 0) { used.push(f); }
+          });
+        }
+        const rest = this.fontList.map((f) => f.f).filter((f) => used.indexOf(f) < 0);
+        return used.concat(rest).slice(0, 200);
+      },
       previewFamily() { return (this.fontRole === 'selection' ? this.fmt.family : this.doc.paper.fonts[this.fontRole]) || this.defaultFontName; },
       sampleText() {
         const samples = {
@@ -8679,7 +8850,7 @@ ${insideObjects('.eb-paper.boxed')} {
           // 折り返し, LibreOffice's word for it. It says what the words do when
           // they meet this object, and nothing else: where the object stands is
           // the placement's business, not the wrap's.
-          const mode = WRAP_MODES.indexOf(arg) >= 0 ? arg : 'through';
+          const mode = WRAP_MODES.indexOf(arg) >= 0 ? arg : 'none';
           el.setAttribute('data-wrap', mode);
           if (objectFree(el)) {
             // Standing over the text: a float would not reach it, so the room is
@@ -8691,7 +8862,7 @@ ${insideObjects('.eb-paper.boxed')} {
             el.style.removeProperty('float');
             el.style.removeProperty('margin-left');
             el.style.removeProperty('margin-right');
-            if (mode === 'right' || mode === 'optimal') {
+            if (mode === 'right') {
               el.style.cssFloat = 'left';
               el.style.marginRight = wrapGap(el) + 'mm';
             } else if (mode === 'left') {
@@ -8798,7 +8969,7 @@ ${insideObjects('.eb-paper.boxed')} {
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          wrapMode: 'through', wrapGap: '',
+          wrapMode: 'none', wrapGap: '',
           bgImage: '', bgFit: 'cover',
           strokeWidth: '', strokeColour: '#000000',
           textShadow: false, shadowX: 1, shadowY: 1, shadowBlur: 1.5, shadowColour: '#808080',
@@ -8824,7 +8995,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // Only if the writer actually changed it: the wrap and the placement are
         // set in the same dialogue, and the wrap must not undo what the placement
         // just did.
-        if ((v.wrapMode || 'through') !== wrapMode(frameEl)) { this.frameCmd('wrapMode', v.wrapMode || 'through'); }
+        if ((v.wrapMode || 'none') !== wrapMode(frameEl)) { this.frameCmd('wrapMode', v.wrapMode || 'none'); }
         this.settleFrame(frameEl);
       },
       /** The two overlap buttons in the dialogue act at once, like a menu item. */
@@ -9051,6 +9222,31 @@ ${insideObjects('.eb-paper.boxed')} {
        * and it is the menu that comes up, not the properties dialogue, which is
        * one item within it.
        */
+      /** The chosen words, and what is written on them. */
+      openRunProps() {
+        const range = getRange();
+        if (!range || range.collapsed) { this.notify(this.t('Choose the words first.')); return; }
+        const was = readRun();
+        if (!was) { this.notify(this.t('Choose the words first.')); return; }
+        wordsRange = range.cloneRange();
+        wordsWas = was;
+        this.wordsFmt = Object.assign({}, was);
+        this.wordsSample = range.toString().slice(0, 30);
+        this.wordsOpen = true;
+      },
+      applyRunProps() {
+        const v = Object.assign({}, this.wordsFmt);
+        this.wordsOpen = false;
+        if (!wordsRange) { return; }
+        try { selectRange(wordsRange); } catch (e) { return; }
+        history.push(true);
+        writeRun(v, wordsWas);
+        wordsRange = null;
+        this.touch();
+        this.recount();
+        this.refreshState();
+        this.$nextTick(() => this.reflowWrap());
+      },
       objectCtx(e) {
         const under = frameEl || document.elementFromPoint(e.clientX, e.clientY);
         this.openCtx({
@@ -9196,6 +9392,7 @@ ${insideObjects('.eb-paper.boxed')} {
           frameWrap: () => (frameEl ? this.frameCmd('wrap', arg) : this.textCmd('wrap', arg)),
           wrapMode: () => (frameEl ? this.frameCmd('wrapMode', arg) : this.textCmd('wrapMode', arg)),
           framePlain: () => this.frameCmd('plain'),
+          runProps: () => this.openRunProps(),
           frameAlign: () => (frameEl ? this.frameCmd('align', arg) : this.textCmd('align', arg)),
           frameFit: () => (frameEl ? this.frameCmd('fit') : this.textCmd('fit')),
           stackStep: () => (frameEl ? this.frameCmd('stack', arg) : this.textCmd('stack', arg)),

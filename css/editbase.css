@@ -811,3 +811,24 @@
 .eb-tip.warn { color: var(--text); font-weight: 600; margin-top: 12px; }
 .eb-warn-list { margin: 4px 0 0; padding-left: 1.2em; font-size: 12.5px; color: var(--muted); }
 .eb-warn-list li { margin-bottom: 5px; }
+
+/* A choice made by pointing at the picture of it, rather than by reading a list.
+   Four ways the words can meet an object, shown as the four pictures. */
+.eb-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.eb-pickitem {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 7px 9px; min-width: 78px;
+  background: var(--surface-2); border: 1.5px solid var(--border); border-radius: 10px;
+  color: inherit; cursor: pointer; font: inherit;
+}
+.eb-pickitem:hover { border-color: var(--primary); }
+.eb-pickitem.on { border-color: var(--primary); background: var(--primary-light, rgba(37, 99, 235, .10)); }
+.eb-pickitem .nm { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; }
+.eb-pickitem.on .nm { color: inherit; }
+.eb-field.wide { flex: 1 1 100%; }
+/* The headings that break a long dialogue into the questions it is really asking. */
+.eb-modal .eb-sect {
+  margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em;
+}
+.eb-modal .body > .eb-sect:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
