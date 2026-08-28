@@ -5582,18 +5582,30 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" :class="{ on: placing === 'frame' }" @click="armPlace('frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
           <button v-for="b in boxKinds" :key="b.variant" class="eb-menu-item" :class="{ on: placing === 'box:' + b.variant }"
             @click="armPlace('box:' + b.variant)"><span v-html="icons.box"></span>{{ b.label }}</button>
-          <div class="eb-menu-sep"></div>
-          <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
-          <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
-          <div class="eb-menu-sep"></div>
+        </div>
+      </span>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'layout' }" @mousedown.prevent @click="toggleMenu('layout')" :title="t('Page layout')">
+          <span v-html="icons.paper"></span><span class="lbl">{{ t('Page layout') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'layout'" @mousedown.prevent>
           <button class="eb-menu-item" @click="openCols()"><span v-html="icons.columns"></span>{{ t('Columns…') }}</button>
           <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
+          <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
           <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
           <div class="eb-menu-sep"></div>
+          <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
+        </div>
+      </span>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'marks' }" @mousedown.prevent @click="toggleMenu('marks')" :title="t('Marks and notes')">
+          <span v-html="icons.ruby"></span><span class="lbl">{{ t('Marks and notes') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'marks'" @mousedown.prevent>
           <button class="eb-menu-item" @click="openRuby()"><span v-html="icons.ruby"></span>{{ t('Reading over the word…') }}</button>
-          <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
           <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+          <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
         </div>
       </span>
       <span class="eb-pop">
@@ -7537,7 +7549,14 @@ ${insideObjects('.eb-paper.boxed')} {
           this.savedAt = (d.mtime || 0) * 1000;
           this.refreshState();
           this.recount();
-          this.$nextTick(() => this.reflowWrap());
+          // The two side bars are drawn from measurements, so they are filled in
+          // once the loaded page has been laid out. Without this they stayed empty
+          // after every reload until something was edited.
+          this.$nextTick(() => {
+            this.reflowWrap();
+            this.repaginate();
+            this.$nextTick(() => { this.refreshLayers(); this.refreshPreview(); });
+          });
           if (window.innerWidth < 860) { this.sideOpen = false; }
           if (parsed.foreign) {
             this.notify(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
