@@ -1155,6 +1155,7 @@ ${insideObjects('.eb-paper.boxed')} {
   // Whether the paste about to arrive was asked for with Shift held down.
   let pastePlain = false;
   let wrapTimer = null;
+  let layerEls = [];
   let wordsRange = null;
   let wordsWas = null;
   let framePinned = false;
@@ -4128,11 +4129,34 @@ ${insideObjects('.eb-paper.boxed')} {
       if (foot) { c.insertBefore(p, foot); } else { c.appendChild(p); }
     }
   }
+  /**
+   * Words inside a box that are not in a paragraph. Pasted text often arrives as
+   * bare runs sitting straight inside a frame, and a run that is not a paragraph
+   * is not a block: nothing can be reserved in it, so the words went straight
+   * under whatever was laid over them while the paragraphs beside them moved.
+   * A paragraph is what words live in -- so they are put in one.
+   */
+  function paragraphLooseWords(c) {
+    Array.from(c.querySelectorAll('div.eb-frame, aside.eb-box, div.eb-note')).forEach((host) => {
+      let run = null;
+      Array.from(host.childNodes).forEach((n) => {
+        const loose = (n.nodeType === 3 && n.data.trim())
+          || (n.nodeType === 1 && !isBlock(n) && !n.classList.contains('eb-flow'));
+        if (!loose) { run = null; return; }
+        if (!run || run.nextSibling !== n) {
+          run = document.createElement('p');
+          host.insertBefore(run, n);
+        }
+        run.appendChild(n);
+      });
+    });
+  }
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
     repairNesting();
     keepRegionsInPlace(c);
+    paragraphLooseWords(c);
     tidyMarks();
     renumberNotes();
     Array.from(c.querySelectorAll('table.eb-table')).forEach(headerGroup);
@@ -5204,6 +5228,8 @@ ${insideObjects('.eb-paper.boxed')} {
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    pages: I('<rect x="2.4" y="1.8" width="7.6" height="9.6" rx=".6"/><rect x="5.4" y="4.4" width="7.6" height="9.6" rx=".6"/>'),
+    layers: I('<path d="M8 1.8 14 5 8 8.2 2 5z"/><path d="M2 8l6 3.2L14 8"/><path d="M2 11l6 3.2L14 11"/>'),
     header: I('<rect x="2" y="2.6" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/><path d="M2.6 8.6h10.8M2.6 11h10.8M2.6 13.2h7"/>'),
     footer: I('<path d="M2.6 2.8h10.8M2.6 5h10.8M2.6 7.2h7"/><rect x="2" y="10" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/>'),
     wrapBoth: I('<rect x="5.6" y="4.5" width="4.8" height="7" rx="1"/><path d="M1.6 5.4h3M1.6 8h3M1.6 10.6h3M11.4 5.4h3M11.4 8h3M11.4 10.6h3"/>'),
@@ -5573,6 +5599,8 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
       <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
+      <button class="eb-tb" :class="{ on: previewOpen }" @mousedown.prevent @click="previewOpen = !previewOpen" :title="t('Pages')"><span v-html="icons.pages"></span></button>
+      <button class="eb-tb" :class="{ on: layersOpen }" @mousedown.prevent @click="layersOpen = !layersOpen" :title="t('Layers')"><span v-html="icons.layers"></span></button>
       <button class="eb-tb" :class="{ on: doc.paper.headerOn }" @mousedown.prevent @click="toggleRegion('header')" :title="t('Header')"><span v-html="icons.header"></span></button>
       <button class="eb-tb" :class="{ on: doc.paper.footerOn }" @mousedown.prevent @click="toggleRegion('footer')" :title="t('Footer')"><span v-html="icons.footer"></span></button>
       <button class="eb-tb" :class="{ on: boxes }" v-if="!flow" @mousedown.prevent @click="boxes = !boxes" :title="boxes ? t('Hide the box round every object') : t('Show the box round every object')"><span v-html="icons.boxes"></span></button>
@@ -5657,6 +5685,68 @@ ${insideObjects('.eb-paper.boxed')} {
         <button class="eb-btn primary" @click="newDoc">{{ t('New document') }}</button>
       </div>
     </div>
+
+    <!-- The handles for the two panels, at the height of the eye: pointing left
+         to pull a panel out, pointing right to push it away again. -->
+    <div class="eb-tabs" v-if="doc.id">
+      <div class="tab">
+        <span class="lb">{{ t('Preview bar') }}</span>
+        <button class="hnd" @click="previewOpen = !previewOpen"
+          :title="(previewOpen ? t('Hide') : t('Show')) + ' — ' + t('Preview bar')">{{ previewOpen ? '▶' : '◀' }}</button>
+      </div>
+      <div class="tab">
+        <span class="lb">{{ t('Layer bar') }}</span>
+        <button class="hnd" @click="layersOpen = !layersOpen"
+          :title="(layersOpen ? t('Hide') : t('Show')) + ' — ' + t('Layer bar')">{{ layersOpen ? '▶' : '◀' }}</button>
+      </div>
+    </div>
+
+    <!-- The pages, down the right, beside the pile. Not a picture of the page --
+         a plan of it: where the writing sits and where each object stands, drawn
+         from their own measurements. It costs nothing to redraw and tells the
+         writer at a glance what is on which page and what overlaps what. -->
+    <aside class="eb-preview" v-if="doc.id && previewOpen">
+      <div class="head">
+        <span>{{ t('Pages') }}</span>
+        <button class="eb-tb" @click="previewOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
+      </div>
+      <div class="pages">
+        <button v-for="pg in preview" :key="pg.n" class="pg" :class="{ on: pg.n === pageNow }"
+          @click="goToPage(pg.n)" :title="t('Page {n}', { n: pg.n })">
+          <span class="sheet" :style="{ paddingTop: pg.ratio + '%' }">
+            <span v-for="(b, i) in pg.blocks" :key="'b' + i" class="blk" :class="b.kind"
+              :style="{ left: b.x + '%', top: b.y + '%', width: b.w + '%', height: b.h + '%' }"></span>
+          </span>
+          <span class="no">{{ pg.n }}</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- The pile, down the right. What is on top of what decides which words move
+         out of whose way, so it has to be something a writer can see and change. -->
+    <aside class="eb-layers" v-if="doc.id && layersOpen">
+      <div class="head">
+        <span>{{ t('Layers') }}</span>
+        <button class="eb-tb" @click="layersOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
+      </div>
+      <p class="none" v-if="!layers.length">{{ t('Nothing is standing on the page yet.') }}</p>
+      <div class="group" v-for="(g, gi) in layers" :key="g.level">
+        <div class="glabel">{{ t('Layer {n}', { n: g.level }) }}</div>
+        <ol class="list">
+          <li v-for="it in g.items" :key="it.id" :class="{ on: it.chosen }">
+            <button class="pick" @click="chooseLayer(it.id)" :title="it.text">
+              <span class="ic" v-html="it.icon"></span>
+              <span class="nm">{{ it.name }}</span>
+              <span class="tx">{{ it.text }}</span>
+            </button>
+            <span class="acts">
+              <button class="eb-tb" :disabled="gi === 0" @click="raiseLayer(it.id, 1)" :title="t('Bring forward')">↑</button>
+              <button class="eb-tb" :disabled="gi === layers.length - 1" @click="raiseLayer(it.id, -1)" :title="t('Send backward')">↓</button>
+            </span>
+          </li>
+        </ol>
+      </div>
+    </aside>
     </div>
 
     <div class="eb-status" v-if="doc.id">
@@ -6966,6 +7056,8 @@ ${insideObjects('.eb-paper.boxed')} {
         brush: null,
         toast: '',
         build: '', newBuild: false,
+        layersOpen: false, layers: [],
+        previewOpen: false, preview: [], pageNow: 1,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -8977,6 +9069,8 @@ ${insideObjects('.eb-paper.boxed')} {
           if (fit) { this.fitFrameWidth(fit); }
           this.reflowWrap();
           this.syncFrame();
+          this.refreshLayers();
+          this.refreshPreview();
         });
       },
       /**
@@ -9473,6 +9567,115 @@ ${insideObjects('.eb-paper.boxed')} {
       async reloadForNewBuild() {
         if (this.dirty && this.doc.id) { try { await this.save(); } catch (e) { /* reload anyway */ } }
         window.location.reload();
+      },
+      /**
+       * The pile, read off the page. Everything standing on the paper is in it,
+       * grouped by the level it stands at -- things at the same level are one
+       * group -- and the top of the list is the top of the pile.
+       */
+      refreshLayers() {
+        const c = canvas();
+        if (!c || !this.layersOpen) { this.layers = []; return; }
+        const placed = Array.from(c.querySelectorAll('.eb-anchor > *'))
+          .filter((el) => el.nodeType === 1);
+        const groups = new Map();
+        placed.forEach((el, i) => {
+          const level = Number(el.style.zIndex) || 0;
+          if (!groups.has(level)) { groups.set(level, []); }
+          const kind = objectKind(el);
+          groups.get(level).push({
+            id: i,
+            name: this.nameOfKind(kind),
+            icon: this.iconOfKind(kind),
+            text: (el.textContent || '').trim().slice(0, 24),
+            chosen: el === frameEl,
+          });
+        });
+        this.layers = Array.from(groups.keys()).sort((a, b) => b - a)
+          .map((level) => ({ level: level, items: groups.get(level) }));
+        layerEls = placed;
+      },
+      nameOfKind(kind) {
+        const names = {
+          FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
+          NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
+          NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
+          TEXTBOX: this.t('Text frame'), SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
+          PARA: this.t('Text frame'), HEADING: this.t('Heading'), LIST: this.t('List'),
+        };
+        return names[kind] || this.t('Block frame');
+      },
+      iconOfKind(kind) {
+        return { FIGURE: this.icons.image, TABLE: this.icons.table, SHAPE: this.icons.box,
+          EMBED: this.icons.link, HR: this.icons.rule }[kind] || this.icons.frame;
+      },
+      chooseLayer(id) {
+        const el = layerEls[id];
+        if (!el || !el.parentNode) { return; }
+        frameEl = el;
+        frameMore = [];
+        framePinned = true;
+        frameTaken = true;
+        this.frame.bar = true;
+        el.scrollIntoView({ block: 'center' });
+        this.$nextTick(() => { this.syncFrame(); this.refreshLayers(); });
+      },
+      raiseLayer(id, dir) {
+        const el = layerEls[id];
+        if (!el || !el.parentNode) { return; }
+        history.push(true);
+        restack(el, dir);
+        this.touch();
+        this.$nextTick(() => { this.reflowWrap(); this.syncFrame(); this.refreshLayers(); });
+      },
+      /**
+       * A plan of each page: the writing as grey bars, the objects as outlines,
+       * placed from their own measurements. Redrawn whenever the page settles.
+       */
+      refreshPreview() {
+        const c = canvas();
+        if (!c || !this.previewOpen) { this.preview = []; return; }
+        const sheet = this.$el.querySelector('.eb-sheet');
+        if (!sheet) { this.preview = []; return; }
+        const z = this.frameZoom() || 1;
+        const pageH = sheet.getBoundingClientRect().height / z;
+        const paper = sheet.getBoundingClientRect();
+        const left = paper.left;
+        const width = paper.width / z;
+        if (!pageH || !width) { this.preview = []; return; }
+        const top0 = paper.top;
+        const pages = [];
+        for (let n = 1; n <= Math.max(1, this.pageCount); n += 1) {
+          pages.push({ n: n, ratio: Math.round((pageH / width) * 1000) / 10, blocks: [] });
+        }
+        const put = (el, kind) => {
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) { return; }
+          const y = (r.top - top0) / z;
+          const n = Math.floor(y / pageH) + 1;
+          const pg = pages[n - 1];
+          if (!pg) { return; }
+          pg.blocks.push({
+            kind: kind,
+            x: Math.max(0, Math.round(((r.left - left) / z / width) * 1000) / 10),
+            y: Math.max(0, Math.round((((y % pageH)) / pageH) * 1000) / 10),
+            w: Math.min(100, Math.round(((r.width / z) / width) * 1000) / 10),
+            h: Math.min(100, Math.round(((r.height / z) / pageH) * 1000) / 10),
+          });
+        };
+        Array.from(c.children).forEach((el) => {
+          if (el.classList && el.classList.contains('eb-pagespacer')) { return; }
+          if (el.classList && el.classList.contains('eb-anchor')) {
+            Array.from(el.children).forEach((o) => put(o, 'obj'));
+            return;
+          }
+          put(el, 'text');
+        });
+        this.preview = pages;
+      },
+      goToPage(n) {
+        const sheet = this.$el.querySelectorAll('.eb-sheet')[n - 1];
+        if (sheet) { sheet.scrollIntoView({ block: 'start', behavior: 'smooth' }); this.pageNow = n; }
       },
       /** The chosen words, and what is written on them. */
       openRunProps() {
@@ -10355,6 +10558,14 @@ ${insideObjects('.eb-paper.boxed')} {
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
+      layersOpen(v) {
+        window.localStorage.setItem('eb-layers', v ? '1' : '0');
+        this.$nextTick(() => this.refreshLayers());
+      },
+      previewOpen(v) {
+        window.localStorage.setItem('eb-preview', v ? '1' : '0');
+        this.$nextTick(() => this.refreshPreview());
+      },
       pasteObject(v) { window.localStorage.setItem('eb-paste-object', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
       review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
@@ -10390,6 +10601,10 @@ ${insideObjects('.eb-paper.boxed')} {
       if (bx != null) { this.boxes = bx === '1'; }
       const po = window.localStorage.getItem('eb-paste-object');
       if (po != null) { this.pasteObject = po === '1'; }
+      const ly = window.localStorage.getItem('eb-layers');
+      if (ly != null) { this.layersOpen = ly === '1'; }
+      const pv = window.localStorage.getItem('eb-preview');
+      if (pv != null) { this.previewOpen = pv === '1'; }
       const rl = window.localStorage.getItem('eb-ruler');
       if (rl != null) { this.ruler = rl === '1'; }
       const rv = window.localStorage.getItem('eb-review');
