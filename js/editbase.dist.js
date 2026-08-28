@@ -4937,6 +4937,26 @@ ${insideObjects('.eb-paper.boxed')} {
     });
   }
 
+  /** Is any pixel less than solid? A picture with holes in it may not be JPEG. */
+  function hasTransparency(ctx, w, h) {
+    try {
+      const data = ctx.getImageData(0, 0, w, h).data;
+      for (let i = 3; i < data.length; i += 4) { if (data[i] !== 255) { return true; } }
+      return false;
+    } catch (e) { return true; }   // tainted or refused: assume it has, and keep PNG
+  }
+  /**
+   * A picture goes into the document itself, so its weight is the document's
+   * weight. Two things are done to it: it is brought down to a size a printed
+   * page can use, and -- if it is a photograph -- it is kept as a photograph.
+   *
+   * A photograph saved as PNG is enormous: one 1024-pixel picture came to 912kB
+   * and made a two-page document weigh 1.2MB, every save and every open. As JPEG
+   * the same picture is a tenth of that and looks the same on paper. Line art and
+   * screenshots are left as PNG, because JPEG smears text -- which is why the
+   * JPEG is only taken when it is dramatically smaller, as it is for photographs
+   * and is not for a screenshot of a spreadsheet.
+   */
   async function shrinkImage(dataUrl, mime, maxEdge) {
     const limit = maxEdge || 2200;
     if (mime === 'image/svg+xml' || mime === 'image/gif') { return dataUrl; }
@@ -4944,17 +4964,26 @@ ${insideObjects('.eb-paper.boxed')} {
     if (typeof probe.getContext !== 'function') { return dataUrl; }
     let img;
     try { img = await loadImage(dataUrl); } catch (e) { return dataUrl; }
-    const edge = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
-    if (edge <= limit) { return dataUrl; }
-    const scale = limit / edge;
+    const w0 = img.naturalWidth || img.width;
+    const h0 = img.naturalHeight || img.height;
+    const edge = Math.max(w0, h0);
+    const scale = edge > limit ? limit / edge : 1;
     const canvasEl = document.createElement('canvas');
-    canvasEl.width = Math.round((img.naturalWidth || img.width) * scale);
-    canvasEl.height = Math.round((img.naturalHeight || img.height) * scale);
+    canvasEl.width = Math.round(w0 * scale);
+    canvasEl.height = Math.round(h0 * scale);
+    if (!canvasEl.width || !canvasEl.height) { return dataUrl; }
     const ctx = canvasEl.getContext('2d');
     if (!ctx) { return dataUrl; }
     ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
-    const out = mime === 'image/png' ? canvasEl.toDataURL('image/png') : canvasEl.toDataURL('image/jpeg', 0.85);
-    return out.length < dataUrl.length ? out : dataUrl;
+    const png = scale < 1 ? canvasEl.toDataURL('image/png') : dataUrl;
+    let best = png.length < dataUrl.length ? png : dataUrl;
+    if (!hasTransparency(ctx, canvasEl.width, canvasEl.height)) {
+      const jpeg = canvasEl.toDataURL('image/jpeg', 0.85);
+      // Only when it is a great deal smaller: that is what tells a photograph
+      // from a screenshot, and a screenshot must stay sharp.
+      if (jpeg.length && jpeg.length < best.length * 0.6) { best = jpeg; }
+    }
+    return best;
   }
   function readFileAsDataUrl(file) {
     return new Promise((resolve, reject) => {
