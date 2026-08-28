@@ -5209,7 +5209,7 @@ ${insideObjects('.eb-paper.boxed')} {
            here rather than in one of its own: a new row appearing pushed the
            paper down 43 pixels every time an object was picked up, and the
            thing just clicked jumped out from under the pointer. -->
-      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="openFrameProps">
+      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
       <span class="nm">{{ frameLabel }}</span>
       <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
       <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('No wrap')"><span v-html="icons.wrapNone"></span></button>
@@ -5373,7 +5373,7 @@ ${insideObjects('.eb-paper.boxed')} {
                big it is, in the units the paper is measured in. -->
           <div class="mm" v-if="frame.dragging">{{ frame.mm }}</div>
           <div v-for="e in frameEdges" :key="'e' + e" class="ed" :class="e"
-            @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="openFrameProps"></div>
+            @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="objectCtx($event)"></div>
           <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
             @pointerdown.prevent.stop="frameGrab($event, h)"></span>
           <span v-for="g in frame.grips" :key="'cg' + g.index" class="cg" :style="{ left: g.x + 'px' }"
@@ -9044,6 +9044,20 @@ ${insideObjects('.eb-paper.boxed')} {
        * not a word processor. Suppressing it is done once, on the app's root, so
        * there is no corner of the app where it can still get through.
        */
+      /**
+       * The right button on the object's own bar or on one of the bands it is
+       * dragged by. Those are the editor's own furniture, laid over the page, so
+       * the menu has to be asked for on behalf of the object underneath them --
+       * and it is the menu that comes up, not the properties dialogue, which is
+       * one item within it.
+       */
+      objectCtx(e) {
+        const under = frameEl || document.elementFromPoint(e.clientX, e.clientY);
+        this.openCtx({
+          clientX: e.clientX, clientY: e.clientY, shiftKey: false, target: under,
+          preventDefault() { /* already refused by the binding */ },
+        });
+      },
       openCtx(e) {
         if (!this.doc.id) { return; }
         const c = canvas();
@@ -9477,7 +9491,9 @@ ${insideObjects('.eb-paper.boxed')} {
       onDragOver(e) {
         if (!this.doc.id) { return; }
         e.preventDefault();
-        if (e.dataTransfer) { e.dataTransfer.dropEffect = dragRange ? 'move' : 'copy'; }
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = (dragObject || dragRange) ? 'move' : 'copy';
+        }
         // Show where it would land, the way a text cursor does.
         const point = caretFromPoint(e.clientX, e.clientY);
         if (point && !pointInsideRange(dragRange, point)) { selectRange(point); }
@@ -9981,6 +9997,31 @@ ${insideObjects('.eb-paper.boxed')} {
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
+      // Everywhere else in the app. Something dragged out of the document and
+      // dropped on the toolbar, the shelf, the margin or the grey around the
+      // paper must come to nothing -- not to a copy left wherever it landed.
+      appRoot.addEventListener('dragover', (e) => {
+        if (!dragObject && !dragRange) { return; }
+        if (inCanvas(e.target)) { return; }
+        e.preventDefault();
+        if (e.dataTransfer) { e.dataTransfer.dropEffect = 'move'; }
+      });
+      appRoot.addEventListener('drop', (e) => {
+        if (inCanvas(e.target)) { return; }
+        // On the paper but off the writing: put it where the pointer is, which is
+        // what the writer meant. Anywhere else in the app: nothing at all.
+        if (dragObject || dragRange) { e.preventDefault(); }
+        if (!dragObject) { dragRange = null; dragObject = null; return; }
+        const onPaper = e.target && e.target.closest && e.target.closest('.eb-paperwrap');
+        if (onPaper) {
+          dropX = e.clientX;
+          dropY = e.clientY;
+          this.run(() => { dropAt(caretFromPoint(e.clientX, e.clientY), null); });
+          this.settleFrame();
+        }
+        dragRange = null;
+        dragObject = null;
+      });
       window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
       // A swipe in from the left edge opens the drawer, as a phone expects.
       let swipeFrom = null;

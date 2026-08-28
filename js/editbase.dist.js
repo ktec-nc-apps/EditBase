@@ -6845,7 +6845,7 @@ return function render(_ctx, _cache) {
               ? (_openBlock(), _createElementBlock("span", {
                   key: 5,
                   class: "eb-objgrp",
-                  onContextmenu: _cache[125] || (_cache[125] = _withModifiers((...args) => (_ctx.openFrameProps && _ctx.openFrameProps(...args)), ["prevent","stop"]))
+                  onContextmenu: _cache[125] || (_cache[125] = _withModifiers($event => (_ctx.objectCtx($event)), ["prevent","stop"]))
                 }, [
                   _createElementVNode("span", _hoisted_158, _toDisplayString(_ctx.frameLabel), 1 /* TEXT */),
                   _createElementVNode("button", {
@@ -7528,7 +7528,7 @@ return function render(_ctx, _cache) {
                     key: 'e' + e,
                     class: _normalizeClass(["ed", e]),
                     onPointerdown: _cache[201] || (_cache[201] = _withModifiers($event => (_ctx.frameGrab($event, 'move')), ["prevent"])),
-                    onContextmenu: _cache[202] || (_cache[202] = _withModifiers((...args) => (_ctx.openFrameProps && _ctx.openFrameProps(...args)), ["prevent","stop"]))
+                    onContextmenu: _cache[202] || (_cache[202] = _withModifiers($event => (_ctx.objectCtx($event)), ["prevent","stop"]))
                   }, null, 34 /* CLASS, NEED_HYDRATION */))
                 }), 128 /* KEYED_FRAGMENT */)),
                 (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.frameHandles, (h) => {
@@ -13370,6 +13370,20 @@ return function render(_ctx, _cache) {
        * not a word processor. Suppressing it is done once, on the app's root, so
        * there is no corner of the app where it can still get through.
        */
+      /**
+       * The right button on the object's own bar or on one of the bands it is
+       * dragged by. Those are the editor's own furniture, laid over the page, so
+       * the menu has to be asked for on behalf of the object underneath them --
+       * and it is the menu that comes up, not the properties dialogue, which is
+       * one item within it.
+       */
+      objectCtx(e) {
+        const under = frameEl || document.elementFromPoint(e.clientX, e.clientY);
+        this.openCtx({
+          clientX: e.clientX, clientY: e.clientY, shiftKey: false, target: under,
+          preventDefault() { /* already refused by the binding */ },
+        });
+      },
       openCtx(e) {
         if (!this.doc.id) { return; }
         const c = canvas();
@@ -13803,7 +13817,9 @@ return function render(_ctx, _cache) {
       onDragOver(e) {
         if (!this.doc.id) { return; }
         e.preventDefault();
-        if (e.dataTransfer) { e.dataTransfer.dropEffect = dragRange ? 'move' : 'copy'; }
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = (dragObject || dragRange) ? 'move' : 'copy';
+        }
         // Show where it would land, the way a text cursor does.
         const point = caretFromPoint(e.clientX, e.clientY);
         if (point && !pointInsideRange(dragRange, point)) { selectRange(point); }
@@ -14307,6 +14323,31 @@ return function render(_ctx, _cache) {
       c.addEventListener('dragover', (e) => this.onDragOver(e));
       c.addEventListener('drop', (e) => this.onDrop(e));
       c.addEventListener('dragend', () => this.onDragEnd());
+      // Everywhere else in the app. Something dragged out of the document and
+      // dropped on the toolbar, the shelf, the margin or the grey around the
+      // paper must come to nothing -- not to a copy left wherever it landed.
+      appRoot.addEventListener('dragover', (e) => {
+        if (!dragObject && !dragRange) { return; }
+        if (inCanvas(e.target)) { return; }
+        e.preventDefault();
+        if (e.dataTransfer) { e.dataTransfer.dropEffect = 'move'; }
+      });
+      appRoot.addEventListener('drop', (e) => {
+        if (inCanvas(e.target)) { return; }
+        // On the paper but off the writing: put it where the pointer is, which is
+        // what the writer meant. Anywhere else in the app: nothing at all.
+        if (dragObject || dragRange) { e.preventDefault(); }
+        if (!dragObject) { dragRange = null; dragObject = null; return; }
+        const onPaper = e.target && e.target.closest && e.target.closest('.eb-paperwrap');
+        if (onPaper) {
+          dropX = e.clientX;
+          dropY = e.clientY;
+          this.run(() => { dropAt(caretFromPoint(e.clientX, e.clientY), null); });
+          this.settleFrame();
+        }
+        dragRange = null;
+        dragObject = null;
+      });
       window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
       // A swipe in from the left edge opens the drawer, as a phone expects.
       let swipeFrom = null;
