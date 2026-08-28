@@ -580,7 +580,10 @@
    draws a rectangle round every line is not what anyone wants to print.
    Not written p.eb-textbox: a text frame set to a heading is an h1 or an h2 and
    is still the same frame, in the same place and at the same size. */
-.eb-doc .eb-textbox { margin: 0; }
+/* An empty 文字枠 collapses to nothing and cannot be got at with the mouse: one
+   in the owner's document was 643 by 0 pixels. It keeps a line's worth of height
+   so it can always be seen and picked up. */
+.eb-doc .eb-textbox { margin: 0; min-height: 1em; }
 /* An object placed by hand is parked in a zero-height anchor left at the point in
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
@@ -1158,6 +1161,9 @@ ${insideObjects('.eb-paper.boxed')} {
   let pastePlain = false;
   let wrapTimer = null;
   let layerEls = [];
+  // The object the layer bar is currently showing as chosen, so the bar is only
+  // redrawn when what is in hand actually changes.
+  let layerMarked = null;
   let wordsRange = null;
   let wordsWas = null;
   let framePinned = false;
@@ -5903,7 +5909,7 @@ const _hoisted_353 = {
 }
 const _hoisted_354 = { class: "glabel" }
 const _hoisted_355 = { class: "list" }
-const _hoisted_356 = ["onDragstart", "onDragover", "onDrop"]
+const _hoisted_356 = ["draggable", "onDragstart", "onDragover", "onDrop"]
 const _hoisted_357 = ["onClick", "title"]
 const _hoisted_358 = ["innerHTML"]
 const _hoisted_359 = { class: "nm" }
@@ -8435,7 +8441,7 @@ return function render(_ctx, _cache) {
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(g.items, (it) => {
                       return (_openBlock(), _createElementBlock("li", {
                         key: it.id,
-                        draggable: "true",
+                        draggable: it.movable,
                         class: _normalizeClass({ on: it.chosen, over: _ctx.dropLayer === it.id, dragging: _ctx.dragLayer === it.id }),
                         onDragstart: $event => (_ctx.layerDragStart(it.id, $event)),
                         onDragend: _cache[239] || (_cache[239] = (...args) => (_ctx.layerDragEnd && _ctx.layerDragEnd(...args))),
@@ -8458,13 +8464,13 @@ return function render(_ctx, _cache) {
                         _createElementVNode("span", _hoisted_361, [
                           _createElementVNode("button", {
                             class: "eb-tb",
-                            disabled: gi === 0,
+                            disabled: gi === 0 || !it.movable,
                             onClick: $event => (_ctx.raiseLayer(it.id, 1)),
                             title: _ctx.t('Bring forward')
                           }, "↑", 8 /* PROPS */, _hoisted_362),
                           _createElementVNode("button", {
                             class: "eb-tb",
-                            disabled: gi === _ctx.layers.length - 1,
+                            disabled: gi === _ctx.layers.length - 1 || !it.movable,
                             onClick: $event => (_ctx.raiseLayer(it.id, -1)),
                             title: _ctx.t('Send backward')
                           }, "↓", 8 /* PROPS */, _hoisted_363)
@@ -13526,7 +13532,7 @@ return function render(_ctx, _cache) {
       /** Which object the box is round, and where to draw it. */
       syncFrame() {
         const c = canvas();
-        if (!c || !this.doc.id) { this.frame.on = false; frameEl = null; return; }
+        if (!c || !this.doc.id) { this.frame.on = false; frameEl = null; this.markLayerBar(); return; }
         if (frameEl && !c.contains(frameEl)) { frameEl = null; framePinned = false; }
         // A click holds on to the object it landed on, so it stays selected while
         // the bar and the handles are used. It lets go when the caret is somewhere
@@ -13546,14 +13552,14 @@ return function render(_ctx, _cache) {
           if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
         }
         const el = frameEl;
-        if (!el) { this.frame.on = false; this.syncText(); return; }
+        if (!el) { this.frame.on = false; this.syncText(); this.markLayerBar(); return; }
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
-        if (!wrap || !el.getBoundingClientRect) { this.frame.on = false; return; }
+        if (!wrap || !el.getBoundingClientRect) { this.frame.on = false; this.markLayerBar(); return; }
         const z = this.frameZoom() || 1;
         const a = el.getBoundingClientRect();
         const b = wrap.getBoundingClientRect();
         // No layout to measure (a document not yet shown, or the test harness).
-        if (!a.width && !a.height) { this.frame.on = false; this.syncText(); return; }
+        if (!a.width && !a.height) { this.frame.on = false; this.syncText(); this.markLayerBar(); return; }
         this.frame.x = (a.left - b.left) / z;
         this.frame.y = (a.top - b.top) / z;
         this.frame.w = a.width / z;
@@ -13593,6 +13599,22 @@ return function render(_ctx, _cache) {
           : [];
         if (this.coarse) { this.frame.bar = true; }
         this.syncText();
+        this.markLayerBar();
+      },
+      /**
+       * The layer bar shows what is in hand. Choosing a layer in the bar already
+       * picks the object up on the page; picking one up on the page must light the
+       * same row in the bar -- it did not, so the bar told only half the story.
+       * The row is brought into view as well, since a tall pile scrolls.
+       */
+      markLayerBar() {
+        if (!this.layersOpen || layerMarked === frameEl) { return; }
+        layerMarked = frameEl;
+        this.refreshLayers();
+        this.$nextTick(() => {
+          const row = this.$el && this.$el.querySelector('.eb-layers .list li.on');
+          if (row && row.scrollIntoView) { row.scrollIntoView({ block: 'nearest' }); }
+        });
       },
       /**
        * The little bar would sit over the line above the frame and hide it, so it
@@ -14855,8 +14877,22 @@ return function render(_ctx, _cache) {
       refreshLayers() {
         const c = canvas();
         if (!c || !this.layersOpen) { this.layers = []; return; }
-        const placed = Array.from(c.querySelectorAll('.eb-anchor > *'))
-          .filter((el) => el.nodeType === 1);
+        // Everything that stands on the page, in the order it stands in.
+        //
+        // Writing is an object here, so a paragraph counts as much as a picture:
+        // the bar lists every block at the top of the document, every object
+        // wherever it is nested, and everything pinned to an anchor. It used to
+        // list only what was placed freely, so a document with five things in it
+        // showed three, and the line with a "1" in it was nowhere at all.
+        //
+        // An anchor is a peg and a page spacer is a fold; the header and the
+        // footer are regions rather than objects. None of those can be picked up.
+        const placed = Array.from(c.querySelectorAll(':scope > *, ' + OBJECT_SEL + ', .eb-anchor > *'))
+          .filter((el) => el.nodeType === 1
+            && !el.classList.contains('eb-anchor')        // a peg, not a thing
+            && !el.classList.contains('eb-pagespacer')    // the fold, not a thing
+            && !el.classList.contains('eb-header')        // a region, not an object
+            && !el.classList.contains('eb-footer'));
         const groups = new Map();
         placed.forEach((el, i) => {
           const level = Number(el.style.zIndex) || 0;
@@ -14864,6 +14900,10 @@ return function render(_ctx, _cache) {
           const kind = objectKind(el);
           groups.get(level).push({
             id: i,
+            // Only a thing standing on the paper has a place in the pile. Writing
+            // in the flow is listed -- it is on the page -- but there is nothing
+            // above or below it to swap with, so it is not dragged or raised.
+            movable: !!el.closest('.eb-anchor'),
             name: this.nameOfKind(kind),
             icon: this.iconOfKind(kind),
             text: (el.textContent || '').trim().slice(0, 24),
@@ -14880,7 +14920,7 @@ return function render(_ctx, _cache) {
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
           NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
           TEXTBOX: this.t('Text frame'), SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
-          PARA: this.t('Text frame'), HEADING: this.t('Heading'), LIST: this.t('List'),
+          PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
         };
         return names[kind] || this.t('Block frame');
       },
@@ -14905,11 +14945,16 @@ return function render(_ctx, _cache) {
         this.dragLayer = -1;
         this.dropLayer = -1;
         if (!from || !onto || from === onto) { return; }
+        // Only the things that stand on the paper take part: the bar lists the
+        // writing as well now, and renumbering a paragraph that is not positioned
+        // does nothing but eat a place in the pile.
+        const pile = layerEls.filter((el) => el && el.closest('.eb-anchor'));
+        if (pile.indexOf(from) < 0 || pile.indexOf(onto) < 0) { return; }
         history.push(true);
         // Work in the order the list shows -- top of the pile first -- so that
         // dropping a row on to the top row puts it on top, and on to the bottom
         // row puts it at the bottom, which is what the hand meant either way.
-        const top = layerEls.slice().sort((a, b) => stackRank(b) - stackRank(a));
+        const top = pile.slice().sort((a, b) => stackRank(b) - stackRank(a));
         const wasAt = top.indexOf(from);
         const ontoAt = top.indexOf(onto);
         top.splice(wasAt, 1);
@@ -14980,7 +15025,7 @@ return function render(_ctx, _cache) {
       },
       raiseLayer(id, dir) {
         const el = layerEls[id];
-        if (!el || !el.parentNode) { return; }
+        if (!el || !el.parentNode || !el.closest('.eb-anchor')) { return; }
         history.push(true);
         restack(el, dir);
         this.touch();
@@ -15950,7 +15995,9 @@ return function render(_ctx, _cache) {
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
       layersOpen(v) {
         window.localStorage.setItem('eb-layers', v ? '1' : '0');
-        this.$nextTick(() => this.refreshLayers());
+        // Opened with something already in hand, the bar must show that too.
+        layerMarked = null;
+        this.$nextTick(() => { this.refreshLayers(); this.markLayerBar(); });
       },
       previewOpen(v) {
         window.localStorage.setItem('eb-preview', v ? '1' : '0');
