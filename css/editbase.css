@@ -247,8 +247,12 @@
   width: 100%; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   border-radius: 9px; padding: 8px 10px;
 }
-.eb-row { display: flex; gap: 10px; }
-.eb-row > * { flex: 1 1 0; min-width: 0; }
+/* A row of fields wraps. It did not, and a row holding four fields -- one of them
+   a picker with four choices in it -- squeezed the rest to nothing: the labels
+   printed on top of one another and the boxes fell off the right edge. */
+.eb-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+.eb-row > * { flex: 1 1 150px; min-width: 150px; }
+.eb-row > .wide { flex: 1 1 100%; min-width: 100%; }
 /* The little explanation under a field in a dialogue. It used to be called
    .eb-note, which is also the document's own side-bar note, so the app was
    repainting the document's notes in the editor while the saved file drew them
@@ -839,16 +843,16 @@
 /* A choice made by pointing at the picture of it, rather than by reading a list.
    Four ways the words can meet an object, shown as the four pictures. */
 .eb-pick { display: flex; gap: 6px; flex-wrap: wrap; }
-.eb-pickitem {
+#editbase-root .eb-pickitem {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: 7px 9px; min-width: 78px;
   background: var(--surface-2); border: 1.5px solid var(--border); border-radius: 10px;
   color: inherit; cursor: pointer; font: inherit;
 }
-.eb-pickitem:hover { border-color: var(--primary); }
-.eb-pickitem.on { border-color: var(--primary); background: var(--primary-light, rgba(37, 99, 235, .10)); }
-.eb-pickitem .nm { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; }
-.eb-pickitem.on .nm { color: inherit; }
+#editbase-root .eb-pickitem:hover { border-color: var(--primary); }
+#editbase-root .eb-pickitem.on { border-color: var(--primary); background: var(--primary-light, rgba(37, 99, 235, .10)); }
+#editbase-root .eb-pickitem .nm { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; }
+#editbase-root .eb-pickitem.on .nm { color: inherit; }
 .eb-field.wide { flex: 1 1 100%; }
 /* The headings that break a long dialogue into the questions it is really asking. */
 .eb-modal .eb-sect {
@@ -938,24 +942,24 @@
 .eb-layers .list { list-style: none; margin: 0; padding: 0 6px; }
 .eb-layers .list li { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
 .eb-layers .list li.on { background: var(--surface-2); outline: 1.5px solid var(--primary); }
-.eb-layers .pick {
+#editbase-root .eb-layers .pick {
   flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px;
   background: none; border: 0; color: inherit; font: inherit; text-align: left; padding: 6px 4px; cursor: pointer;
 }
-.eb-layers .pick .nm { font-weight: 600; white-space: nowrap; }
-.eb-layers .pick .tx { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#editbase-root .eb-layers .pick .nm { font-weight: 600; white-space: nowrap; }
+#editbase-root .eb-layers .pick .tx { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eb-layers .acts { display: flex; }
 #editbase-root .eb-layers .acts .eb-tb { min-width: 22px; width: 22px; height: 22px; padding: 0; }
 
 /* A plan of the page rather than a picture of it: cheap to draw, and it says
    what is where and what overlaps what, which is what the eye wants here. */
 .eb-preview .pages { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
-.eb-preview .pg { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+#editbase-root .eb-preview .pg { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 .eb-preview .sheet {
   display: block; position: relative; width: 100%; height: 0;
   background: #fff; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,.14);
 }
-.eb-preview .pg.on .sheet { outline: 2px solid var(--primary); }
+#editbase-root .eb-preview .pg.on .sheet { outline: 2px solid var(--primary); }
 .eb-preview .blk { position: absolute; }
 .eb-preview .blk.text { background: rgba(90, 100, 120, .30); }
 .eb-preview .blk.obj { background: rgba(37, 99, 235, .18); outline: 1px solid rgba(37, 99, 235, .55); }
@@ -987,12 +991,13 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 40%;
   -webkit-user-select: none; user-select: none;
 }
-/* The handle itself, at the height of the eye. */
-.eb-tabs .tab .hnd {
+/* The handle itself, at the height of the eye. Written with the id, or the
+   button reset at the top of this file wins and it is drawn with no box at all. */
+#editbase-root .eb-tabs .tab .hnd {
   margin: auto 0; padding: 12px 0; width: 18px; border: 0; border-radius: 6px 0 0 6px;
   background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1;
 }
-.eb-tabs .tab .hnd:hover { background: var(--primary); color: #fff; }
+#editbase-root .eb-tabs .tab .hnd:hover { background: var(--primary); color: #fff; }
 @media (max-width: 1050px) {
   .eb-tabs { display: none; }
 }
@@ -1004,9 +1009,9 @@
 .eb-layers .list li { cursor: grab; }
 .eb-layers .list li.dragging { opacity: .45; }
 .eb-layers .list li.over { box-shadow: inset 0 2px 0 var(--primary); }
-.eb-preview .pg { cursor: grab; }
-.eb-preview .pg.dragging { opacity: .45; }
-.eb-preview .pg.over .sheet { outline: 2px dashed var(--primary); }
+#editbase-root .eb-preview .pg { cursor: grab; }
+#editbase-root .eb-preview .pg.dragging { opacity: .45; }
+#editbase-root .eb-preview .pg.over .sheet { outline: 2px dashed var(--primary); }
 
 /* Something has been chosen from the shelf and is waiting to be drawn. */
 #editbase-root .eb-paper.placing, #editbase-root .eb-paper.placing * { cursor: crosshair; }
