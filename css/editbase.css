@@ -966,10 +966,11 @@
   background: var(--surface); border-left: 1px solid var(--border);
 }
 .eb-tabs .tab { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; min-height: 0; }
-/* The name of the bar, at the top of it, read from the bottom up: turned a
-   quarter so the left-hand edge is its foot. */
+/* The name of the bar, at the top of it. Turned a quarter clockwise: the line
+   runs downwards and the right-hand edge is its foot, so it is read with the
+   head tilted to the left. */
 .eb-tabs .tab .lb {
-  writing-mode: vertical-rl; transform: rotate(180deg);
+  writing-mode: vertical-rl; text-orientation: sideways;
   margin: 8px 0 0; font-size: 10px; letter-spacing: .04em; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 40%;
   -webkit-user-select: none; user-select: none;

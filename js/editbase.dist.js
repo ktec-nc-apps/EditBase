@@ -4136,8 +4136,15 @@ ${insideObjects('.eb-paper.boxed')} {
    * under whatever was laid over them while the paragraphs beside them moved.
    * A paragraph is what words live in -- so they are put in one.
    */
+  // Everything that holds blocks rather than words. Words put straight into one
+  // of these belong in a paragraph, because a paragraph is what words live in --
+  // and because a run that is not a paragraph has no box, and a thing with no
+  // box is a thing this editor cannot lay out, move, or keep out of the way of
+  // anything else. The owner's rule: no words without a box to put them in.
+  const WORD_HOSTS = 'div.eb-frame, aside.eb-box, div.eb-note, div.eb-shape, div.eb-cols,'
+    + ' nav.eb-toc, header.eb-header, footer.eb-footer, section.eb-notes';
   function paragraphLooseWords(c) {
-    Array.from(c.querySelectorAll('div.eb-frame, aside.eb-box, div.eb-note')).forEach((host) => {
+    Array.from(c.querySelectorAll(WORD_HOSTS)).forEach((host) => {
       let run = null;
       Array.from(host.childNodes).forEach((n) => {
         const loose = (n.nodeType === 3 && n.data.trim())
