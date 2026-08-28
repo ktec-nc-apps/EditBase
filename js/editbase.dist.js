@@ -3619,6 +3619,18 @@ ${insideObjects('.eb-paper.boxed')} {
             if (w <= 0 || h <= 0) { return; }
             taken[floatSide] += w;
             held.set(key, taken);
+            // Words are only moved aside when there is somewhere for them to go.
+            // Writing that stands on the page has a box of a fixed size, and room
+            // reserved inside it does not make it bigger -- so an object covering
+            // that box to its foot pushed the words clean out of it. One text
+            // frame ended up with its own word 80mm below a 30mm box. Where there
+            // is no room left, the words stay and the object simply lies over
+            // them, which is what overlapping objects do anyway.
+            const placed = !!(b.closest && b.closest('.eb-anchor'));
+            if (placed) {
+              const line = parseFloat(window.getComputedStyle(b).lineHeight) || 18;
+              if (or.bottom + gapPx > cb.bottom - line) { return; }
+            }
             const inset = Math.max(0, (or.top - gapPx) - cb.top);
             const spacer = document.createElement('span');
             spacer.className = 'eb-flow';
