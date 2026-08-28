@@ -593,18 +593,11 @@
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
    beyond the float: it is the wrap itself, written down. */
 .eb-doc span.eb-flow { display: block; pointer-events: none; }
-/* And the room is taken out of the OBJECTS as well, not only the words. A block
-   ignores a float unless it makes a formatting context of its own -- so a picture
-   or a table sitting under something placed freely was overlapped by it while the
-   text beside it moved politely out of the way. flow-root is the one line of CSS
-   that says "keep clear of what is floating". */
-.eb-doc figure.eb-img, .eb-doc div.eb-frame, .eb-doc aside.eb-box, .eb-doc div.eb-note,
-.eb-doc div.eb-math-block, .eb-doc nav.eb-toc, .eb-doc div.eb-shape, .eb-doc div.eb-embed {
-  display: flow-root;
-}
-/* The two that are laid out another way keep their own display. */
-.eb-doc figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
-.eb-doc span.eb-frame { display: inline-block; }
+/* Objects do NOT push each other about. A writer puts them where they are wanted
+   and may lay one over another on purpose -- a caption over a photograph, a shape
+   over a diagram. It is the WORDS that keep out of an object's way, and only the
+   words. (An earlier attempt made every object keep clear of every other, which
+   took the page out of the writer's hands.) */
 .eb-doc span.eb-anchor { position: relative; display: inline; }
 .eb-doc .eb-anchor > * { position: absolute; margin: 0; }
 /* Browsers leave background colours out of a printout unless the page insists. */
@@ -3513,8 +3506,14 @@ ${insideObjects('.eb-paper.boxed')} {
         .filter((o) => o.nodeType === 1 && ['none', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
       if (!objects.length) { return; }
       const before = objects.map((o) => o.getBoundingClientRect().top);
+      // Writing that is itself standing on the page counts too. It was left out,
+      // so a picture laid over a piece of writing that had been placed freely --
+      // a text object, with its own box -- went straight through it: the words
+      // did not move at all. They are pushed the same way as any other words:
+      // the room is taken out of the block they are in, wherever that block is.
+      // What is never pushed is the object's own writing, by itself.
       const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
-        .filter((b) => !b.closest('.eb-anchor') && !b.querySelector('.eb-anchor'));
+        .filter((b) => !b.querySelector('.eb-anchor'));
       // Nearest first, so two objects over the same paragraph reserve their room
       // one after the other instead of both measuring from the same edge.
       const held = new Map();
