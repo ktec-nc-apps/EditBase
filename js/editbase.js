@@ -619,6 +619,15 @@
   .eb-doc > footer.eb-footer { position: fixed; bottom: -9mm; left: 0; right: 0; margin: 0; border-top: 0; }
 }
 
+/* A box standing on the page holds what is put inside it. Without this the room
+   reserved to keep the words clear of something laid over the box did not make
+   the box any taller, and the words were pushed out of the bottom of their own
+   frame -- one word 80mm below a 30mm box. Held, the box grows to fit them.
+   Only boxes that stand on the page: objects in the flow are not made to keep
+   clear of each other, which is the writer's business and not the editor's. */
+.eb-doc .eb-anchor > * { display: flow-root; }
+.eb-doc .eb-anchor > figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
+
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
    beyond the float: it is the wrap itself, written down. */
 .eb-doc span.eb-flow { display: block; pointer-events: none; }
@@ -3546,6 +3555,24 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!el.getAttribute('style')) { el.removeAttribute('style'); }
   }
 
+  /**
+   * Where a thing stands in the pile. Two boxes laid over each other are both
+   * objects and both writing, so each would push the other's words about and the
+   * page would fight itself. The one on top wins: what is underneath gets out of
+   * the way, and what is on top is left alone -- which is what a writer means by
+   * putting one thing over another.
+   */
+  function stackRank(el) {
+    const placed = el && el.closest ? el.closest('.eb-anchor') : null;
+    if (!placed || !placed.firstElementChild) { return -1; }
+    const box = placed.firstElementChild;
+    const z = Number(box.style.zIndex);
+    if (z) { return z * 1000; }
+    const c = canvas();
+    const all = c ? Array.from(c.querySelectorAll('.eb-anchor')) : [];
+    return all.indexOf(placed);
+  }
+
   function clearWrapSpacers(root) {
     if (root) { Array.from(root.querySelectorAll('span.eb-flow')).forEach((s) => s.remove()); }
   }
@@ -3586,8 +3613,11 @@ ${insideObjects('.eb-paper.boxed')} {
           const mode = wrapMode(o);
           const gapPx = wrapGap(o) / MM * z;
           const done = new Set();
+          const mine = stackRank(o);
           blocks.forEach((b) => {
             if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
+            // Only what is underneath moves. See stackRank.
+            if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
             const cb = contentBox(b);
             if (cb.bottom <= or.top - gapPx || cb.top >= or.bottom + gapPx) { return; }
             if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
@@ -3619,18 +3649,6 @@ ${insideObjects('.eb-paper.boxed')} {
             if (w <= 0 || h <= 0) { return; }
             taken[floatSide] += w;
             held.set(key, taken);
-            // Words are only moved aside when there is somewhere for them to go.
-            // Writing that stands on the page has a box of a fixed size, and room
-            // reserved inside it does not make it bigger -- so an object covering
-            // that box to its foot pushed the words clean out of it. One text
-            // frame ended up with its own word 80mm below a 30mm box. Where there
-            // is no room left, the words stay and the object simply lies over
-            // them, which is what overlapping objects do anyway.
-            const placed = !!(b.closest && b.closest('.eb-anchor'));
-            if (placed) {
-              const line = parseFloat(window.getComputedStyle(b).lineHeight) || 18;
-              if (or.bottom + gapPx > cb.bottom - line) { return; }
-            }
             const inset = Math.max(0, (or.top - gapPx) - cb.top);
             const spacer = document.createElement('span');
             spacer.className = 'eb-flow';
