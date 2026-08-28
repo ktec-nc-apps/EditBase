@@ -5604,7 +5604,7 @@ const _hoisted_237 = /*#__PURE__*/_createElementVNode("div", { class: "eb-menu-s
 const _hoisted_238 = ["innerHTML"]
 const _hoisted_239 = ["innerHTML"]
 const _hoisted_240 = /*#__PURE__*/_createElementVNode("div", { class: "eb-menu-sep" }, null, -1 /* HOISTED */)
-const _hoisted_241 = ["onPointerdown"]
+const _hoisted_241 = ["onClick"]
 const _hoisted_242 = ["innerHTML"]
 const _hoisted_243 = ["onClick"]
 const _hoisted_244 = ["innerHTML"]
@@ -5662,7 +5662,7 @@ const _hoisted_292 = {
   key: 5,
   class: "rail-shelf"
 }
-const _hoisted_293 = ["onPointerdown", "title"]
+const _hoisted_293 = ["onClick", "title"]
 const _hoisted_294 = ["innerHTML"]
 const _hoisted_295 = ["title"]
 const _hoisted_296 = ["title"]
@@ -5690,7 +5690,7 @@ const _hoisted_307 = { class: "c" }
 const _hoisted_308 = { class: "r" }
 const _hoisted_309 = ["spellcheck"]
 const _hoisted_310 = {
-  key: 5,
+  key: 6,
   class: "eb-tsel"
 }
 const _hoisted_311 = /*#__PURE__*/_createElementVNode("div", { class: "box" }, null, -1 /* HOISTED */)
@@ -7542,36 +7542,36 @@ return function render(_ctx, _cache) {
                       ]),
                       _hoisted_237,
                       _createElementVNode("button", {
-                        class: "eb-menu-item",
-                        onPointerdown: _cache[171] || (_cache[171] = _withModifiers($event => (_ctx.shapeGrab($event, 'textbox')), ["prevent"]))
+                        class: _normalizeClass(["eb-menu-item", { on: _ctx.placing === 'textbox' }]),
+                        onClick: _cache[171] || (_cache[171] = $event => (_ctx.armPlace('textbox')))
                       }, [
                         _createElementVNode("span", {
                           innerHTML: _ctx.icons.frame
                         }, null, 8 /* PROPS */, _hoisted_238),
                         _createTextVNode(_toDisplayString(_ctx.t('Text frame')), 1 /* TEXT */)
-                      ], 32 /* NEED_HYDRATION */),
+                      ], 2 /* CLASS */),
                       _createElementVNode("button", {
-                        class: "eb-menu-item",
-                        onPointerdown: _cache[172] || (_cache[172] = _withModifiers($event => (_ctx.shapeGrab($event, 'frame')), ["prevent"]))
+                        class: _normalizeClass(["eb-menu-item", { on: _ctx.placing === 'frame' }]),
+                        onClick: _cache[172] || (_cache[172] = $event => (_ctx.armPlace('frame')))
                       }, [
                         _createElementVNode("span", {
                           innerHTML: _ctx.icons.box
                         }, null, 8 /* PROPS */, _hoisted_239),
                         _createTextVNode(_toDisplayString(_ctx.t('Block frame')), 1 /* TEXT */)
-                      ], 32 /* NEED_HYDRATION */),
+                      ], 2 /* CLASS */),
                       _hoisted_240,
                       (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.shapes, (sh) => {
                         return (_openBlock(), _createElementBlock("button", {
                           key: sh.kind,
-                          class: "eb-menu-item",
-                          onPointerdown: _withModifiers($event => (_ctx.shapeGrab($event, sh.kind)), ["prevent"])
+                          class: _normalizeClass(["eb-menu-item", { on: _ctx.placing === sh.kind }]),
+                          onClick: $event => (_ctx.armPlace(sh.kind))
                         }, [
                           _createElementVNode("span", {
                             class: "eb-shape-icon",
                             innerHTML: sh.icon
                           }, null, 8 /* PROPS */, _hoisted_242),
                           _createTextVNode(_toDisplayString(sh.label), 1 /* TEXT */)
-                        ], 40 /* PROPS, NEED_HYDRATION */, _hoisted_241))
+                        ], 10 /* CLASS, PROPS */, _hoisted_241))
                       }), 128 /* KEYED_FRAGMENT */)),
                       (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.boxes, (b) => {
                         return (_openBlock(), _createElementBlock("button", {
@@ -7862,14 +7862,14 @@ return function render(_ctx, _cache) {
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.paletteItems, (it) => {
                       return (_openBlock(), _createElementBlock("button", {
                         key: it.kind,
-                        class: "eb-tb",
-                        onPointerdown: _withModifiers($event => (_ctx.shapeGrab($event, it.kind)), ["prevent"]),
+                        class: _normalizeClass(["eb-tb", { on: _ctx.placing === it.kind }]),
+                        onClick: $event => (_ctx.armPlace(it.kind)),
                         title: it.label
                       }, [
                         _createElementVNode("span", {
                           innerHTML: it.icon
                         }, null, 8 /* PROPS */, _hoisted_294)
-                      ], 40 /* PROPS, NEED_HYDRATION */, _hoisted_293))
+                      ], 10 /* CLASS, PROPS */, _hoisted_293))
                     }), 128 /* KEYED_FRAGMENT */))
                   ]))
                 : _createCommentVNode("v-if", true)
@@ -7957,9 +7957,16 @@ return function render(_ctx, _cache) {
                   }), 128 /* KEYED_FRAGMENT */))
                 ]))
               : _createCommentVNode("v-if", true),
+            (_ctx.placeBox)
+              ? (_openBlock(), _createElementBlock("div", {
+                  key: 2,
+                  class: "eb-placeband",
+                  style: _normalizeStyle({ left: _ctx.placeBox.x + 'px', top: _ctx.placeBox.y + 'px', width: _ctx.placeBox.w + 'px', height: _ctx.placeBox.h + 'px' })
+                }, null, 4 /* STYLE */))
+              : _createCommentVNode("v-if", true),
             _createElementVNode("div", {
               id: "eb-canvas",
-              class: _normalizeClass(["eb-paper eb-doc", [_ctx.numberClass, { boxed: _ctx.boxes && !_ctx.flow }]]),
+              class: _normalizeClass(["eb-paper eb-doc", [_ctx.numberClass, { boxed: _ctx.boxes && !_ctx.flow, placing: !!_ctx.placing }]]),
               style: _normalizeStyle(_ctx.paperStyle),
               contenteditable: "true",
               spellcheck: _ctx.spellcheck,
@@ -7968,7 +7975,7 @@ return function render(_ctx, _cache) {
             }, null, 14 /* CLASS, STYLE, PROPS */, _hoisted_309),
             (_ctx.frame.drop >= 0)
               ? (_openBlock(), _createElementBlock("div", {
-                  key: 2,
+                  key: 3,
                   class: "eb-fdrop",
                   style: _normalizeStyle({ top: _ctx.frame.drop + 'px' })
                 }, null, 4 /* STYLE */))
@@ -7976,14 +7983,14 @@ return function render(_ctx, _cache) {
             _createCommentVNode(" The line a frame has just snapped to, drawn while it is being dragged\n             so the writer can see what it caught on. "),
             (_ctx.frame.gx !== null)
               ? (_openBlock(), _createElementBlock("div", {
-                  key: 3,
+                  key: 4,
                   class: "eb-snap v",
                   style: _normalizeStyle({ left: _ctx.frame.gx + 'px' })
                 }, null, 4 /* STYLE */))
               : _createCommentVNode("v-if", true),
             (_ctx.frame.gy !== null)
               ? (_openBlock(), _createElementBlock("div", {
-                  key: 4,
+                  key: 5,
                   class: "eb-snap h",
                   style: _normalizeStyle({ top: _ctx.frame.gy + 'px' })
                 }, null, 4 /* STYLE */))
@@ -8009,7 +8016,7 @@ return function render(_ctx, _cache) {
             }), 128 /* KEYED_FRAGMENT */)),
             (_ctx.frame.on)
               ? (_openBlock(), _createElementBlock("div", {
-                  key: 6,
+                  key: 7,
                   class: _normalizeClass(["eb-fsel", { dragging: _ctx.frame.dragging }]),
                   style: _normalizeStyle({ left: (_ctx.frame.x - _ctx.frame.padX / 2) + 'px', top: (_ctx.frame.y - _ctx.frame.padY / 2) + 'px',
                     width: (_ctx.frame.w + _ctx.frame.padX) + 'px', height: (_ctx.frame.h + _ctx.frame.padY) + 'px' })
@@ -11843,6 +11850,7 @@ return function render(_ctx, _cache) {
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
+        placing: '', placeBox: null,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -13329,6 +13337,8 @@ return function render(_ctx, _cache) {
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
         if (frameDrag) { return; }
+        // The hand is armed with something to put down: this press draws it.
+        if (this.placing) { e.preventDefault(); this.placeStart(e); return; }
         const at = objectAt(e.target) || thinObjectNear(e.clientX, e.clientY);
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
@@ -14234,6 +14244,95 @@ return function render(_ctx, _cache) {
        * Released on the page, the shape is put down there. Released without
        * moving, it is put down where the caret is, so a click still works.
        */
+      /**
+       * Choosing something from the shelf or the menu does not put it anywhere.
+       * It arms the hand: the pointer becomes a cross, and the next drag on the
+       * paper says where the thing goes and how big it is. Pressing a menu item
+       * and having something appear in the middle of the writing is not how a
+       * page is laid out.
+       */
+      armPlace(kind) {
+        this.menu = '';
+        this.placing = this.placing === kind ? '' : kind;
+        this.placeBox = null;
+      },
+      placeStart(e) {
+        if (!this.placing) { return false; }
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        if (!wrap) { return false; }
+        const b = wrap.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const from = { x: (e.clientX - b.left) / z, y: (e.clientY - b.top) / z };
+        this.placeBox = { x: from.x, y: from.y, w: 0, h: 0 };
+        const move = (ev) => {
+          const x = (ev.clientX - b.left) / z;
+          const y = (ev.clientY - b.top) / z;
+          this.placeBox = {
+            x: Math.min(from.x, x), y: Math.min(from.y, y),
+            w: Math.abs(x - from.x), h: Math.abs(y - from.y),
+          };
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          const box = this.placeBox;
+          const kind = this.placing;
+          this.placeBox = null;
+          this.placing = '';
+          if (box) { this.placeHere(kind, box); }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        return true;
+      },
+      /** Put the chosen thing down in the rectangle that was just drawn. */
+      placeHere(kind, box) {
+        const c = canvas();
+        if (!c || !kind) { return; }
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        const z = this.frameZoom() || 1;
+        const mmW = Math.max(12, Math.round(box.w * MM * 10) / 10);
+        const mmH = Math.max(8, Math.round(box.h * MM * 10) / 10);
+        // Where the caret goes first, so the thing is anchored to the line it was
+        // drawn over rather than to the top of the document.
+        const at = caretFromPoint(
+          wrap.getBoundingClientRect().left + (box.x + 2) * z,
+          wrap.getBoundingClientRect().top + (box.y + 2) * z);
+        if (at) { selectRange(at); }
+        if (kind === 'image') {
+          this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
+            y: wrap.getBoundingClientRect().top + box.y * z };
+          this.openPicker();
+          return;
+        }
+        if (kind === 'table') {
+          this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
+            y: wrap.getBoundingClientRect().top + box.y * z };
+          this.tableOpen = true;
+          return;
+        }
+        let made = null;
+        this.run(() => {
+          made = kind === 'textbox' ? insertTextBox(true)
+            : (kind === 'frame' ? insertFreeFrame() : insertShape(kind));
+        });
+        if (!made) { return; }
+        setObjectFree(made, true);
+        made.style.width = mmW + 'mm';
+        if (made.style.height) { made.style.height = mmH + 'mm'; } else { made.style.minHeight = mmH + 'mm'; }
+        this.$nextTick(() => {
+          if (!made.parentNode) { return; }
+          this.moveFreeTo(made,
+            wrap.getBoundingClientRect().left + box.x * z,
+            wrap.getBoundingClientRect().top + box.y * z);
+          this.keepOnPaper(made);
+          frameEl = made;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+        });
+      },
       shapeGrab(e, kind) {
         const ghost = document.createElement('div');
         ghost.className = 'eb-dragghost';
@@ -15298,6 +15397,7 @@ return function render(_ctx, _cache) {
         // so the one that started it is remembered here. Shift is what says "into
         // the writing, as plain text", as it does everywhere else.
         if (meta && (e.key === 'v' || e.key === 'V')) { pastePlain = !!e.shiftKey; }
+        if (e.key === 'Escape' && this.placing) { this.placing = ''; this.placeBox = null; return undefined; }
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
         // Arrow keys walk a parked frame about the page: a millimetre a press, five
         // with Shift, a fifth with Alt. Anywhere else they belong to the caret.
