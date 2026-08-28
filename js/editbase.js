@@ -403,7 +403,7 @@
   // of the app that has to know -- the box round it, the handles, the properties,
   // the anchor that makes its position mean anything -- reads this and only this,
   // so a new kind of object cannot be added and end up without its box.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, p.eb-textbox, div.eb-shape, div.eb-embed, hr';
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, .eb-textbox, div.eb-shape, div.eb-embed, hr';
   /** The same list, as the selector for one state of the canvas. */
   const objectRule = (prefix) => OBJECT_SEL.split(', ').map((s) => prefix + ' ' + s).join(', ');
   // Writing is an object too. A paragraph, a heading, a list, a quotation: each
@@ -577,8 +577,10 @@
 .eb-doc span.eb-frame { display: inline-block; border: 0; padding: 0; margin: 0; }
 /* 文字枠 -- a text frame. A paragraph with a box round it that the writer put
    there: no border of its own until one is asked for, because a text box that
-   draws a rectangle round every line is not what anyone wants to print. */
-.eb-doc p.eb-textbox { margin: 0; }
+   draws a rectangle round every line is not what anyone wants to print.
+   Not written p.eb-textbox: a text frame set to a heading is an h1 or an h2 and
+   is still the same frame, in the same place and at the same size. */
+.eb-doc .eb-textbox { margin: 0; }
 /* An object placed by hand is parked in a zero-height anchor left at the point in
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
@@ -1668,8 +1670,14 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!c || !node || !inCanvas(node) || node === c) { return null; }
     let n = node;
     while (n && n.parentNode !== c) {
-      n = n.parentNode;
-      if (!n || n === document.body || n === document.documentElement) { return null; }
+      const up = n.parentNode;
+      if (!up || up === document.body || up === document.documentElement) { return null; }
+      // An anchor is a peg, not a block: the thing pinned to it is the block. A
+      // 文字枠 placed on the page lives inside one, and climbing past it handed
+      // the anchor to everything that acts on a paragraph -- which is why
+      // choosing a heading with the caret in a text frame did nothing at all.
+      if (up.classList && up.classList.contains('eb-anchor')) { break; }
+      n = up;
     }
     return n && n.nodeType === 1 ? n : null;
   }
@@ -1741,9 +1749,18 @@ ${insideObjects('.eb-paper.boxed')} {
     return out;
   }
 
-  function replaceBlock(block, tag, cls) {
+  function replaceBlock(block, tag, cls, keepIdentity) {
     const el = document.createElement(tag);
     if (cls) { el.className = cls; }
+    // A frame the writer put on the page is still that frame when its style
+    // changes: a 文字枠 set to Heading 1 stays a 文字枠, where it was and the size
+    // it was. Without this the box, its place and its width were all thrown away
+    // and the heading dropped into the flow of the text.
+    if (keepIdentity) {
+      if (block.className) { el.className = block.className; }
+      const style = block.getAttribute('style');
+      if (style) { el.setAttribute('style', style); }
+    }
     while (block.firstChild) { el.appendChild(block.firstChild); }
     // carry alignment / indentation across a heading change
     ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3'].forEach((c) => {
@@ -1773,7 +1790,15 @@ ${insideObjects('.eb-paper.boxed')} {
         return;
       }
       if (b.nodeName === 'TABLE' || b.nodeName === 'HR' || b.classList.contains('eb-pagebreak')) { return; }
-      made.push(replaceBlock(b, tag));
+      // A container -- a まとめ枠, a 囲み枠 -- is styled through the writing inside
+      // it: setting Heading 1 in a box makes the line in the box a heading. It
+      // does not turn the box itself into a heading and throw the box away.
+      if (b.matches && b.matches(OBJECT_SEL) && !b.matches(TEXT_SEL)) {
+        selectedBlocks(true).filter((x) => x !== b && b.contains(x))
+          .forEach((x) => { made.push(replaceBlock(x, tag)); });
+        return;
+      }
+      made.push(replaceBlock(b, tag, null, !!(b.matches && b.matches(OBJECT_SEL))));
     });
     if (made.length) { placeCaretIn(made[0]); }
   }
