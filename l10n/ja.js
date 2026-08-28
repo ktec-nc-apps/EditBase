@@ -632,6 +632,9 @@ OC.L10N.register(
     "This cell is not a merged one.": "このセルは結合されていません。",
     "Settings saved": "設定を保存しました",
     "Could not save the settings: {msg}": "設定を保存できませんでした: {msg}",
-    "New documents will start with this paper setup.": "新しい文書は、この用紙設定で作成されます。"
+    "New documents will start with this paper setup.": "新しい文書は、この用紙設定で作成されます。",
+    "Shapes": "図形",
+    "Bring in": "差し込み",
+    "Nothing to bring in: no app of ours is switched on.": "差し込めるものがありません。対象のアプリが有効になっていません。"
 },
 "nplurals=1; plural=0;");

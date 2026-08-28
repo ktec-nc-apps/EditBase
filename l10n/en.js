@@ -632,6 +632,9 @@ OC.L10N.register(
     "This cell is not a merged one.": "This cell is not a merged one.",
     "Settings saved": "Settings saved",
     "Could not save the settings: {msg}": "Could not save the settings: {msg}",
-    "New documents will start with this paper setup.": "New documents will start with this paper setup."
+    "New documents will start with this paper setup.": "New documents will start with this paper setup.",
+    "Shapes": "Shapes",
+    "Bring in": "Bring in",
+    "Nothing to bring in: no app of ours is switched on.": "Nothing to bring in: no app of ours is switched on."
 },
 "nplurals=2; plural=(n != 1);");

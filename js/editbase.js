@@ -3024,6 +3024,7 @@ ${insideObjects('.eb-paper.boxed')} {
     box.appendChild(p);
     insertBlockNode(box);
     placeCaretIn(p);
+    return box;
   }
 
   function insertNote() {
@@ -3034,6 +3035,7 @@ ${insideObjects('.eb-paper.boxed')} {
     note.appendChild(p);
     insertBlockNode(note);
     placeCaretIn(p);
+    return note;
   }
 
   /** MathML goes in as MathML — no image, no renderer, no external font. */
@@ -5207,6 +5209,8 @@ ${insideObjects('.eb-paper.boxed')} {
     indent: I('<path d="M7 4h8M7 8h8M7 12h8M2 5.5 4.5 8 2 10.5z" />'),
     outdent: I('<path d="M7 4h8M7 8h8M7 12h8M4.5 5.5 2 8l2.5 2.5z"/>'),
     table: I('<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1"/><path d="M1.8 6.3h12.4M1.8 9.8h12.4M6 2.8v10.4M10 2.8v10.4"/>'),
+    // a square with a circle beside it -- the shapes menu's own mark
+    shapes: I('<rect x="1.6" y="4.4" width="7.6" height="7.6" rx=".8"/><circle cx="11.4" cy="6.2" r="3.4"/>'),
     box: I('<rect x="2" y="3" width="12" height="10" rx="2.5"/><path d="M4.5 6.5h5"/>'),
     rule: I('<path d="M2 8h12"/>'),
     pagebreak: I('<path d="M2 8h12" stroke-dasharray="2 2"/><path d="M8 2v3.4M6.4 4 8 5.6 9.6 4M8 14v-3.4M6.4 12 8 10.4 9.6 12"/>'),
@@ -5562,6 +5566,10 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')"><span v-html="icons.indent"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')"><span v-html="icons.outdent"></span></button>
       <span class="sep"></span>
+      <!-- Three menus, not one. Everything used to hang off "Insert": the shapes,
+           the pieces of the document and the things fetched from elsewhere all in
+           one list of thirty. Shapes are shapes and brought-in things are brought
+           in, so each has its own button and each list is short enough to read. -->
       <span class="eb-pop">
         <button class="eb-tb text" :class="{ on: menu === 'insert' }" @mousedown.prevent @click="toggleMenu('insert')" :title="t('Insert')">
           <span v-html="icons.plus"></span><span class="lbl">{{ t('Insert') }}</span><span class="caret" v-html="icons.down"></span>
@@ -5572,28 +5580,43 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" :class="{ on: placing === 'textbox' }" @click="armPlace('textbox')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
           <button class="eb-menu-item" :class="{ on: placing === 'frame' }" @click="armPlace('frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
-          <div class="eb-menu-sep"></div>
-          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item" :class="{ on: placing === sh.kind }"
-            @click="armPlace(sh.kind)">
-            <span class="eb-shape-icon" v-html="sh.icon"></span>{{ sh.label }}</button>
-          <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
+          <button v-for="b in boxKinds" :key="b.variant" class="eb-menu-item" :class="{ on: placing === 'box:' + b.variant }"
+            @click="armPlace('box:' + b.variant)"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
-          <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
-          <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
-          <button class="eb-menu-item" @click="webOpen = true; menu = ''"><span v-html="icons.link"></span>{{ t('Bring in a web page…') }}</button>
+          <div class="eb-menu-sep"></div>
+          <button class="eb-menu-item" @click="openCols()"><span v-html="icons.columns"></span>{{ t('Columns…') }}</button>
+          <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
           <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
-          <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="openRuby()"><span v-html="icons.ruby"></span>{{ t('Reading over the word…') }}</button>
           <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
-          <button class="eb-menu-item" @click="openCols()"><span v-html="icons.columns"></span>{{ t('Columns…') }}</button>
-          <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
+          <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
+          <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
+        </div>
+      </span>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'shapes' }" @mousedown.prevent @click="toggleMenu('shapes')" :title="t('Shapes')">
+          <span v-html="icons.shapes"></span><span class="lbl">{{ t('Shapes') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'shapes'" @mousedown.prevent>
+          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item" :class="{ on: placing === sh.kind }"
+            @click="armPlace(sh.kind)">
+            <span class="eb-shape-icon" v-html="sh.icon"></span>{{ sh.label }}</button>
+        </div>
+      </span>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'bring' }" @mousedown.prevent @click="toggleMenu('bring')" :title="t('Bring in')">
+          <span v-html="icons.link"></span><span class="lbl">{{ t('Bring in') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'bring'" @mousedown.prevent>
+          <button class="eb-menu-item" @click="webOpen = true; menu = ''"><span v-html="icons.link"></span>{{ t('Bring in a web page…') }}</button>
           <div class="eb-menu-sep" v-if="anySource"></div>
           <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
             <span v-html="icons.link"></span>{{ sourceLabel(key) }}
           </button>
+          <div class="eb-menu-empty" v-if="!anySource">{{ t('Nothing to bring in: no app of ours is switched on.') }}</div>
         </div>
       </span>
       <button class="eb-tb" :class="{ on: !!brush }" @mousedown.prevent @click="useBrush" :title="brush ? t('Put this format on the selection') : t('Copy the format at the cursor')"><span v-html="icons.brush"></span></button>
@@ -7076,7 +7099,7 @@ ${insideObjects('.eb-paper.boxed')} {
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
-        placing: '', placeBox: null,
+        placing: '', placeBox: null, railWatch: null, railWatched: null, railPending: false,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -7412,7 +7435,10 @@ ${insideObjects('.eb-paper.boxed')} {
           { kind: 'arrow', label: this.t('Arrow'), icon: box('border-top:1.5px solid currentColor;height:0;align-self:center;position:relative') },
         ];
       },
-      boxes() {
+      /* Not "boxes": that name is already taken by the switch that shows the
+         bounding boxes, and a data field beats a computed one, so this list came
+         out empty and the boxes never appeared in the insert menu at all. */
+      boxKinds() {
         return [
           { variant: '', icon: '▢', label: this.t('Rounded box') },
           { variant: 'sq', icon: '▭', label: this.t('Square box') },
@@ -9477,6 +9503,61 @@ ${insideObjects('.eb-paper.boxed')} {
        * and having something appear in the middle of the writing is not how a
        * page is laid out.
        */
+      /**
+       * The rail wraps into as many columns as it takes to stand in the window
+       * without a scrollbar -- two on a tall screen, up to four on a short one.
+       * Four is the limit: past that the rail eats the width of the page.
+       */
+      fitRail() {
+        const rail = this.$el && this.$el.querySelector('.eb-rail');
+        if (!rail || !rail.offsetParent) { return; }
+        // The rail only exists once a document is open, so it is watched from
+        // here rather than from mounted(), where there is nothing to watch yet.
+        if (this.railWatch && this.railWatched !== rail) {
+          this.railWatch.disconnect();
+          this.railWatch.observe(rail, { childList: true, subtree: true });
+          this.railWatched = rail;
+        }
+        rail.classList.remove('tight');
+        // Two passes: widen to four columns first, and only put the buttons in a
+        // smaller size if four columns still will not stand in the window.
+        for (let pass = 0; pass < 2; pass += 1) {
+          for (let n = 2; n <= 4; n += 1) {
+            rail.style.setProperty('--rail-cols', String(n));
+            // reading the height forces the new width to be laid out first
+            if (rail.scrollHeight <= rail.clientHeight + 1) { return; }
+          }
+          if (pass === 0) { rail.classList.add('tight'); }
+        }
+      },
+      /**
+       * A menu opened from the rail is placed in the window's own coordinates:
+       * beside the rail so its scroll box cannot clip it, and lifted whenever it
+       * would hang below the foot of the window. A button near the bottom of the
+       * rail used to open a menu that was almost entirely off the screen.
+       */
+      fitMenu() {
+        const el = this.$el && this.$el.querySelector('.eb-rail .eb-menu');
+        if (!el) { return; }
+        const pop = el.closest('.eb-pop');
+        const rail = el.closest('.eb-rail');
+        if (!pop || !rail) { return; }
+        const btn = (pop.querySelector('button') || pop).getBoundingClientRect();
+        const railBox = rail.getBoundingClientRect();
+        const margin = 8;
+        el.style.maxHeight = Math.max(160, window.innerHeight - margin * 2) + 'px';
+        const box = el.getBoundingClientRect();
+        let left = railBox.right + 4;
+        if (left + box.width > window.innerWidth - margin) {
+          left = Math.max(margin, window.innerWidth - box.width - margin);
+        }
+        let top = btn.top;
+        if (top + box.height > window.innerHeight - margin) {
+          top = window.innerHeight - box.height - margin;
+        }
+        el.style.left = Math.round(Math.max(margin, left)) + 'px';
+        el.style.top = Math.round(Math.max(margin, top)) + 'px';
+      },
       armPlace(kind) {
         this.menu = '';
         this.placing = this.placing === kind ? '' : kind;
@@ -9539,8 +9620,14 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         let made = null;
         this.run(() => {
-          made = kind === 'textbox' ? insertTextBox(true)
-            : (kind === 'frame' ? insertFreeFrame() : insertShape(kind));
+          if (kind === 'textbox') { made = insertTextBox(true); return; }
+          if (kind === 'frame') { made = insertFreeFrame(); return; }
+          if (kind.slice(0, 4) === 'box:') {
+            const variant = kind.slice(4);
+            made = variant === 'note' ? insertNote() : insertBox(variant);
+            return;
+          }
+          made = insertShape(kind);
         });
         if (!made) { return; }
         setObjectFree(made, true);
@@ -10733,7 +10820,10 @@ ${insideObjects('.eb-paper.boxed')} {
       },
     },
     watch: {
-      'doc.id'(id) { if (id) { window.localStorage.setItem('eb-last-doc', String(id)); } },
+      'doc.id'(id) {
+        if (id) { window.localStorage.setItem('eb-last-doc', String(id)); }
+        this.$nextTick(() => this.fitRail());
+      },
       'doc.paper.fonts': { deep: true, handler() { this.applyDocFonts(); } },
       'doc.paper.font'() { this.applyDocFonts(); },
       'doc.paper.fontSize'() { this.touch(); this.$nextTick(() => this.repaginate()); },
@@ -10759,6 +10849,7 @@ ${insideObjects('.eb-paper.boxed')} {
       pasteObject(v) { window.localStorage.setItem('eb-paste-object', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
       review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
+      menu(v) { if (v) { this.$nextTick(() => this.fitMenu()); } },
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
@@ -10941,7 +11032,17 @@ ${insideObjects('.eb-paper.boxed')} {
         dragRange = null;
         dragObject = null;
       });
-      window.addEventListener('resize', () => { this.closeCtx(); this.measureWidth(); });
+      window.addEventListener('resize', () => {
+        this.closeCtx(); this.measureWidth(); this.fitRail(); this.fitMenu();
+      });
+      // The rail's contents change as things are selected -- the object's own bar
+      // appears and goes -- so its columns are counted again whenever they do.
+      this.railWatch = new MutationObserver(() => {
+        if (this.railPending) { return; }
+        this.railPending = true;
+        window.requestAnimationFrame(() => { this.railPending = false; this.fitRail(); });
+      });
+      this.fitRail();
       // A swipe in from the left edge opens the drawer, as a phone expects.
       let swipeFrom = null;
       document.addEventListener('touchstart', (e) => {

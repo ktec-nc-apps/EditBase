@@ -400,6 +400,7 @@
 }
 #editbase-root .eb-menu-item:hover { background: var(--surface-2); }
 .eb-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.eb-menu-empty { padding: 8px 10px; font-size: 12.5px; color: var(--muted); }
 .eb-swatch.none { background: repeating-linear-gradient(45deg, var(--surface-2) 0 4px, var(--border) 4px 8px); }
 
 /* ---------- desk, status bar, empty state ---------- */
@@ -872,25 +873,36 @@
    outside the part that scrolls -- inside it, it scrolled away with the paper. */
 .eb-workarea { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
 .eb-rail {
-  flex: 0 0 auto; width: 86px; overflow-y: auto; overflow-x: hidden;
+  flex: 0 0 auto; width: calc(var(--rail-cols, 2) * 38px + 10px); overflow-y: auto; overflow-x: hidden;
   display: flex; flex-wrap: wrap; align-content: flex-start; gap: 2px;
   padding: 6px 5px; background: var(--surface); border-right: 1px solid var(--border);
 }
 .eb-rail > * { flex: 0 0 auto; }
 #editbase-root .eb-rail .eb-tb { min-width: 36px; width: 36px; height: 34px; padding: 0; }
 /* Anything wider than a button takes the whole rail: menus, the object's own bar. */
-#editbase-root .eb-rail .eb-pop,
 #editbase-root .eb-rail .eb-objgrp,
 #editbase-root .eb-rail .eb-num { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 2px; }
-#editbase-root .eb-rail .eb-pop > .eb-tb.text { width: auto; flex: 1 1 100%; }
-#editbase-root .eb-rail .eb-tb.text .lbl { display: none; }
-.eb-rail .sep { flex: 1 1 100%; height: 1px; background: var(--border); margin: 4px 2px; }
+/* A menu button stands in the grid like any other: it shows only its icon here,
+   so giving it a row of its own wasted a row apiece. */
+#editbase-root .eb-rail .eb-pop { flex: 0 0 auto; }
+#editbase-root .eb-rail .eb-pop > .eb-tb.text { width: 36px; min-width: 36px; flex: 0 0 auto; padding: 0; }
+#editbase-root .eb-rail .eb-tb.text .lbl,
+#editbase-root .eb-rail .eb-tb.text .caret { display: none; }
+.eb-rail .sep { flex: 1 1 100%; height: 1px; background: var(--border); margin: 2px 2px; }
+/* Four columns is the limit; when even four will not stand in a short window the
+   buttons themselves come in a size, rather than the rail growing a scrollbar. */
+.eb-rail.tight { width: calc(var(--rail-cols, 2) * 34px + 10px); }
+#editbase-root .eb-rail.tight .eb-tb,
+#editbase-root .eb-rail.tight .eb-pop > .eb-tb.text { min-width: 32px; width: 32px; height: 30px; }
 .eb-rail .rail-shelf {
   flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 2px;
-  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border);
+  margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border);
 }
 /* The menus a rail button opens must not be trapped inside an 86px column. */
-#editbase-root .eb-rail .eb-menu { left: 0; min-width: 220px; z-index: 40; }
+/* Fixed, not absolute: an absolute menu is clipped by the rail's scroll box and
+   runs off the foot of the window when the button it belongs to is near the
+   bottom. fitMenu() puts it beside the rail and keeps it inside the window. */
+#editbase-root .eb-rail .eb-menu { position: fixed; left: 0; top: 0; min-width: 220px; z-index: 120; }
 /* The rail is the first thing to go when there is no width for it; everything on
    it is in the menus as well. */
 @media (max-width: 900px) {
