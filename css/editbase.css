@@ -995,3 +995,11 @@
 .eb-preview .pg { cursor: grab; }
 .eb-preview .pg.dragging { opacity: .45; }
 .eb-preview .pg.over .sheet { outline: 2px dashed var(--primary); }
+
+/* Something has been chosen from the shelf and is waiting to be drawn. */
+#editbase-root .eb-paper.placing, #editbase-root .eb-paper.placing * { cursor: crosshair; }
+.eb-placeband {
+  position: absolute; z-index: 22; pointer-events: none;
+  border: 1.5px dashed var(--primary); background: rgba(37, 99, 235, .10);
+}
+#editbase-root .eb-menu-item.on, #editbase-root .eb-rail .eb-tb.on { background: var(--primary); color: #fff; }

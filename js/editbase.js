@@ -5570,11 +5570,11 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
           <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
-          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'textbox')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
-          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
+          <button class="eb-menu-item" :class="{ on: placing === 'textbox' }" @click="armPlace('textbox')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
+          <button class="eb-menu-item" :class="{ on: placing === 'frame' }" @click="armPlace('frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
           <div class="eb-menu-sep"></div>
-          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item"
-            @pointerdown.prevent="shapeGrab($event, sh.kind)">
+          <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item" :class="{ on: placing === sh.kind }"
+            @click="armPlace(sh.kind)">
             <span class="eb-shape-icon" v-html="sh.icon"></span>{{ sh.label }}</button>
           <button v-for="b in boxes" :key="b.variant" class="eb-menu-item" @click="addBox(b.variant); menu = ''"><span v-html="icons.box"></span>{{ b.label }}</button>
           <div class="eb-menu-sep"></div>
@@ -5622,7 +5622,7 @@ ${insideObjects('.eb-paper.boxed')} {
 
       <div class="rail-shelf" v-if="palette">
         <button v-for="it in paletteItems" :key="it.kind" class="eb-tb"
-          @pointerdown.prevent="shapeGrab($event, it.kind)" :title="it.label">
+          :class="{ on: placing === it.kind }" @click="armPlace(it.kind)" :title="it.label">
           <span v-html="it.icon"></span>
         </button>
       </div>
@@ -5652,7 +5652,9 @@ ${insideObjects('.eb-paper.boxed')} {
             </div>
           </div>
         </div>
-        <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow }]"
+        <div class="eb-placeband" v-if="placeBox"
+          :style="{ left: placeBox.x + 'px', top: placeBox.y + 'px', width: placeBox.w + 'px', height: placeBox.h + 'px' }"></div>
+        <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow, placing: !!placing }]"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
         <!-- The line a frame has just snapped to, drawn while it is being dragged
@@ -7074,6 +7076,7 @@ ${insideObjects('.eb-paper.boxed')} {
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
+        placing: '', placeBox: null,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -8560,6 +8563,8 @@ ${insideObjects('.eb-paper.boxed')} {
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
         if (frameDrag) { return; }
+        // The hand is armed with something to put down: this press draws it.
+        if (this.placing) { e.preventDefault(); this.placeStart(e); return; }
         const at = objectAt(e.target) || thinObjectNear(e.clientX, e.clientY);
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
@@ -9465,6 +9470,95 @@ ${insideObjects('.eb-paper.boxed')} {
        * Released on the page, the shape is put down there. Released without
        * moving, it is put down where the caret is, so a click still works.
        */
+      /**
+       * Choosing something from the shelf or the menu does not put it anywhere.
+       * It arms the hand: the pointer becomes a cross, and the next drag on the
+       * paper says where the thing goes and how big it is. Pressing a menu item
+       * and having something appear in the middle of the writing is not how a
+       * page is laid out.
+       */
+      armPlace(kind) {
+        this.menu = '';
+        this.placing = this.placing === kind ? '' : kind;
+        this.placeBox = null;
+      },
+      placeStart(e) {
+        if (!this.placing) { return false; }
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        if (!wrap) { return false; }
+        const b = wrap.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const from = { x: (e.clientX - b.left) / z, y: (e.clientY - b.top) / z };
+        this.placeBox = { x: from.x, y: from.y, w: 0, h: 0 };
+        const move = (ev) => {
+          const x = (ev.clientX - b.left) / z;
+          const y = (ev.clientY - b.top) / z;
+          this.placeBox = {
+            x: Math.min(from.x, x), y: Math.min(from.y, y),
+            w: Math.abs(x - from.x), h: Math.abs(y - from.y),
+          };
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          const box = this.placeBox;
+          const kind = this.placing;
+          this.placeBox = null;
+          this.placing = '';
+          if (box) { this.placeHere(kind, box); }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        return true;
+      },
+      /** Put the chosen thing down in the rectangle that was just drawn. */
+      placeHere(kind, box) {
+        const c = canvas();
+        if (!c || !kind) { return; }
+        const wrap = this.$el.querySelector('.eb-paperwrap');
+        const z = this.frameZoom() || 1;
+        const mmW = Math.max(12, Math.round(box.w * MM * 10) / 10);
+        const mmH = Math.max(8, Math.round(box.h * MM * 10) / 10);
+        // Where the caret goes first, so the thing is anchored to the line it was
+        // drawn over rather than to the top of the document.
+        const at = caretFromPoint(
+          wrap.getBoundingClientRect().left + (box.x + 2) * z,
+          wrap.getBoundingClientRect().top + (box.y + 2) * z);
+        if (at) { selectRange(at); }
+        if (kind === 'image') {
+          this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
+            y: wrap.getBoundingClientRect().top + box.y * z };
+          this.openPicker();
+          return;
+        }
+        if (kind === 'table') {
+          this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
+            y: wrap.getBoundingClientRect().top + box.y * z };
+          this.tableOpen = true;
+          return;
+        }
+        let made = null;
+        this.run(() => {
+          made = kind === 'textbox' ? insertTextBox(true)
+            : (kind === 'frame' ? insertFreeFrame() : insertShape(kind));
+        });
+        if (!made) { return; }
+        setObjectFree(made, true);
+        made.style.width = mmW + 'mm';
+        if (made.style.height) { made.style.height = mmH + 'mm'; } else { made.style.minHeight = mmH + 'mm'; }
+        this.$nextTick(() => {
+          if (!made.parentNode) { return; }
+          this.moveFreeTo(made,
+            wrap.getBoundingClientRect().left + box.x * z,
+            wrap.getBoundingClientRect().top + box.y * z);
+          this.keepOnPaper(made);
+          frameEl = made;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.settleFrame();
+        });
+      },
       shapeGrab(e, kind) {
         const ghost = document.createElement('div');
         ghost.className = 'eb-dragghost';
@@ -10529,6 +10623,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // so the one that started it is remembered here. Shift is what says "into
         // the writing, as plain text", as it does everywhere else.
         if (meta && (e.key === 'v' || e.key === 'V')) { pastePlain = !!e.shiftKey; }
+        if (e.key === 'Escape' && this.placing) { this.placing = ''; this.placeBox = null; return undefined; }
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
         // Arrow keys walk a parked frame about the page: a millimetre a press, five
         // with Shift, a fifth with Alt. Anywhere else they belong to the caret.
