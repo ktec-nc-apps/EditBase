@@ -140,7 +140,14 @@
 
 /* ---------- main column ---------- */
 .eb-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.eb-topbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+/* The title, what is done to the document, and the tools that need width: one
+   row on a wide screen, and it folds into two when there is not room for one. */
+.eb-topbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.eb-topbar .title-input { flex: 1 1 180px; }
+.eb-topbar .headtools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .eb-topbar .title-input {
   flex: 1 1 auto; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text);
   font-size: 16px; font-weight: 700; padding: 6px 8px; border-radius: 8px;
@@ -265,7 +272,10 @@
   position: absolute; top: 0; left: 0; bottom: 0; z-index: 60; height: auto;
   width: min(86vw, var(--sidebar-w)); box-shadow: var(--shadow);
 }
-.eb-shell.narrow .eb-side.hidden { display: none; }
+/* The button by the title hides the list of documents. It only ever worked on a
+   narrow screen, because this rule was written for one: on a wide screen the
+   button changed a flag that nothing was reading, and pressing it did nothing. */
+.eb-side.hidden { display: none; }
 .eb-shell.narrow .eb-backdrop { position: absolute; inset: 0; z-index: 55; background: rgba(15, 23, 42, .45); }
 .eb-shell.narrow .eb-side .brand { padding: 14px 12px 10px; }
 #editbase-root .eb-shell.narrow .eb-side .brand .side-close { margin-left: auto; }
@@ -842,3 +852,39 @@
 }
 :root[data-theme=dark] .eb-newbuild, body.theme--dark .eb-newbuild { background: #4a3a10; color: #ffe6a8; border-bottom-color: #6b5520; }
 .eb-newbuild span { flex: 1 1 260px; }
+
+/* ---------- the work area: a rail down the left, the paper beside it ----------
+   A wide screen has room at the sides and none to spare at the top, so the tools
+   stand in two columns down the left and the page keeps its height. The rail is
+   outside the part that scrolls -- inside it, it scrolled away with the paper. */
+.eb-workarea { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
+.eb-rail {
+  flex: 0 0 auto; width: 86px; overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 2px;
+  padding: 6px 5px; background: var(--surface); border-right: 1px solid var(--border);
+}
+.eb-rail > * { flex: 0 0 auto; }
+#editbase-root .eb-rail .eb-tb { min-width: 36px; width: 36px; height: 34px; padding: 0; }
+/* Anything wider than a button takes the whole rail: menus, the object's own bar. */
+#editbase-root .eb-rail .eb-pop,
+#editbase-root .eb-rail .eb-objgrp,
+#editbase-root .eb-rail .eb-num { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 2px; }
+#editbase-root .eb-rail .eb-pop > .eb-tb.text { width: auto; flex: 1 1 100%; }
+#editbase-root .eb-rail .eb-tb.text .lbl { display: none; }
+.eb-rail .sep { flex: 1 1 100%; height: 1px; background: var(--border); margin: 4px 2px; }
+.eb-rail .rail-shelf {
+  flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 2px;
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border);
+}
+/* The menus a rail button opens must not be trapped inside an 86px column. */
+#editbase-root .eb-rail .eb-menu { left: 0; min-width: 220px; z-index: 40; }
+/* The rail is the first thing to go when there is no width for it; everything on
+   it is in the menus as well. */
+@media (max-width: 900px) {
+  .eb-rail { display: none; }
+}
+@media print {
+  .eb-workarea { display: block !important; }
+  .eb-rail { display: none !important; }
+}
+.eb-toolbar .grow { flex: 1 1 auto; }

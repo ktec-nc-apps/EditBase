@@ -5267,38 +5267,10 @@ ${insideObjects('.eb-paper.boxed')} {
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
       <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
       <button class="eb-btn" @click="printDoc" :disabled="!doc.id">🖨 <span class="lbl">{{ t('Print / PDF') }}</span></button>
+      <button class="eb-btn ghost" @click="paperOpen = true" :disabled="!doc.id" :title="t('Paper setup')"><span v-html="icons.paper"></span></button>
+      <button class="eb-btn ghost" @click="showSource" :disabled="!doc.id" :title="t('View the HTML')">&lt;/&gt;</button>
       <button class="eb-btn ghost" @click="menuOpen = !menuOpen" :title="t('More')">⋯</button>
-      <div v-if="menuOpen" class="eb-modal-back" @click="menuOpen = false">
-        <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
-          <h3>{{ doc.title || t('Untitled document') }}</h3>
-          <div class="body" style="display:flex;flex-direction:column;gap:6px;padding-bottom:16px">
-            <template v-if="narrow">
-              <button class="eb-btn wide primary" @click="newDoc(); menuOpen = false">＋ {{ t('New document') }}</button>
-              <div class="eb-menu-docs" v-if="docs.length">
-                <button v-for="d in docs" :key="d.id" class="eb-btn wide ghost" :class="{ on: d.id === doc.id }" @click="openDoc(d.id); menuOpen = false">{{ d.title }}</button>
-              </div>
-              <div class="eb-menu-sep"></div>
-            </template>
-            <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
-            <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
-            <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
-            <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
-            <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
-            <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- The page is running code the server has since replaced. Saying so is the
-         difference between "it is not fixed" and "reload and it is". -->
-    <div class="eb-newbuild" v-if="newBuild">
-      <span>{{ t('A newer EditBase is on the server. This page is still running the old one.') }}</span>
-      <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
-      <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
-    </div>
-
-    <div class="eb-toolbar" v-if="doc.id">
+      <span class="headtools" v-if="doc.id">
       <select class="tb-style" :value="fmt.block || 'P'" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
         <option value="P">{{ t('Body text') }}</option>
         <option value="H1">{{ t('Heading 1') }}</option>
@@ -5340,6 +5312,126 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" @click="setSize(''); menu = ''">{{ t('As the paragraph style says') }}</button>
         </div>
       </span>
+      <span class="grow"></span>
+      <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
+      <span class="eb-num" :title="t('Zoom')" v-if="!flow">
+        <span class="cap">{{ t('Zoom') }}</span>
+        <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
+        <button class="eb-tb text zoomv" @mousedown.prevent @click="zoomSetByHand = true; zoom = 100">{{ zoom }}%</button>
+        <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
+      </span>
+      </span>
+      <div v-if="menuOpen" class="eb-modal-back" @click="menuOpen = false">
+        <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
+          <h3>{{ doc.title || t('Untitled document') }}</h3>
+          <div class="body" style="display:flex;flex-direction:column;gap:6px;padding-bottom:16px">
+            <template v-if="narrow">
+              <button class="eb-btn wide primary" @click="newDoc(); menuOpen = false">＋ {{ t('New document') }}</button>
+              <div class="eb-menu-docs" v-if="docs.length">
+                <button v-for="d in docs" :key="d.id" class="eb-btn wide ghost" :class="{ on: d.id === doc.id }" @click="openDoc(d.id); menuOpen = false">{{ d.title }}</button>
+              </div>
+              <div class="eb-menu-sep"></div>
+            </template>
+            <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
+            <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
+            <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
+            <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
+            <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
+            <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- The page is running code the server has since replaced. Saying so is the
+         difference between "it is not fixed" and "reload and it is". -->
+    <div class="eb-newbuild" v-if="newBuild">
+      <span>{{ t('A newer EditBase is on the server. This page is still running the old one.') }}</span>
+      <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
+      <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
+    </div>
+
+    <div class="eb-find" v-if="doc.id && find.open">
+      <span class="ic" v-html="icons.search"></span>
+      <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
+      <span class="count">{{ find.hits.length ? (find.index + 1) + ' / ' + find.hits.length : t('none') }}</span>
+      <button class="eb-tb" @click="findNext(-1)" :title="t('Previous')">↑</button>
+      <button class="eb-tb" @click="findNext(1)" :title="t('Next')">↓</button>
+      <label class="opt"><input type="checkbox" v-model="find.caseSensitive" @change="runFind()"> {{ t('Match case') }}</label>
+      <span class="sep"></span>
+      <input type="text" v-model="find.replace" :placeholder="t('Replace with')" @keydown.enter.prevent="replaceOne">
+      <button class="eb-btn" @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
+      <button class="eb-btn" @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
+      <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && (review || changes)">
+      <span class="grp">{{ t('Review') }}</span>
+      <button class="eb-tb text" :class="{ on: review }" @mousedown.prevent @click="review = !review" :title="t('Record what is changed from now on')">
+        <span v-html="icons.review"></span><span class="lbl">{{ review ? t('Recording') : t('Not recording') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" :class="{ on: !showChanges }" @mousedown.prevent @click="showChanges = !showChanges">
+        <span class="lbl">{{ showChanges ? t('Showing the marks') : t('As it would read') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptOne')" :disabled="!fmt.change">{{ t('Keep this one') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectOne')" :disabled="!fmt.change">{{ t('Undo this one') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
+      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
+      <span class="grp">{{ t('Picture') }}</span>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-s' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-s')">{{ t('Small') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="openCrop" :title="t('Crop…')"><span v-html="icons.crop"></span></button>
+      <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
+      <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
+      <span class="grp">{{ t('Table') }}</span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowBelow')" :title="t('Insert row below')"><span v-html="icons.rowBelow"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colLeft')" :title="t('Insert column left')"><span v-html="icons.colLeft"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colRight')" :title="t('Insert column right')"><span v-html="icons.colRight"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowDel')" :title="t('Delete row')"><span v-html="icons.rowDel"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colDel')" :title="t('Delete column')"><span v-html="icons.colDel"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" :class="{ on: fmt.tableHeader }" @mousedown.prevent @click="tableCmd('header')" :title="t('First row is a header')"><span v-html="icons.header"></span></button>
+      <select :value="fmt.tableVariant" @change="tableCmd('variant', $event.target.value)" :title="t('Style')">
+        <option value="">{{ t('All borders') }}</option>
+        <option value="rows">{{ t('Horizontal lines only') }}</option>
+        <option value="borderless">{{ t('No borders') }}</option>
+      </select>
+      <span class="sep"></span>
+      <label class="eb-tb" :title="t('Cell colour')">
+        <span class="colour-bar" :style="{ background: cellFill || 'transparent' }"></span>
+        <span v-html="icons.highlight"></span>
+        <input type="color" :value="cellFill || '#eef1f6'" @input="tableCmd('fill', $event.target.value)">
+      </label>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('fill', '')" :title="t('No cell colour')"><span v-html="icons.nocolour"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="openCellBorder" :title="t('Rule round the cells…')"><span v-html="icons.cellBorder"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
+      <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
+    </div>
+
+    <!-- Down the left, in two columns, and outside the part that scrolls: on a
+         wide screen the room is at the sides, and the page wants the height.
+         The shelf of things to put on the page is at the foot of it. -->
+    <div class="eb-workarea">
+    <div class="eb-rail" v-if="doc.id">
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: fmt.bold }" @mousedown.prevent @click="inline('bold')" :title="t('Bold') + ' (Ctrl+B)'"><span class="b">B</span></button>
       <button class="eb-tb" :class="{ on: fmt.italic }" @mousedown.prevent @click="inline('italic')" :title="t('Italic') + ' (Ctrl+I)'"><span class="i">I</span></button>
@@ -5457,100 +5549,19 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
       <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
       </span>
-      <span class="eb-num" :title="t('Zoom')" v-if="!flow">
-        <span class="cap">{{ t('Zoom') }}</span>
-        <button class="eb-tb" @mousedown.prevent @click="stepZoom(-10)" v-html="icons.minus"></button>
-        <button class="eb-tb text zoomv" @mousedown.prevent @click="zoomSetByHand = true; zoom = 100">{{ zoom }}%</button>
-        <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
-      </span>
-    </div>
 
-    <div class="eb-find" v-if="doc.id && find.open">
-      <span class="ic" v-html="icons.search"></span>
-      <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
-      <span class="count">{{ find.hits.length ? (find.index + 1) + ' / ' + find.hits.length : t('none') }}</span>
-      <button class="eb-tb" @click="findNext(-1)" :title="t('Previous')">↑</button>
-      <button class="eb-tb" @click="findNext(1)" :title="t('Next')">↓</button>
-      <label class="opt"><input type="checkbox" v-model="find.caseSensitive" @change="runFind()"> {{ t('Match case') }}</label>
-      <span class="sep"></span>
-      <input type="text" v-model="find.replace" :placeholder="t('Replace with')" @keydown.enter.prevent="replaceOne">
-      <button class="eb-btn" @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
-      <button class="eb-btn" @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
-      <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && (review || changes)">
-      <span class="grp">{{ t('Review') }}</span>
-      <button class="eb-tb text" :class="{ on: review }" @mousedown.prevent @click="review = !review" :title="t('Record what is changed from now on')">
-        <span v-html="icons.review"></span><span class="lbl">{{ review ? t('Recording') : t('Not recording') }}</span>
-      </button>
-      <span class="sep"></span>
-      <button class="eb-tb text" :class="{ on: !showChanges }" @mousedown.prevent @click="showChanges = !showChanges">
-        <span class="lbl">{{ showChanges ? t('Showing the marks') : t('As it would read') }}</span>
-      </button>
-      <span class="sep"></span>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptOne')" :disabled="!fmt.change">{{ t('Keep this one') }}</button>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectOne')" :disabled="!fmt.change">{{ t('Undo this one') }}</button>
-      <span class="sep"></span>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
-      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
-      <span class="grp">{{ t('Picture') }}</span>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-s' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-s')">{{ t('Small') }}</button>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
-      <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="openCrop" :title="t('Crop…')"><span v-html="icons.crop"></span></button>
-      <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
-      <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
-      <span class="grp">{{ t('Table') }}</span>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowBelow')" :title="t('Insert row below')"><span v-html="icons.rowBelow"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colLeft')" :title="t('Insert column left')"><span v-html="icons.colLeft"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colRight')" :title="t('Insert column right')"><span v-html="icons.colRight"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowDel')" :title="t('Delete row')"><span v-html="icons.rowDel"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colDel')" :title="t('Delete column')"><span v-html="icons.colDel"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: fmt.tableHeader }" @mousedown.prevent @click="tableCmd('header')" :title="t('First row is a header')"><span v-html="icons.header"></span></button>
-      <select :value="fmt.tableVariant" @change="tableCmd('variant', $event.target.value)" :title="t('Style')">
-        <option value="">{{ t('All borders') }}</option>
-        <option value="rows">{{ t('Horizontal lines only') }}</option>
-        <option value="borderless">{{ t('No borders') }}</option>
-      </select>
-      <span class="sep"></span>
-      <label class="eb-tb" :title="t('Cell colour')">
-        <span class="colour-bar" :style="{ background: cellFill || 'transparent' }"></span>
-        <span v-html="icons.highlight"></span>
-        <input type="color" :value="cellFill || '#eef1f6'" @input="tableCmd('fill', $event.target.value)">
-      </label>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('fill', '')" :title="t('No cell colour')"><span v-html="icons.nocolour"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="openCellBorder" :title="t('Rule round the cells…')"><span v-html="icons.cellBorder"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
-      <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
-    </div>
-
-    <div class="eb-desk" :class="{ empty: !doc.id, withpal: palette && doc.id }">
-      <!-- The palette. A page is laid out by taking things off a shelf and putting
-           them on the paper, so the shelf stands beside the paper rather than
-           hiding in a menu. Press one to put it in the flow of the text; drag one
-           on to the page to put it down where it lands. -->
-      <div class="eb-palette" v-if="doc.id && palette">
-        <button v-for="it in paletteItems" :key="it.kind" class="pal"
+      <div class="rail-shelf" v-if="palette">
+        <button v-for="it in paletteItems" :key="it.kind" class="eb-tb"
           @pointerdown.prevent="shapeGrab($event, it.kind)" :title="it.label">
           <span v-html="it.icon"></span>
         </button>
       </div>
+    </div>
+    <div class="eb-desk" :class="{ empty: !doc.id }">
+      <!-- The palette. A page is laid out by taking things off a shelf and putting
+           them on the paper, so the shelf stands beside the paper rather than
+           hiding in a menu. Press one to put it in the flow of the text; drag one
+           on to the page to put it down where it lands. -->
       <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, grid: grid && !flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
         <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
           <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
@@ -5610,6 +5621,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <p>{{ t('No document is open.') }}</p>
         <button class="eb-btn primary" @click="newDoc">{{ t('New document') }}</button>
       </div>
+    </div>
     </div>
 
     <div class="eb-status" v-if="doc.id">
