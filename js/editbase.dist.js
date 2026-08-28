@@ -14239,7 +14239,16 @@ return function render(_ctx, _cache) {
         dropX = e.clientX;
         dropY = e.clientY;
         const point = caretFromPoint(e.clientX, e.clientY);
-        const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+        // A picture dragged inside the document is handed back to us by the
+        // browser as a FILE -- Chromium makes one out of the image being dragged.
+        // Taken at face value that is a new picture arriving from outside, and it
+        // was inserted as one: the original stayed where it was and a copy landed
+        // where it was dropped. Drag and drop became copy and paste.
+        //
+        // If the drag started in this document, it is our own object coming back
+        // and there is no file to speak of, whatever the browser says.
+        const fromHere = !!(dragObject || dragRange);
+        const files = (!fromHere && e.dataTransfer) ? Array.from(e.dataTransfer.files || []) : [];
         if (files.some((f) => /^image\//.test(f.type))) {
           if (point) { selectRange(point); }
           dragRange = null;
@@ -14735,6 +14744,10 @@ return function render(_ctx, _cache) {
       // Everywhere else in the app. Something dragged out of the document and
       // dropped on the toolbar, the shelf, the margin or the grey around the
       // paper must come to nothing -- not to a copy left wherever it landed.
+      appRoot.addEventListener('dragstart', (e) => {
+        if (dragObject || dragRange) { return; }
+        this.onDragStart(e);
+      });
       appRoot.addEventListener('dragover', (e) => {
         if (!dragObject && !dragRange) { return; }
         if (inCanvas(e.target)) { return; }
@@ -14896,9 +14909,11 @@ return function render(_ctx, _cache) {
     // a copy of it and leave the original standing.
     if (dragObject) {
       const at = point && inCanvas(point.startContainer) ? point.startContainer : null;
-      if (at && dragObject.contains(at)) { return false; }
+      const say = (why) => { window.__eb_lastDrop = { refused: why }; return false; };
+      if (at && dragObject.contains(at)) { return say('dropped on itself'); }
       const ref = (at ? blockUnder(at) : null) || blockAtPointer();
-      if (!ref || ref === dragObject || dragObject.contains(ref)) { return false; }
+      if (!ref) { return say('no block under the pointer'); }
+      if (ref === dragObject || dragObject.contains(ref)) { return say('that block is inside it'); }
       const r = ref.getBoundingClientRect ? ref.getBoundingClientRect() : null;
       const after = !!(r && dropY != null && dropY > r.top + r.height / 2);
       // What the drop decided, so a check can hold the result against it.
