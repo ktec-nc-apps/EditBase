@@ -5167,6 +5167,14 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </div>
 
+    <!-- The page is running code the server has since replaced. Saying so is the
+         difference between "it is not fixed" and "reload and it is". -->
+    <div class="eb-newbuild" v-if="newBuild">
+      <span>{{ t('A newer EditBase is on the server. This page is still running the old one.') }}</span>
+      <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
+      <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
+    </div>
+
     <div class="eb-toolbar" v-if="doc.id">
       <select class="tb-style" :value="fmt.block || 'P'" @change="setBlock($event.target.value)" :title="t('Paragraph style')">
         <option value="P">{{ t('Body text') }}</option>
@@ -6776,6 +6784,7 @@ ${insideObjects('.eb-paper.boxed')} {
         runOpen: false,
         brush: null,
         toast: '',
+        build: '', newBuild: false,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -9224,6 +9233,28 @@ ${insideObjects('.eb-paper.boxed')} {
        * and it is the menu that comes up, not the properties dialogue, which is
        * one item within it.
        */
+      /**
+       * A page left open goes on running the code it was loaded with. Someone can
+       * be shown a fault that was mended an hour ago, report it again, and be
+       * told it is fixed -- and both of them are right. The app asks the server
+       * what it is serving, whenever the window is looked at again, and says so.
+       */
+      watchForNewBuild() {
+        const check = async () => {
+          if (!this.build || this.newBuild) { return; }
+          try {
+            const s = await api('settings');
+            if (s && s.build && s.build !== this.build) { this.newBuild = true; }
+          } catch (e) { /* offline, or the server is busy: ask again later */ }
+        };
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) { check(); } });
+        window.addEventListener('focus', check);
+        window.setInterval(check, 5 * 60 * 1000);
+      },
+      async reloadForNewBuild() {
+        if (this.dirty && this.doc.id) { try { await this.save(); } catch (e) { /* reload anyway */ } }
+        window.location.reload();
+      },
       /** The chosen words, and what is written on them. */
       openRunProps() {
         const range = getRange();
@@ -10045,7 +10076,9 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.language = s.language || 'auto';
           this.settings.languages = s.languages || [];
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
+          this.build = s.build || '';
         } catch (e) { /* the app still works with the defaults */ }
+        this.watchForNewBuild();
         this.applyTheme(this.settings.theme);
         if (this.settings.language && this.settings.language !== 'auto') { await this.applyLanguage(this.settings.language); }
         await this.loadDocs();
