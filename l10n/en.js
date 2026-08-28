@@ -637,6 +637,9 @@ OC.L10N.register(
     "Bring in": "Bring in",
     "Nothing to bring in: no app of ours is switched on.": "Nothing to bring in: no app of ours is switched on.",
     "Page layout": "Page layout",
-    "Marks and notes": "Marks and notes"
+    "Marks and notes": "Marks and notes",
+    "Make the pictures lighter": "Make the pictures lighter",
+    "The pictures are already as light as they go.": "The pictures are already as light as they go.",
+    "The pictures are {kb}KB lighter.": "The pictures are {kb}KB lighter."
 },
 "nplurals=2; plural=(n != 1);");

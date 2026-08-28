@@ -637,6 +637,9 @@ OC.L10N.register(
     "Bring in": "差し込み",
     "Nothing to bring in: no app of ours is switched on.": "差し込めるものがありません。対象のアプリが有効になっていません。",
     "Page layout": "ページ構成",
-    "Marks and notes": "記号・注記"
+    "Marks and notes": "記号・注記",
+    "Make the pictures lighter": "画像を軽くする",
+    "The pictures are already as light as they go.": "画像はこれ以上軽くなりません。",
+    "The pictures are {kb}KB lighter.": "画像が {kb}KB 軽くなりました。"
 },
 "nplurals=1; plural=0;");

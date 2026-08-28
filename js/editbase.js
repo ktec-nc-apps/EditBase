@@ -4187,6 +4187,29 @@ ${insideObjects('.eb-paper.boxed')} {
       });
     });
   }
+  /**
+   * A picture is fetched when the reader reaches it, not all at once on opening.
+   * A page brought in from the web can carry thirty pictures over twenty sheets
+   * while only the first sheet is on screen; asking for all thirty at once is
+   * what made opening such a document slow. The browser does the deciding -- it
+   * is a plain HTML attribute -- so the saved file opens quickly too.
+   *
+   * Not on a picture carried in the file itself: there is nothing to fetch, and
+   * putting it off only delays the drawing.
+   */
+  function lazyPictures(root) {
+    if (!root) { return; }
+    Array.from(root.querySelectorAll('img')).forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      if (src.slice(0, 5) === 'data:') {
+        img.removeAttribute('loading');
+        return;
+      }
+      img.setAttribute('loading', 'lazy');
+      img.setAttribute('decoding', 'async');
+    });
+  }
+
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
@@ -4196,6 +4219,7 @@ ${insideObjects('.eb-paper.boxed')} {
     tidyMarks();
     renumberNotes();
     Array.from(c.querySelectorAll('table.eb-table')).forEach(headerGroup);
+    lazyPictures(c);
     let stray = null;
     Array.from(c.childNodes).forEach((n) => {
       if (n.nodeType === 3) {
@@ -5120,13 +5144,29 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** Is any pixel less than solid? A picture with holes in it may not be JPEG. */
-  function hasTransparency(ctx, w, h) {
+  /**
+   * How much of a picture is see-through, as a share of it.
+   *
+   * Counted, not merely spotted. A PNG may name one colour as transparent -- one
+   * of the owner's photographs named the grey 192,192,192 -- and a photograph has
+   * a handful of pixels of any colour you care to name. A single accidental one
+   * was enough to call the picture transparent and keep it as a 912KB PNG that is
+   * 131KB as a JPEG. A picture that really wants its transparency has far more of
+   * it than this: a logo on nothing is a third see-through or more.
+   */
+  function transparentShare(ctx, w, h) {
     try {
       const data = ctx.getImageData(0, 0, w, h).data;
-      for (let i = 3; i < data.length; i += 4) { if (data[i] !== 255) { return true; } }
-      return false;
-    } catch (e) { return true; }   // tainted or refused: assume it has, and keep PNG
+      let clear = 0;
+      let seen = 0;
+      for (let i = 3; i < data.length; i += 4) {
+        seen += 1;
+        if (data[i] < 250) { clear += 1; }
+      }
+      return seen ? clear / seen : 0;
+    } catch (e) { return 1; }   // tainted or refused: assume it has, and keep PNG
   }
+  function hasTransparency(ctx, w, h) { return transparentShare(ctx, w, h) > 0.005; }
   /**
    * A picture goes into the document itself, so its weight is the document's
    * weight. Two things are done to it: it is brought down to a size a printed
@@ -5139,6 +5179,51 @@ ${insideObjects('.eb-paper.boxed')} {
    * JPEG is only taken when it is dramatically smaller, as it is for photographs
    * and is not for a screenshot of a spreadsheet.
    */
+  /** How many different colours a picture holds, sampled on a grid. */
+  function colourCount(ctx, w, h) {
+    const seen = new Set();
+    const step = Math.max(1, Math.round(Math.sqrt((w * h) / 4096)));
+    let data;
+    try { data = ctx.getImageData(0, 0, w, h).data; } catch (e) { return 0; }
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const i = (y * w + x) * 4;
+        seen.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+        if (seen.size > 20000) { return seen.size; }
+      }
+    }
+    return seen.size;
+  }
+
+  /**
+   * Every picture carried in the document, made as light as it can be without
+   * being seen to change. Pictures that arrive as files go through shrinkImage on
+   * the way in, but one pasted inside a piece of HTML went straight through --
+   * which is how a document came to be 1.2MB of which 98 per cent was one photo.
+   * Returns how many characters were saved.
+   */
+  async function shrinkPicturesIn(root, minChars) {
+    if (!root) { return 0; }
+    const floor = minChars || 120000;
+    const heavy = Array.from(root.querySelectorAll('img')).filter((img) => {
+      const src = img.getAttribute('src') || '';
+      return /^data:image\/(png|jpeg|jpg|webp|bmp)/i.test(src) && src.length > floor;
+    });
+    let saved = 0;
+    for (const img of heavy) {
+      const src = img.getAttribute('src');
+      const mime = (/^data:([^;,]+)/.exec(src) || [])[1] || '';
+      try {
+        const url = await shrinkImage(src, mime);
+        if (url && url.length < src.length) {
+          saved += src.length - url.length;
+          img.setAttribute('src', url);
+        }
+      } catch (e) { /* the picture stays as it came */ }
+    }
+    return saved;
+  }
+
   async function shrinkImage(dataUrl, mime, maxEdge) {
     const limit = maxEdge || 2200;
     if (mime === 'image/svg+xml' || mime === 'image/gif') { return dataUrl; }
@@ -5160,10 +5245,17 @@ ${insideObjects('.eb-paper.boxed')} {
     const png = scale < 1 ? canvasEl.toDataURL('image/png') : dataUrl;
     let best = png.length < dataUrl.length ? png : dataUrl;
     if (!hasTransparency(ctx, canvasEl.width, canvasEl.height)) {
-      const jpeg = canvasEl.toDataURL('image/jpeg', 0.85);
-      // Only when it is a great deal smaller: that is what tells a photograph
-      // from a screenshot, and a screenshot must stay sharp.
-      if (jpeg.length && jpeg.length < best.length * 0.6) { best = jpeg; }
+      // What kind of picture it is, read off the picture rather than guessed from
+      // how well it compresses: a photograph has tens of thousands of different
+      // colours in it, a screenshot or a drawing a few hundred. A photograph goes
+      // to JPEG whenever that is smaller at all -- one of the owner's documents
+      // carried a photograph as a 912KB PNG that is 131KB as a JPEG, and the old
+      // "only if under six tenths" rule was letting it through. A screenshot must
+      // stay sharp, so it keeps the old rule and a gentler quality.
+      const photo = colourCount(ctx, canvasEl.width, canvasEl.height) > 4000;
+      const jpeg = canvasEl.toDataURL('image/jpeg', photo ? 0.85 : 0.92);
+      const allow = best.length * (photo ? 0.95 : 0.6);
+      if (jpeg.length && jpeg.length < allow) { best = jpeg; }
     }
     return best;
   }
@@ -5197,13 +5289,34 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const done = () => { setTimeout(() => { frame.remove(); if (outer) { outer.remove(); } }, 1000); };
     frame.onload = () => {
-      try {
-        frame.contentWindow.focus();
-        frame.contentWindow.print();
-      } catch (e) { /* the user can still print from the browser menu */ }
-      done();
+      // The frame is nought by nought, so every picture in it is off the screen.
+      // A picture left to load when it is reached is never reached here, and the
+      // printout would come out with holes in it: fetch them all, and wait.
+      const win = frame.contentWindow;
+      const imgs = Array.from(win.document.images || []);
+      imgs.forEach((img) => { img.loading = 'eager'; img.decoding = 'sync'; });
+      const waiting = imgs.filter((img) => !img.complete);
+      const go = () => {
+        try {
+          win.focus();
+          win.print();
+        } catch (e) { /* the user can still print from the browser menu */ }
+        done();
+      };
+      if (!waiting.length) { go(); return; }
+      let left = waiting.length;
+      let fired = false;
+      const tick = () => { left -= 1; if (left <= 0 && !fired) { fired = true; go(); } };
+      waiting.forEach((img) => {
+        img.addEventListener('load', tick, { once: true });
+        img.addEventListener('error', tick, { once: true });
+      });
+      // A picture that never answers must not hold the printout for ever.
+      window.setTimeout(() => { if (!fired) { fired = true; go(); } }, 8000);
     };
-    frame.srcdoc = html;
+    // Written eager into the print document: the attribute is right for reading
+    // and wrong for printing, and this is the one place printing happens.
+    frame.srcdoc = String(html).replace(/\sloading="lazy"/g, '');
   }
 
   function downloadHtml(name, html) {
@@ -5431,6 +5544,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
             <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
             <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
+            <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
             <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
             <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
           </div>
@@ -7139,7 +7253,7 @@ ${insideObjects('.eb-paper.boxed')} {
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
         placing: '', placeBox: null, railWatch: null, railWatched: null, railPending: false,
-        _pageThen: null, _barTimer: null,
+        _pageThen: null, _barTimer: null, lightening: false,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -8487,6 +8601,30 @@ ${insideObjects('.eb-paper.boxed')} {
           return;
         }
         this.$nextTick(put);
+      },
+      /**
+       * Make every picture in the document as light as it will go. Runs by itself
+       * after a paste, where it says nothing unless it saved something worth
+       * mentioning; run from the menu it always says what it did.
+       */
+      async lightenPictures(quiet) {
+        const c = canvas();
+        if (!c || this.lightening) { return; }
+        this.lightening = true;
+        try {
+          const saved = await shrinkPicturesIn(c);
+          if (!saved) {
+            if (!quiet) { this.notify(this.t('The pictures are already as light as they go.')); }
+            return;
+          }
+          this.touch();
+          this.settleFrame();
+          // Three quarters of the characters is about the weight of the file.
+          const kb = Math.round((saved * 3) / 4 / 1024);
+          if (!quiet || kb >= 100) {
+            this.notify(this.t('The pictures are {kb}KB lighter.', { kb: String(kb) }));
+          }
+        } finally { this.lightening = false; }
       },
       /** A picture on the clipboard goes straight in, same as one picked from Files. */
       async insertPastedFiles(files) {
@@ -11049,6 +11187,9 @@ ${insideObjects('.eb-paper.boxed')} {
         this.touch();
         this.recount();
         this.askAboutForeign(out.foreign);
+        // A picture pasted inside a piece of HTML never passed through the
+        // shrinking that a pasted file goes through. Now everything does.
+        this.lightenPictures(true);
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
