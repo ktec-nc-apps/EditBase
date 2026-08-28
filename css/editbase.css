@@ -143,10 +143,23 @@
 /* The title, what is done to the document, and the tools that need width: one
    row on a wide screen, and it folds into two when there is not room for one. */
 .eb-topbar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface);
 }
-.eb-topbar .title-input { flex: 1 1 180px; }
+/* The title takes what is left over and does not grow into it: a growing title
+   filled the first line by itself and pushed the tools on to a second one. */
+.eb-topbar .title-input { flex: 0 1 240px; min-width: 90px; font-size: 15px; padding: 5px 7px; }
+.eb-topbar .state { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+/* Below this the row is only one row if it gives something up: the words on the
+   buttons go first, then when it has to say something, it takes the second line. */
+@media (max-width: 1700px) {
+  .eb-topbar .state { display: none; }
+  .eb-topbar .eb-num .cap { display: none; }
+  #editbase-root .eb-topbar .font-btn .fname { max-width: 90px; }
+}
+@media (max-width: 1400px) {
+  .eb-topbar .eb-btn .lbl { display: none; }
+}
 .eb-topbar .headtools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .eb-topbar .title-input {
   flex: 1 1 auto; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text);
@@ -888,3 +901,10 @@
   .eb-rail { display: none !important; }
 }
 .eb-toolbar .grow { flex: 1 1 auto; }
+
+/* The object's own bar: a row under the top row, and only while something is
+   chosen. It carries a name and a dozen buttons, which is a row's worth of
+   things and not a column's. */
+.eb-toolbar.objbar { padding: 4px 10px; }
+.eb-toolbar.objbar .eb-objgrp { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.eb-toolbar.objbar .eb-objgrp .nm { font-weight: 600; margin-right: 4px; }
