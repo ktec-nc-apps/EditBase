@@ -3736,9 +3736,11 @@ ${insideObjects('.eb-paper.boxed')} {
       strokeWidth: (() => { const m = /^([\d.]+)mm/.exec(s.getPropertyValue('-webkit-text-stroke-width') || ''); return m ? Number(m[1]) : ''; })(),
       strokeColour: rgbToHex(s.getPropertyValue('-webkit-text-stroke-color')) || '#000000',
       textShadow: !!(s.textShadow && s.textShadow !== 'none'),
-      shadowX: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[1]) : ''; })(),
-      shadowY: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[2]) : ''; })(),
-      shadowBlur: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[3]) : ''; })(),
+      // With no shadow set the dialogue shows what turning it on would give,
+      // rather than three empty boxes that say nothing.
+      shadowX: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[1]) : 1; })(),
+      shadowY: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[2]) : 1; })(),
+      shadowBlur: (() => { const m = /(-?[\d.]+)pt\s+(-?[\d.]+)pt\s+([\d.]+)pt/.exec(s.textShadow || ''); return m ? Number(m[3]) : 1.5; })(),
       shadowColour: (() => { const m = /(#[0-9a-f]{6}|rgba?\([^)]+\))\s*$/i.exec(s.textShadow || ''); return m ? (rgbToHex(m[1]) || m[1]) : '#808080'; })(),
     };
   }
@@ -10223,7 +10225,7 @@ return function render(_ctx, _cache) {
           onClick: _cache[462] || (_cache[462] = $event => (_ctx.fpropsOpen = false))
         }, [
           _createElementVNode("div", {
-            class: "eb-modal",
+            class: "eb-modal tall",
             onClick: _cache[461] || (_cache[461] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('{name} properties', { name: _ctx.frameLabel })), 1 /* TEXT */),
@@ -12002,6 +12004,7 @@ return function render(_ctx, _cache) {
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
         placing: '', placeBox: null, railWatch: null, railWatched: null, railPending: false,
+        _pageThen: null, _barTimer: null,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -12582,15 +12585,30 @@ return function render(_ctx, _cache) {
           if (then) { this.$nextTick(then); }
           return;
         }
+        if (this._pageThen === undefined) { this._pageThen = []; }
+        // Everyone waiting is remembered, not just the last one. clearTimeout throws
+        // away the pending run, and with it whatever that run was going to call --
+        // so a second repaginate arriving within the same tenth of a second lost
+        // the callback that fills the two side bars, at random.
+        if (then) { this._pageThen = (this._pageThen || []).concat(then); }
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
           const was = this.pageCount;
           const pages = paginate();
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
-            // came from, so it is redrawn here as well as by whoever asked.
-            if (this.pageCount !== was) { this.refreshPreview(); this.refreshLayers(); }
-            if (then) { then(); }
+            // came from, so it is redrawn here as well as by whoever asked -- but
+            // not more than four times a second. A page of pictures fetched from
+            // the web settles image by image, and each one changes the count: that
+            // is twenty thumbnails redrawn thirty times over while the reader is
+            // waiting to see the writing.
+            if (this.pageCount !== was) {
+              clearTimeout(this._barTimer);
+              this._barTimer = setTimeout(() => { this.refreshPreview(); this.refreshLayers(); }, 250);
+            }
+            const waiting = this._pageThen || [];
+            this._pageThen = [];
+            waiting.forEach((f) => f());
           };
           if (pages !== this.pageCount) {
             this.pageCount = pages;
