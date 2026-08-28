@@ -5718,7 +5718,11 @@ ${insideObjects('.eb-paper.boxed')} {
         <button class="eb-tb" @click="previewOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
       </div>
       <div class="pages">
-        <button v-for="pg in preview" :key="pg.n" class="pg" :class="{ on: pg.n === pageNow }"
+        <button v-for="pg in preview" :key="pg.n" class="pg" draggable="true"
+          :class="{ on: pg.n === pageNow, over: dropPage === pg.n, dragging: dragPage === pg.n }"
+          @dragstart="pageDragStart(pg.n, $event)" @dragend="pageDragEnd"
+          @dragover.prevent="dropPage = pg.n" @dragleave="dropPage = 0"
+          @drop.prevent="pageDrop(pg.n)"
           @click="goToPage(pg.n)" :title="t('Page {n}', { n: pg.n })">
           <span class="sheet" :style="{ paddingTop: pg.ratio + '%' }">
             <span v-for="(b, i) in pg.blocks" :key="'b' + i" class="blk" :class="b.kind"
@@ -5740,7 +5744,11 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="group" v-for="(g, gi) in layers" :key="g.level">
         <div class="glabel">{{ t('Layer {n}', { n: g.level }) }}</div>
         <ol class="list">
-          <li v-for="it in g.items" :key="it.id" :class="{ on: it.chosen }">
+          <li v-for="it in g.items" :key="it.id" draggable="true"
+            :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
+            @dragstart="layerDragStart(it.id, $event)" @dragend="layerDragEnd"
+            @dragover.prevent="layerDragOver(it.id, $event)" @dragleave="dropLayer = -1"
+            @drop.prevent="layerDrop(it.id)">
             <button class="pick" @click="chooseLayer(it.id)" :title="it.text">
               <span class="ic" v-html="it.icon"></span>
               <span class="nm">{{ it.name }}</span>
@@ -7065,6 +7073,7 @@ ${insideObjects('.eb-paper.boxed')} {
         build: '', newBuild: false,
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
+        dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -9615,6 +9624,85 @@ ${insideObjects('.eb-paper.boxed')} {
       iconOfKind(kind) {
         return { FIGURE: this.icons.image, TABLE: this.icons.table, SHAPE: this.icons.box,
           EMBED: this.icons.link, HR: this.icons.rule }[kind] || this.icons.frame;
+      },
+      /**
+       * Dragging a row in the layer bar moves that object through the pile. The
+       * whole pile is renumbered from the bottom afterwards, so the levels stay
+       * one apart and the list means what it shows.
+       */
+      layerDragStart(id, e) {
+        this.dragLayer = id;
+        if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'layer'); }
+      },
+      layerDragOver(id) { if (this.dragLayer >= 0) { this.dropLayer = id; } },
+      layerDragEnd() { this.dragLayer = -1; this.dropLayer = -1; },
+      layerDrop(id) {
+        const from = layerEls[this.dragLayer];
+        const onto = layerEls[id];
+        this.dragLayer = -1;
+        this.dropLayer = -1;
+        if (!from || !onto || from === onto) { return; }
+        history.push(true);
+        // Work in the order the list shows -- top of the pile first -- so that
+        // dropping a row on to the top row puts it on top, and on to the bottom
+        // row puts it at the bottom, which is what the hand meant either way.
+        const top = layerEls.slice().sort((a, b) => stackRank(b) - stackRank(a));
+        const wasAt = top.indexOf(from);
+        const ontoAt = top.indexOf(onto);
+        top.splice(wasAt, 1);
+        const nowAt = top.indexOf(onto);
+        top.splice(wasAt < ontoAt ? nowAt + 1 : nowAt, 0, from);
+        // Renumbered from the bottom, so the levels stay one apart.
+        top.slice().reverse().forEach((el, i) => { el.style.zIndex = String(i + 1); });
+        this.touch();
+        this.$nextTick(() => { this.reflowWrap(); this.syncFrame(); this.refreshLayers(); this.refreshPreview(); });
+      },
+      /**
+       * Dragging a page in the page bar moves everything that stands on it --
+       * the writing and whatever is anchored in it -- in front of the page it
+       * was dropped on.
+       */
+      blocksOfPage(n) {
+        const c = canvas();
+        const sheet = this.$el.querySelector('.eb-sheet');
+        if (!c || !sheet) { return []; }
+        const z = this.frameZoom() || 1;
+        const pageH = sheet.getBoundingClientRect().height / z;
+        const top0 = sheet.getBoundingClientRect().top;
+        return Array.from(c.children).filter((el) => {
+          if (el.classList && (el.classList.contains('eb-pagespacer')
+            || el.classList.contains('eb-header') || el.classList.contains('eb-footer'))) { return false; }
+          const r = el.getBoundingClientRect();
+          if (!r.height && !r.width) {
+            // an anchor is a line of no height: judge it by what hangs off it
+            const kid = el.firstElementChild;
+            if (!kid) { return false; }
+            const kr = kid.getBoundingClientRect();
+            return Math.floor(((kr.top - top0) / z) / pageH) + 1 === n;
+          }
+          return Math.floor(((r.top - top0) / z) / pageH) + 1 === n;
+        });
+      },
+      pageDragStart(n, e) {
+        this.dragPage = n;
+        if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'page'); }
+      },
+      pageDragEnd() { this.dragPage = 0; this.dropPage = 0; },
+      pageDrop(n) {
+        const from = this.dragPage;
+        this.dragPage = 0;
+        this.dropPage = 0;
+        if (!from || from === n) { return; }
+        const moving = this.blocksOfPage(from);
+        const target = this.blocksOfPage(n);
+        if (!moving.length || !target.length) { return; }
+        history.push(true);
+        const c = canvas();
+        const before = from > n ? target[0] : target[target.length - 1].nextSibling;
+        moving.forEach((el) => { c.insertBefore(el, before); });
+        this.touch();
+        this.settleFrame();
+        this.$nextTick(() => { this.repaginate(); this.refreshPreview(); this.refreshLayers(); });
       },
       chooseLayer(id) {
         const el = layerEls[id];

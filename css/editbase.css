@@ -987,3 +987,11 @@
 @media print {
   .eb-tabs { display: none !important; }
 }
+
+/* Dragging a row or a page: what is being carried, and where it would land. */
+.eb-layers .list li { cursor: grab; }
+.eb-layers .list li.dragging { opacity: .45; }
+.eb-layers .list li.over { box-shadow: inset 0 2px 0 var(--primary); }
+.eb-preview .pg { cursor: grab; }
+.eb-preview .pg.dragging { opacity: .45; }
+.eb-preview .pg.over .sheet { outline: 2px dashed var(--primary); }
