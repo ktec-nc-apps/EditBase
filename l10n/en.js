@@ -640,6 +640,10 @@ OC.L10N.register(
     "Marks and notes": "Marks and notes",
     "Make the pictures lighter": "Make the pictures lighter",
     "The pictures are already as light as they go.": "The pictures are already as light as they go.",
-    "The pictures are {kb}KB lighter.": "The pictures are {kb}KB lighter."
+    "The pictures are {kb}KB lighter.": "The pictures are {kb}KB lighter.",
+    "Go to this page": "Go to this page",
+    "Start this page on a sheet of its own": "Start this page on a sheet of its own",
+    "Duplicate this page": "Duplicate this page",
+    "Delete everything on this page": "Delete everything on this page"
 },
 "nplurals=2; plural=(n != 1);");

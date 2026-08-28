@@ -510,6 +510,13 @@
 #editbase-root .eb-ctxmenu .ci[disabled]:hover { background: none; }
 #editbase-root .eb-ctxmenu .ci .s { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .eb-ctxmenu .sep { height: 1px; background: var(--border); margin: 5px 6px; }
+/* The name of what the menu is about, when it was not opened on the paper: a
+   sheet in the page bar has no other way of saying which sheet it is. */
+.eb-ctxmenu .hd { padding: 5px 10px 6px; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .03em; }
+/* Written with the id: the button reset at the top of this file has one, and an
+   id beats any number of classes. */
+#editbase-root .eb-ctxmenu .ci.danger { color: var(--danger, #b4232a); }
+#editbase-root .eb-ctxmenu .ci.danger:hover { background: var(--danger-light, rgba(180, 35, 42, .10)); }
 .eb-ctxmenu .fly {
   display: none; position: absolute; left: 100%; top: -6px; z-index: 1; min-width: 224px; padding: 5px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 11px; box-shadow: var(--shadow);
