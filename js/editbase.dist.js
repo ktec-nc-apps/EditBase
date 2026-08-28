@@ -13863,6 +13863,17 @@ return function render(_ctx, _cache) {
        * a centred picture jumped left the moment it was set free, which is not
        * what "place it freely" means to anybody.
        */
+      /** Put a freely placed object down where the hand let go of it. */
+      dropFreeAt(el, x, y) {
+        if (!el || !el.getBoundingClientRect) { return; }
+        const r = el.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const dx = (x - dragGrabX) - r.left;
+        const dy = (y - dragGrabY) - r.top;
+        el.style.left = round1((parseFloat(el.style.left) || 0) + dx * MM / z) + 'mm';
+        el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm';
+        this.keepOnPaper(el);
+      },
       freeInPlace(el) {
         if (!el || objectFree(el)) { return; }
         const was = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
@@ -14310,6 +14321,13 @@ return function render(_ctx, _cache) {
         const t = e && e.target && e.target.nodeType === 1 ? e.target : null;
         const el = t && t.closest ? (t.closest(OBJECT_SEL) || (t.nodeName === 'IMG' ? t.closest('figure') : null)) : null;
         dragObject = el && inCanvas(el) ? el : null;
+        // Where inside it the hand took hold, so it can be put down under the
+        // same spot rather than jumping its corner to the pointer.
+        if (dragObject && e && e.clientX != null && dragObject.getBoundingClientRect) {
+          const r = dragObject.getBoundingClientRect();
+          dragGrabX = e.clientX - r.left;
+          dragGrabY = e.clientY - r.top;
+        } else { dragGrabX = 0; dragGrabY = 0; }
         // The object itself is what moves; a selection inside it would be moved
         // twice over.
         if (dragObject) { dragRange = null; }
@@ -14344,6 +14362,19 @@ return function render(_ctx, _cache) {
           if (point) { selectRange(point); }
           dragRange = null;
           this.insertPastedFiles(files);
+          return;
+        }
+        // An object standing on the paper is moved by its coordinates: the writer
+        // is pointing at a place on the page, not at a place in the text. Sending
+        // it to the paragraph under the pointer instead is what sent it back to
+        // the left margin -- its own left and top were measured from an anchor
+        // that had moved somewhere else entirely.
+        if (dragObject && objectFree(dragObject)) {
+          const moving = dragObject;
+          this.run(() => this.dropFreeAt(moving, e.clientX, e.clientY));
+          dragRange = null;
+          dragObject = null;
+          this.settleFrame();
           return;
         }
         const data = e.dataTransfer;
@@ -14928,6 +14959,8 @@ return function render(_ctx, _cache) {
   // undo history. So the drop is done here, through the same path as every edit.
   let dragRange = null;
   let dragObject = null;
+  let dragGrabX = 0;
+  let dragGrabY = 0;
   let dropY = null;
   let dropX = null;
   /** The block a drop landed on, at the level the object would stand at. */
