@@ -69,8 +69,22 @@ class ApiController extends Controller {
 				'language' => $this->config->getUserValue($uid, Application::APP_ID, 'language', 'auto'),
 				'paper' => $this->config->getUserValue($uid, Application::APP_ID, 'paper', ''),
 				'languages' => $this->availableLanguages(),
+				// What the browser has loaded is not always what is on the server:
+				// a page left open goes on running the code it started with. This is
+				// how the app can tell, and say so, instead of the writer finding a
+				// fault that was mended an hour ago.
+				'build' => $this->buildStamp(),
 			];
 		});
+	}
+
+	/** The build the server is serving: the app's own script, by size and time. */
+	private function buildStamp(): string {
+		$file = __DIR__ . '/../../js/editbase.dist.js';
+		if (!is_readable($file)) {
+			return '';
+		}
+		return substr(md5((string)filemtime($file) . ':' . (string)filesize($file)), 0, 12);
 	}
 
 	#[NoAdminRequired]

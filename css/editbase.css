@@ -832,3 +832,13 @@
   font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em;
 }
 .eb-modal .body > .eb-sect:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+
+/* The page is running code the server has replaced. It sits across the top of
+   the editor, out of the way of the paper, and does not go until it is answered. */
+.eb-newbuild {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px; background: #fff4d6; color: #6b4c00;
+  border-bottom: 1px solid #e6cf94; font-size: 13px;
+}
+:root[data-theme=dark] .eb-newbuild, body.theme--dark .eb-newbuild { background: #4a3a10; color: #ffe6a8; border-bottom-color: #6b5520; }
+.eb-newbuild span { flex: 1 1 260px; }
