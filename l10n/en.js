@@ -635,6 +635,8 @@ OC.L10N.register(
     "New documents will start with this paper setup.": "New documents will start with this paper setup.",
     "Shapes": "Shapes",
     "Bring in": "Bring in",
-    "Nothing to bring in: no app of ours is switched on.": "Nothing to bring in: no app of ours is switched on."
+    "Nothing to bring in: no app of ours is switched on.": "Nothing to bring in: no app of ours is switched on.",
+    "Page layout": "Page layout",
+    "Marks and notes": "Marks and notes"
 },
 "nplurals=2; plural=(n != 1);");
