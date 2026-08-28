@@ -640,6 +640,10 @@ OC.L10N.register(
     "Marks and notes": "記号・注記",
     "Make the pictures lighter": "画像を軽くする",
     "The pictures are already as light as they go.": "画像はこれ以上軽くなりません。",
-    "The pictures are {kb}KB lighter.": "画像が {kb}KB 軽くなりました。"
+    "The pictures are {kb}KB lighter.": "画像が {kb}KB 軽くなりました。",
+    "Go to this page": "このページへ移動",
+    "Start this page on a sheet of its own": "このページの前で改ページ",
+    "Duplicate this page": "このページを複製",
+    "Delete everything on this page": "このページの内容を削除"
 },
 "nplurals=1; plural=0;");

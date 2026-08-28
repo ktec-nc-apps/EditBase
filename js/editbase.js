@@ -5903,6 +5903,7 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
       <div class="pages">
         <button v-for="pg in preview" :key="pg.n" class="pg" draggable="true"
+          @contextmenu.prevent.stop="pageCtx($event, pg.n)"
           :class="{ on: pg.n === pageNow, over: dropPage === pg.n, dragging: dragPage === pg.n }"
           @dragstart="pageDragStart(pg.n, $event)" @dragend="pageDragEnd"
           @dragover.prevent="dropPage = pg.n" @dragleave="dropPage = 0"
@@ -5929,6 +5930,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <div class="glabel">{{ t('Layer {n}', { n: g.level }) }}</div>
         <ol class="list">
           <li v-for="it in g.items" :key="it.id" :draggable="it.movable"
+            @contextmenu.prevent.stop="layerCtx($event, it.id)"
             :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
             @dragstart="layerDragStart(it.id, $event)" @dragend="layerDragEnd"
             @dragover.prevent="layerDragOver(it.id, $event)" @dragleave="dropLayer = -1"
@@ -6822,6 +6824,20 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
   <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
+    <!-- The right button on a sheet in the page bar. A page is not a thing in the
+         document but a place the writing fell, so these act on what stands on it. -->
+    <template v-if="ctx.page">
+      <div class="hd">{{ t('Page {n}', { n: ctx.page }) }}</div>
+      <button class="ci" @click="goToPage(ctx.page); closeCtx()">{{ t('Go to this page') }}</button>
+      <div class="sep"></div>
+      <button class="ci" @click="breakBeforePage(ctx.page)">{{ t('Start this page on a sheet of its own') }}</button>
+      <button class="ci" @click="duplicatePage(ctx.page)">{{ t('Duplicate this page') }}</button>
+      <div class="sep"></div>
+      <button class="ci" @click="paperOpen = true; closeCtx()">{{ t('Paper setup') }}</button>
+      <div class="sep"></div>
+      <button class="ci danger" @click="deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
+    </template>
+    <template v-else>
     <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
     <button class="ci" :disabled="!ctx.selection" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s k">Ctrl+C</span></button>
     <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s k">Ctrl+V</span></button>
@@ -6993,6 +7009,7 @@ ${insideObjects('.eb-paper.boxed')} {
     <button class="ci" v-if="!flow" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
     <button class="ci" v-if="!flow" @click="ctxDo('boxes')">{{ boxes ? t('Hide the box round every object') : t('Show the box round every object') }}</button>
     <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
+    </template>
   </div>
 
   <!-- The properties of a chosen run of words. Everything here is written on the
@@ -7273,7 +7290,7 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0 },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
@@ -10307,6 +10324,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const c = canvas();
         if (!c || !inCanvas(e.target)) { return; }
         e.preventDefault();
+        this.ctx.page = 0;
         const point = caretFromPoint(e.clientX, e.clientY);
         const sel = getRange();
         let inside = false;
@@ -10343,10 +10361,14 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.link = !!linkAt(at);
         this.ctx.list = !!(topBlockOf(at) && closestMatching(at, { tag: 'LI' }));
         this.ctx.selection = !!(range && !range.collapsed);
+        this.placeCtx(e.clientX, e.clientY);
+      },
+      /** Put the menu on the screen where the pointer is, and keep it on it. */
+      placeCtx(x, y) {
         // Keep the whole menu on screen; its own height is capped in the stylesheet.
-        this.ctx.flip = e.clientX > window.innerWidth - 500;
-        this.ctx.x = Math.max(6, Math.min(e.clientX, window.innerWidth - 250));
-        this.ctx.y = Math.max(6, Math.min(e.clientY, window.innerHeight - 430));
+        this.ctx.flip = x > window.innerWidth - 500;
+        this.ctx.x = Math.max(6, Math.min(x, window.innerWidth - 250));
+        this.ctx.y = Math.max(6, Math.min(y, window.innerHeight - 430));
         ctxAt = window.performance ? window.performance.now() : 0;
         this.ctx.open = true;
         this.refreshState();
@@ -10358,6 +10380,102 @@ ${insideObjects('.eb-paper.boxed')} {
           if (r.right > window.innerWidth - 6) { this.ctx.x = Math.max(6, window.innerWidth - r.width - 6); }
           if (r.bottom > window.innerHeight - 6) { this.ctx.y = Math.max(6, window.innerHeight - r.height - 6); }
         });
+      },
+      /**
+       * The right button on a row of the layer bar. The bar is a list of what is on
+       * the page, so the row answers for the object: it is picked up and given the
+       * same menu it has on the paper -- its properties, its wrap, its place in the
+       * pile, and away with it.
+       */
+      layerCtx(e, id) {
+        const el = layerEls[id];
+        if (!el || !el.parentNode) { return; }
+        // Taken hold of without scrolling to it. chooseLayer brings the object into
+        // view, and the scroll it causes shuts the menu that is being opened -- the
+        // app closes its menu on any scroll, as it must.
+        frameEl = el;
+        framePinned = true;
+        frameTaken = true;
+        this.frame.bar = true;
+        this.syncFrame();
+        const img = el.matches && el.matches('figure.eb-img') ? el.querySelector('img') : null;
+        this.ctx.page = 0;
+        this.ctx.table = !!(el.nodeName === 'TABLE');
+        this.ctx.image = !!img;
+        this.ctx.captionPlace = img ? captionPlace(img) : '';
+        this.ctx.frame = true;
+        this.ctx.text = false;
+        this.ctx.link = false;
+        this.ctx.list = false;
+        this.ctx.selection = false;
+        this.placeCtx(e.clientX, e.clientY);
+      },
+      /**
+       * The right button on a sheet in the page bar: what can be done to a whole
+       * page. A page is not a thing in the document -- it is where the writing
+       * happened to fall -- so these act on the blocks standing on it.
+       */
+      pageCtx(e, n) {
+        // Not goToPage: scrolling there would shut the menu on the way. Going to
+        // the page is the first item in it, for anyone who wants that.
+        this.ctx.page = n;
+        this.ctx.table = false;
+        this.ctx.image = false;
+        this.ctx.captionPlace = '';
+        this.ctx.frame = false;
+        this.ctx.text = false;
+        this.ctx.link = false;
+        this.ctx.list = false;
+        this.ctx.selection = false;
+        this.placeCtx(e.clientX, e.clientY);
+      },
+      /** Everything standing on a page, taken away. */
+      deletePage(n) {
+        const blocks = this.blocksOfPage(n);
+        if (!blocks.length) { return; }
+        this.closeCtx();
+        const c = canvas();
+        history.push(true);
+        blocks.forEach((el) => { if (el.parentNode) { el.parentNode.removeChild(el); } });
+        // A document with nothing in it cannot be written in: leave a line.
+        if (!c.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre')) {
+          const p = document.createElement('p');
+          p.appendChild(document.createElement('br'));
+          c.appendChild(p);
+        }
+        frameEl = null;
+        framePinned = false;
+        this.touch();
+        this.settleFrame();
+      },
+      /** The same page again, put after it. */
+      duplicatePage(n) {
+        const blocks = this.blocksOfPage(n);
+        if (!blocks.length) { return; }
+        this.closeCtx();
+        history.push(true);
+        const last = blocks[blocks.length - 1];
+        let after = last;
+        blocks.forEach((el) => {
+          const copy = el.cloneNode(true);
+          after.parentNode.insertBefore(copy, after.nextSibling);
+          after = copy;
+        });
+        this.touch();
+        this.settleFrame();
+      },
+      /** A fold put in front of the page, so it starts on a sheet of its own. */
+      breakBeforePage(n) {
+        const blocks = this.blocksOfPage(n);
+        if (!blocks.length) { return; }
+        this.closeCtx();
+        history.push(true);
+        const br = document.createElement('div');
+        br.className = 'eb-pagebreak';
+        br.setAttribute('data-label', this.t('Page break'));
+        blocks[0].parentNode.insertBefore(br, blocks[0]);
+        this.touch();
+        this.settleFrame();
       },
       closeCtx() { this.ctx.open = false; },
       /**
