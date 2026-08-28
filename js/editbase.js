@@ -593,6 +593,18 @@
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
    beyond the float: it is the wrap itself, written down. */
 .eb-doc span.eb-flow { display: block; pointer-events: none; }
+/* And the room is taken out of the OBJECTS as well, not only the words. A block
+   ignores a float unless it makes a formatting context of its own -- so a picture
+   or a table sitting under something placed freely was overlapped by it while the
+   text beside it moved politely out of the way. flow-root is the one line of CSS
+   that says "keep clear of what is floating". */
+.eb-doc figure.eb-img, .eb-doc div.eb-frame, .eb-doc aside.eb-box, .eb-doc div.eb-note,
+.eb-doc div.eb-math-block, .eb-doc nav.eb-toc, .eb-doc div.eb-shape, .eb-doc div.eb-embed {
+  display: flow-root;
+}
+/* The two that are laid out another way keep their own display. */
+.eb-doc figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
+.eb-doc span.eb-frame { display: inline-block; }
 .eb-doc span.eb-anchor { position: relative; display: inline; }
 .eb-doc .eb-anchor > * { position: absolute; margin: 0; }
 /* Browsers leave background colours out of a printout unless the page insists. */
@@ -8839,13 +8851,7 @@ ${insideObjects('.eb-paper.boxed')} {
         frameTaken = true;
         history.push(true);
         if (kind === 'free') {
-          if (objectFree(el)) {
-            setObjectFree(el, false);
-          } else {
-            setObjectFree(el, true);
-            el.style.left = '0mm';
-            el.style.top = '0mm';
-          }
+          if (objectFree(el)) { setObjectFree(el, false); } else { this.freeInPlace(el); }
         } else if (kind === 'wrapMode') {
           // 折り返し, LibreOffice's word for it. It says what the words do when
           // they meet this object, and nothing else: where the object stands is
@@ -8912,11 +8918,7 @@ ${insideObjects('.eb-paper.boxed')} {
           }
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
         } else if (kind === 'stack') {
-          if (!objectFree(el)) {
-            setObjectFree(el, true);
-            el.style.left = '0mm';
-            el.style.top = '0mm';
-          }
+          if (!objectFree(el)) { this.freeInPlace(el); }
           restack(el, arg);
         } else if (kind === 'delete') {
           deleteObject(el);
@@ -9246,6 +9248,25 @@ ${insideObjects('.eb-paper.boxed')} {
         this.recount();
         this.refreshState();
         this.$nextTick(() => this.reflowWrap());
+      },
+      /**
+       * Take an object out of the flow and leave it exactly where it was on the
+       * page. Parking it at nought and nought put it against the left margin --
+       * a centred picture jumped left the moment it was set free, which is not
+       * what "place it freely" means to anybody.
+       */
+      freeInPlace(el) {
+        if (!el || objectFree(el)) { return; }
+        const was = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+        setObjectFree(el, true);
+        el.style.left = '0mm';
+        el.style.top = '0mm';
+        if (!was || !was.width) { return; }
+        const now = el.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        el.style.left = round1((was.left - now.left) * MM / z) + 'mm';
+        el.style.top = round1((was.top - now.top) * MM / z) + 'mm';
+        this.keepOnPaper(el);
       },
       objectCtx(e) {
         const under = frameEl || document.elementFromPoint(e.clientX, e.clientY);
