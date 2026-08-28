@@ -66,6 +66,10 @@
     size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 },
     font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
     header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
+    // A page has a body always, and a header and a footer only when they are
+    // asked for. They are regions of the page, not objects laid on it: no box
+    // round them, no handles, nothing to pick up -- you write in them.
+    headerOn: false, footerOn: false,
     headingNumbers: '',
     vertical: false,
     // The paper itself: what it is painted with and what is drawn round it.
@@ -92,6 +96,8 @@
     if (p.font === 'sans') { out.font = 'sans'; }
     if (p.headingNumbers === 'decimal' || p.headingNumbers === 'japanese') { out.headingNumbers = p.headingNumbers; }
     out.vertical = !!p.vertical;
+    out.headerOn = !!p.headerOn;
+    out.footerOn = !!p.footerOn;
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
     const lh = Number(p.lineHeight);
@@ -397,7 +403,7 @@
   // of the app that has to know -- the box round it, the handles, the properties,
   // the anchor that makes its position mean anything -- reads this and only this,
   // so a new kind of object cannot be added and end up without its box.
-  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, div.eb-shape, div.eb-embed, hr';
+  const OBJECT_SEL = 'figure.eb-img, table.eb-table, aside.eb-box, div.eb-note, div.eb-math-block, nav.eb-toc, div.eb-frame, span.eb-frame, p.eb-textbox, div.eb-shape, div.eb-embed, hr';
   /** The same list, as the selector for one state of the canvas. */
   const objectRule = (prefix) => OBJECT_SEL.split(', ').map((s) => prefix + ' ' + s).join(', ');
   // Writing is an object too. A paragraph, a heading, a list, a quotation: each
@@ -512,7 +518,10 @@
 .eb-doc mark.eb-hl-p { background: #f0d3fb; }
 .eb-doc mark.eb-hl-r { background: #ffd0d0; }
 .eb-doc .eb-kenten { text-emphasis: filled dot; -webkit-text-emphasis: filled dot; text-emphasis-position: over right; }
-.eb-doc .eb-tate { writing-mode: vertical-rl; }
+/* One box may run down the page while the one beside it runs across, in either
+   kind of document: 縦書き and 横書き are settings of the box, not only of the page. */
+.eb-doc .eb-tate { writing-mode: vertical-rl; text-orientation: mixed; }
+.eb-doc .eb-yoko { writing-mode: horizontal-tb; }
 
 /* alignment and indentation, as classes so the markup stays readable */
 .eb-doc .eb-al-l { text-align: left; }
@@ -566,6 +575,10 @@
 /* A run of words made into a frame: a box, but not a box that shows until it is
    told to. It is inline-block so it can be given a size, floated or placed. */
 .eb-doc span.eb-frame { display: inline-block; border: 0; padding: 0; margin: 0; }
+/* 文字枠 -- a text frame. A paragraph with a box round it that the writer put
+   there: no border of its own until one is asked for, because a text box that
+   draws a rectangle round every line is not what anyone wants to print. */
+.eb-doc p.eb-textbox { margin: 0; }
 /* An object placed by hand is parked in a zero-height anchor left at the point in
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
@@ -590,6 +603,22 @@
 .eb-doc figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
 .eb-doc figure.eb-img.eb-cap-t > figcaption { margin: 0 0 .4em; width: 100%; }
 .eb-doc figure.eb-img.eb-cap-none > figcaption { display: none; }
+/* A page is a header, a body and a footer. The body is always there; the other
+   two appear when they are asked for. They are regions, not objects: nothing to
+   pick up, no handles, no box -- the writer puts the caret in and types.
+   On paper they are fixed to the top and the foot of every page, which is what
+   makes them a running header and a running footer rather than two paragraphs
+   that happen to be at either end of the writing. */
+.eb-doc > header.eb-header, .eb-doc > footer.eb-footer {
+  margin: 0; padding: 1mm 0; min-height: 6mm; color: inherit;
+}
+.eb-doc > header.eb-header { border-bottom: .5pt solid rgba(0, 0, 0, .25); margin-bottom: 4mm; }
+.eb-doc > footer.eb-footer { border-top: .5pt solid rgba(0, 0, 0, .25); margin-top: 4mm; }
+@media print {
+  .eb-doc > header.eb-header { position: fixed; top: -9mm; left: 0; right: 0; margin: 0; border-bottom: 0; }
+  .eb-doc > footer.eb-footer { position: fixed; bottom: -9mm; left: 0; right: 0; margin: 0; border-top: 0; }
+}
+
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
    beyond the float: it is the wrap itself, written down. */
 .eb-doc span.eb-flow { display: block; pointer-events: none; }
@@ -1090,6 +1119,8 @@ ${insideObjects('.eb-paper.boxed')} {
     sanitiseInto(body);
     toObjects(body);
     return {
+      hasHeader: !!body.querySelector(':scope > header.eb-header'),
+      hasFooter: !!body.querySelector(':scope > footer.eb-footer'),
       title: (dom.title || '').trim(),
       lang: dom.documentElement.getAttribute('lang') || 'ja',
       paper: normalisePaper(paper),
@@ -1612,7 +1643,13 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   // ---- blocks -----------------------------------------------------------------
-  const BLOCK_NAMES = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'TABLE', 'ASIDE', 'FIGURE', 'DIV', 'HR', 'SECTION']);
+  // HEADER and FOOTER belong here: without them the page's own header was taken
+  // for something that lives on a line, and was tucked inside a paragraph --
+  // which is not even legal HTML, and put it out of reach of every rule that
+  // says where a header goes.
+  const BLOCK_NAMES = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI',
+    'BLOCKQUOTE', 'PRE', 'TABLE', 'ASIDE', 'FIGURE', 'DIV', 'HR', 'SECTION',
+    'HEADER', 'FOOTER', 'MAIN', 'ARTICLE', 'NAV', 'DL', 'DT', 'DD']);
   function isBlock(el) { return !!(el && el.nodeType === 1 && BLOCK_NAMES.has(el.nodeName)); }
 
   /** The canvas keeps a flat run of blocks, so "the selected blocks" are its own children. */
@@ -3178,6 +3215,7 @@ ${insideObjects('.eb-paper.boxed')} {
     if (el.classList && el.classList.contains('eb-note')) { return 'NOTE'; }
     if (el.classList && el.classList.contains('eb-math-block')) { return 'MATH'; }
     if (el.classList && el.classList.contains('eb-embed')) { return 'EMBED'; }
+    if (el.classList && el.classList.contains('eb-textbox')) { return 'TEXTBOX'; }
     if (el.classList && el.classList.contains('eb-cols')) { return 'COLUMNS'; }
     if (/^H[1-6]$/.test(el.nodeName)) { return 'HEADING'; }
     if (el.nodeName === 'P') { return 'PARA'; }
@@ -3320,6 +3358,29 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** A frame of words put down where it is dropped, not where the text is. */
+  /**
+   * 文字枠 -- a text frame. It is a <p>, because a paragraph is what words live
+   * in; a <div> is for holding several blocks together, and that is the whole
+   * difference between the two in this document. Placed on the page, sized, and
+   * ready to be typed into.
+   */
+  function insertTextBox(free) {
+    const p = document.createElement('p');
+    p.className = 'eb-textbox';
+    const range = getRange();
+    if (range && !range.collapsed) { p.appendChild(range.extractContents()); } else { p.appendChild(document.createElement('br')); }
+    insertBlockNode(p);
+    if (free) {
+      setObjectFree(p, true);
+      p.style.left = '0mm';
+      p.style.top = '0mm';
+      p.style.width = '60mm';
+      p.style.minHeight = '12mm';
+    }
+    placeCaretIn(p);
+    return p;
+  }
+
   function insertFreeFrame() {
     const box = insertFrame();
     setObjectFree(box, true);
@@ -3513,7 +3574,8 @@ ${insideObjects('.eb-paper.boxed')} {
       // the room is taken out of the block they are in, wherever that block is.
       // What is never pushed is the object's own writing, by itself.
       const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
-        .filter((b) => !b.querySelector('.eb-anchor'));
+        .filter((b) => !b.querySelector('.eb-anchor'))
+        .filter((b) => !b.closest('header.eb-header, footer.eb-footer'));
       // Nearest first, so two objects over the same paragraph reserve their room
       // one after the other instead of both measuring from the same edge.
       const held = new Map();
@@ -3607,6 +3669,8 @@ ${insideObjects('.eb-paper.boxed')} {
       rotate: (() => { const m = /rotate\(([-\d.]+)deg\)/.exec(s.transform || ''); return m ? Number(m[1]) : ''; })(),
       vpos: (el.classList && el.classList.contains('eb-v-mid')) ? 'eb-v-mid'
         : ((el.classList && el.classList.contains('eb-v-bot')) ? 'eb-v-bot' : ''),
+      flow: (el.classList && el.classList.contains('eb-tate')) ? 'eb-tate'
+        : ((el.classList && el.classList.contains('eb-yoko')) ? 'eb-yoko' : ''),
       shadow: !!(el.classList && el.classList.contains('eb-shadow')),
       keep: s.breakInside === 'avoid',
       bgImage: (() => { const m = /url\(["']?(data:image\/[^"')]+)["']?\)/.exec(s.backgroundImage || ''); return m ? m[1] : ''; })(),
@@ -3710,6 +3774,11 @@ ${insideObjects('.eb-paper.boxed')} {
     if (v.vpos !== undefined) {
       ['eb-v-mid', 'eb-v-bot'].forEach((cx) => el.classList.remove(cx));
       if (v.vpos) { el.classList.add(v.vpos); }
+    }
+    // Which way the words run in this box, whichever way the page runs.
+    if (v.flow !== undefined) {
+      ['eb-tate', 'eb-yoko'].forEach((cx) => el.classList.remove(cx));
+      if (v.flow) { el.classList.add(v.flow); }
     }
     const op = num(v.opacity);
     if (op != null && op >= 0 && op < 100) { s.opacity = String(Math.round(op) / 100); } else { s.removeProperty('opacity'); }
@@ -3897,10 +3966,11 @@ ${insideObjects('.eb-paper.boxed')} {
   const DOC_CLASSES = new Set([
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
-    'eb-frame', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
+    'eb-frame', 'eb-textbox', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
-    'eb-v-mid', 'eb-v-bot',
+    'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
+    'eb-header', 'eb-footer',
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
@@ -4006,10 +4076,33 @@ ${insideObjects('.eb-paper.boxed')} {
     });
   }
 
+  /**
+   * The header is the first thing in the document and the footer the last, and
+   * there is one of each or none. They are regions of the page, so they cannot
+   * drift into the middle of the writing however the writing is edited.
+   */
+  function keepRegionsInPlace(c) {
+    const heads = Array.from(c.querySelectorAll(':scope > header.eb-header'));
+    const feet = Array.from(c.querySelectorAll(':scope > footer.eb-footer'));
+    heads.slice(1).forEach((n) => n.remove());
+    feet.slice(1).forEach((n) => n.remove());
+    const head = heads[0];
+    const foot = feet[0];
+    if (head && c.firstChild !== head) { c.insertBefore(head, c.firstChild); }
+    if (foot && c.lastChild !== foot) { c.appendChild(foot); }
+    // Something has to be left to write in between them.
+    const rest = Array.from(c.children).filter((n) => n !== head && n !== foot);
+    if (!rest.length) {
+      const p = document.createElement('p');
+      p.appendChild(document.createElement('br'));
+      if (foot) { c.insertBefore(p, foot); } else { c.appendChild(p); }
+    }
+  }
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
     repairNesting();
+    keepRegionsInPlace(c);
     tidyMarks();
     renumberNotes();
     Array.from(c.querySelectorAll('table.eb-table')).forEach(headerGroup);
@@ -5081,6 +5174,8 @@ ${insideObjects('.eb-paper.boxed')} {
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    header: I('<rect x="2" y="2.6" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/><path d="M2.6 8.6h10.8M2.6 11h10.8M2.6 13.2h7"/>'),
+    footer: I('<path d="M2.6 2.8h10.8M2.6 5h10.8M2.6 7.2h7"/><rect x="2" y="10" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/>'),
     wrapBoth: I('<rect x="5.6" y="4.5" width="4.8" height="7" rx="1"/><path d="M1.6 5.4h3M1.6 8h3M1.6 10.6h3M11.4 5.4h3M11.4 8h3M11.4 10.6h3"/>'),
     wrapThrough: I('<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M1.6 5.4h12.8M1.6 8h12.8M1.6 10.6h12.8"/>'),
     grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
@@ -5293,7 +5388,8 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" @click="tableOpen = true; menu = ''"><span v-html="icons.table"></span>{{ t('Insert table') }}</button>
           <button class="eb-menu-item" @click="openPicker(); menu = ''"><span v-html="icons.image"></span>{{ t('Insert picture') }}</button>
           <div class="eb-menu-sep"></div>
-          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'frame')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
+          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'textbox')"><span v-html="icons.frame"></span>{{ t('Text frame') }}</button>
+          <button class="eb-menu-item" @pointerdown.prevent="shapeGrab($event, 'frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="sh in shapes" :key="sh.kind" class="eb-menu-item"
             @pointerdown.prevent="shapeGrab($event, sh.kind)">
@@ -5328,6 +5424,8 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
       <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
+      <button class="eb-tb" :class="{ on: doc.paper.headerOn }" @mousedown.prevent @click="toggleRegion('header')" :title="t('Header')"><span v-html="icons.header"></span></button>
+      <button class="eb-tb" :class="{ on: doc.paper.footerOn }" @mousedown.prevent @click="toggleRegion('footer')" :title="t('Footer')"><span v-html="icons.footer"></span></button>
       <button class="eb-tb" :class="{ on: boxes }" v-if="!flow" @mousedown.prevent @click="boxes = !boxes" :title="boxes ? t('Hide the box round every object') : t('Show the box round every object')"><span v-html="icons.boxes"></span></button>
       <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
@@ -6238,6 +6336,14 @@ ${insideObjects('.eb-paper.boxed')} {
             <input type="number" min="0" max="60" step="0.5" v-model="fprops.wrapGap" :placeholder="'3'">
           </div>
           <div class="eb-field" v-if="frameHoldsWords">
+            <label>{{ t('Which way the words run') }}</label>
+            <select v-model="fprops.flow">
+              <option value="">{{ t('As the page runs') }}</option>
+              <option value="eb-yoko">{{ t('Across (horizontal)') }}</option>
+              <option value="eb-tate">{{ t('Down (vertical)') }}</option>
+            </select>
+          </div>
+          <div class="eb-field" v-if="frameHoldsWords">
             <label>{{ t('Text down the box') }}</label>
             <select v-model="fprops.vpos">
               <option value="">{{ t('At the top') }}</option>
@@ -7107,7 +7213,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** What the frame is, in the writer's words, for the bar and the dialogue. */
       /** Whether this object is a box with words in it, as against a table or a rule. */
       frameHoldsWords() {
-        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT',
+        return ['SHAPE', 'FRAME', 'ASIDE', 'NOTE', 'TEXT', 'TEXTBOX',
           'PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
       /** Writing: a block that stands in the text rather than an object put on the page. */
@@ -7121,7 +7227,8 @@ ${insideObjects('.eb-paper.boxed')} {
         const names = {
           FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
-          NOTE: this.t('Note'), FRAME: this.t('Frame'), TEXT: this.t('Phrase'),
+          NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
+          TEXTBOX: this.t('Text frame'),
           SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
           PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
           QUOTE: this.t('Quotation'), PRE: this.t('Preformatted text'), COLUMNS: this.t('Column layout'),
@@ -7130,7 +7237,8 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** What stands on the shelf beside the paper. */
       paletteItems() {
-        return [{ kind: 'frame', label: this.t('Text frame'), icon: this.icons.frame },
+        return [{ kind: 'textbox', label: this.t('Text frame'), icon: this.icons.frame },
+          { kind: 'frame', label: this.t('Block frame'), icon: this.icons.box },
           { kind: 'table', label: this.t('Insert table'), icon: this.icons.table },
           { kind: 'image', label: this.t('Insert picture'), icon: this.icons.image }]
           .concat(this.shapes.map((sh) => ({ kind: sh.kind, label: sh.label, icon: '<span class="eb-shape-icon">' + sh.icon + '</span>' })));
@@ -7221,6 +7329,11 @@ ${insideObjects('.eb-paper.boxed')} {
             id: d.id, name: d.name, title: parsed.title || d.title,
             paper: parsed.paper, styles: parsed.styles, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
+          // What the file itself carries decides whether the two switches are on:
+          // the page's own header and footer are part of the document, not a
+          // setting that could disagree with it.
+          this.doc.paper.headerOn = parsed.hasHeader;
+          this.doc.paper.footerOn = parsed.hasFooter;
           canvas().innerHTML = parsed.body || '<p><br></p>';
           normaliseCanvas(this.t('Page break'), this.t('Caption'));
           // A family the built-in list does not know needs the catalogue, or the
@@ -9008,7 +9121,7 @@ ${insideObjects('.eb-paper.boxed')} {
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          wrapMode: 'none', wrapGap: '',
+          wrapMode: 'none', wrapGap: '', flow: '',
           bgImage: '', bgFit: 'cover',
           strokeWidth: '', strokeColour: '#000000',
           textShadow: false, shadowX: 1, shadowY: 1, shadowBlur: 1.5, shadowColour: '#808080',
@@ -9144,6 +9257,35 @@ ${insideObjects('.eb-paper.boxed')} {
         this.touchStyles();
       },
       addFrame() { this.run(() => insertFrame()); this.$nextTick(() => this.syncFrame()); },
+      addTextBox() { this.run(() => insertTextBox(false)); this.$nextTick(() => this.syncFrame()); },
+      /**
+       * The header and the footer of the page. Not objects: regions. Turning one
+       * on puts it on the page ready to be written in; turning it off takes it
+       * away, and what was in it goes with it.
+       */
+      toggleRegion(which) {
+        const c = canvas();
+        if (!c) { return; }
+        const on = which === 'header' ? !this.doc.paper.headerOn : !this.doc.paper.footerOn;
+        this.run(() => {
+          const sel = which === 'header' ? ':scope > header.eb-header' : ':scope > footer.eb-footer';
+          const had = c.querySelector(sel);
+          if (!on) {
+            if (had) { had.remove(); }
+          } else if (!had) {
+            const el = document.createElement(which === 'header' ? 'header' : 'footer');
+            el.className = which === 'header' ? 'eb-header' : 'eb-footer';
+            const p = document.createElement('p');
+            p.appendChild(document.createElement('br'));
+            el.appendChild(p);
+            if (which === 'header') { c.insertBefore(el, c.firstChild); } else { c.appendChild(el); }
+            placeCaretIn(p);
+          }
+        });
+        if (which === 'header') { this.doc.paper.headerOn = on; } else { this.doc.paper.footerOn = on; }
+        this.touch();
+        this.$nextTick(() => { this.repaginate(); this.syncFrame(); });
+      },
       addShape(kind) {
         let made = null;
         this.run(() => { made = insertShape(kind); });
@@ -9207,6 +9349,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // the caret is, which is what someone writing a letter wants. Dragged, it
         // is put down where it lands, which is what someone laying out a page
         // wants. Both are one gesture apart.
+        if (kind === 'textbox' && !ev) { this.addTextBox(); return; }
         if (kind === 'frame' && !ev) { this.addFrame(); return; }
         if (kind === 'table' && !ev) { this.tableOpen = true; return; }
         if (kind === 'image') {
@@ -9220,8 +9363,9 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         let made = null;
         this.run(() => {
-          made = kind === 'frame' ? insertFreeFrame()
-            : (kind === 'table' ? insertFreeTable() : insertShape(kind));
+          made = kind === 'textbox' ? insertTextBox(true)
+            : (kind === 'frame' ? insertFreeFrame()
+              : (kind === 'table' ? insertFreeTable() : insertShape(kind)));
         });
         this.$nextTick(() => {
           if (made && made.parentNode && ev) {
