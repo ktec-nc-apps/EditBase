@@ -6321,7 +6321,7 @@ ${insideObjects('.eb-paper.boxed')} {
   // Precompiled render function (eval-free). Source template lives in editbase.js;
   // regenerate with regibase-build/editbase-build.mjs after editing the template.
   const render = (function () {
-const { openBlock: _openBlock, createElementBlock: _createElementBlock, createCommentVNode: _createCommentVNode, createElementVNode: _createElementVNode, toDisplayString: _toDisplayString, renderList: _renderList, Fragment: _Fragment, normalizeClass: _normalizeClass, withModifiers: _withModifiers, vModelText: _vModelText, withDirectives: _withDirectives, createTextVNode: _createTextVNode, normalizeStyle: _normalizeStyle, withKeys: _withKeys, vModelCheckbox: _vModelCheckbox, vShow: _vShow, vModelSelect: _vModelSelect, vModelRadio: _vModelRadio, createStaticVNode: _createStaticVNode } = Vue
+const { openBlock: _openBlock, createElementBlock: _createElementBlock, createCommentVNode: _createCommentVNode, createElementVNode: _createElementVNode, toDisplayString: _toDisplayString, renderList: _renderList, Fragment: _Fragment, withModifiers: _withModifiers, normalizeClass: _normalizeClass, vModelText: _vModelText, withDirectives: _withDirectives, createTextVNode: _createTextVNode, normalizeStyle: _normalizeStyle, withKeys: _withKeys, vModelCheckbox: _vModelCheckbox, vShow: _vShow, vModelSelect: _vModelSelect, vModelRadio: _vModelRadio, createStaticVNode: _createStaticVNode } = Vue
 
 const _hoisted_1 = { class: "brand" }
 const _hoisted_2 = ["innerHTML"]
@@ -6338,7 +6338,7 @@ const _hoisted_9 = {
   key: 0,
   class: "hint"
 }
-const _hoisted_10 = ["onClick"]
+const _hoisted_10 = ["onClick", "onContextmenu"]
 const _hoisted_11 = { class: "t" }
 const _hoisted_12 = { class: "m" }
 const _hoisted_13 = { class: "side-foot" }
@@ -7136,224 +7136,227 @@ const _hoisted_624 = { class: "eb-tip" }
 const _hoisted_625 = { class: "btn-pair" }
 const _hoisted_626 = { class: "foot" }
 const _hoisted_627 = { class: "body" }
-const _hoisted_628 = { class: "eb-field" }
-const _hoisted_629 = { value: "" }
-const _hoisted_630 = { value: "1 / 1" }
-const _hoisted_631 = /*#__PURE__*/_createStaticVNode("<option value=\"4 / 3\">4 : 3</option><option value=\"3 / 2\">3 : 2</option><option value=\"16 / 9\">16 : 9</option><option value=\"3 / 4\">3 : 4</option><option value=\"2 / 3\">2 : 3</option>", 5)
-const _hoisted_636 = ["src"]
-const _hoisted_637 = { class: "hint" }
-const _hoisted_638 = { class: "eb-tip" }
-const _hoisted_639 = { class: "foot" }
-const _hoisted_640 = { class: "body" }
-const _hoisted_641 = { class: "eb-row eb-frow" }
-const _hoisted_642 = { class: "eb-field b-style" }
-const _hoisted_643 = { value: "" }
-const _hoisted_644 = { value: "none" }
-const _hoisted_645 = { value: "solid" }
-const _hoisted_646 = { value: "dashed" }
-const _hoisted_647 = { value: "dotted" }
-const _hoisted_648 = { value: "double" }
-const _hoisted_649 = { class: "eb-field b-style" }
-const _hoisted_650 = { value: "all" }
-const _hoisted_651 = { value: "top" }
-const _hoisted_652 = { value: "bottom" }
-const _hoisted_653 = { value: "topbottom" }
-const _hoisted_654 = { value: "left" }
-const _hoisted_655 = { class: "eb-field" }
-const _hoisted_656 = { class: "eb-field" }
-const _hoisted_657 = { class: "eb-tip" }
-const _hoisted_658 = { class: "foot" }
-const _hoisted_659 = { class: "body" }
+const _hoisted_628 = {
+  key: 0,
+  class: "eb-tip"
+}
+const _hoisted_629 = { class: "eb-props" }
+const _hoisted_630 = { class: "foot" }
+const _hoisted_631 = { class: "body" }
+const _hoisted_632 = { class: "eb-field" }
+const _hoisted_633 = { value: "" }
+const _hoisted_634 = { value: "1 / 1" }
+const _hoisted_635 = /*#__PURE__*/_createStaticVNode("<option value=\"4 / 3\">4 : 3</option><option value=\"3 / 2\">3 : 2</option><option value=\"16 / 9\">16 : 9</option><option value=\"3 / 4\">3 : 4</option><option value=\"2 / 3\">2 : 3</option>", 5)
+const _hoisted_640 = ["src"]
+const _hoisted_641 = { class: "hint" }
+const _hoisted_642 = { class: "eb-tip" }
+const _hoisted_643 = { class: "foot" }
+const _hoisted_644 = { class: "body" }
+const _hoisted_645 = { class: "eb-row eb-frow" }
+const _hoisted_646 = { class: "eb-field b-style" }
+const _hoisted_647 = { value: "" }
+const _hoisted_648 = { value: "none" }
+const _hoisted_649 = { value: "solid" }
+const _hoisted_650 = { value: "dashed" }
+const _hoisted_651 = { value: "dotted" }
+const _hoisted_652 = { value: "double" }
+const _hoisted_653 = { class: "eb-field b-style" }
+const _hoisted_654 = { value: "all" }
+const _hoisted_655 = { value: "top" }
+const _hoisted_656 = { value: "bottom" }
+const _hoisted_657 = { value: "topbottom" }
+const _hoisted_658 = { value: "left" }
+const _hoisted_659 = { class: "eb-field" }
 const _hoisted_660 = { class: "eb-field" }
-const _hoisted_661 = ["value"]
-const _hoisted_662 = { class: "eb-field" }
-const _hoisted_663 = { class: "eb-tip" }
-const _hoisted_664 = { class: "foot" }
-const _hoisted_665 = { class: "body" }
+const _hoisted_661 = { class: "eb-tip" }
+const _hoisted_662 = { class: "foot" }
+const _hoisted_663 = { class: "body" }
+const _hoisted_664 = { class: "eb-field" }
+const _hoisted_665 = ["value"]
 const _hoisted_666 = { class: "eb-field" }
 const _hoisted_667 = { class: "eb-tip" }
 const _hoisted_668 = { class: "foot" }
 const _hoisted_669 = { class: "body" }
-const _hoisted_670 = { class: "eb-row" }
-const _hoisted_671 = { class: "eb-field" }
-const _hoisted_672 = { value: 1 }
-const _hoisted_673 = { value: 2 }
-const _hoisted_674 = { value: 3 }
-const _hoisted_675 = { value: 4 }
-const _hoisted_676 = { class: "eb-field" }
-const _hoisted_677 = { class: "eb-tip" }
-const _hoisted_678 = { class: "foot" }
-const _hoisted_679 = { class: "body" }
-const _hoisted_680 = { class: "eb-row" }
-const _hoisted_681 = { class: "eb-field" }
-const _hoisted_682 = { class: "eb-field" }
-const _hoisted_683 = { class: "eb-field" }
+const _hoisted_670 = { class: "eb-field" }
+const _hoisted_671 = { class: "eb-tip" }
+const _hoisted_672 = { class: "foot" }
+const _hoisted_673 = { class: "body" }
+const _hoisted_674 = { class: "eb-row" }
+const _hoisted_675 = { class: "eb-field" }
+const _hoisted_676 = { value: 1 }
+const _hoisted_677 = { value: 2 }
+const _hoisted_678 = { value: 3 }
+const _hoisted_679 = { value: 4 }
+const _hoisted_680 = { class: "eb-field" }
+const _hoisted_681 = { class: "eb-tip" }
+const _hoisted_682 = { class: "foot" }
+const _hoisted_683 = { class: "body" }
 const _hoisted_684 = { class: "eb-row" }
 const _hoisted_685 = { class: "eb-field" }
 const _hoisted_686 = { class: "eb-field" }
 const _hoisted_687 = { class: "eb-field" }
-const _hoisted_688 = { class: "eb-tip" }
-const _hoisted_689 = { class: "foot" }
-const _hoisted_690 = { class: "body" }
-const _hoisted_691 = { class: "eb-sect" }
-const _hoisted_692 = { class: "eb-row" }
-const _hoisted_693 = { class: "eb-field" }
-const _hoisted_694 = { value: "" }
-const _hoisted_695 = { value: "left" }
-const _hoisted_696 = { value: "center" }
-const _hoisted_697 = { value: "right" }
-const _hoisted_698 = { value: "free" }
-const _hoisted_699 = { class: "eb-field wide" }
-const _hoisted_700 = { class: "eb-pick" }
-const _hoisted_701 = ["onClick", "title"]
-const _hoisted_702 = ["innerHTML"]
-const _hoisted_703 = { class: "nm" }
-const _hoisted_704 = { class: "eb-field" }
-const _hoisted_705 = {
-  key: 0,
-  class: "eb-field"
-}
-const _hoisted_706 = { value: "" }
-const _hoisted_707 = { value: "eb-yoko" }
-const _hoisted_708 = { value: "eb-tate" }
+const _hoisted_688 = { class: "eb-row" }
+const _hoisted_689 = { class: "eb-field" }
+const _hoisted_690 = { class: "eb-field" }
+const _hoisted_691 = { class: "eb-field" }
+const _hoisted_692 = { class: "eb-tip" }
+const _hoisted_693 = { class: "foot" }
+const _hoisted_694 = { class: "body" }
+const _hoisted_695 = { class: "eb-sect" }
+const _hoisted_696 = { class: "eb-row" }
+const _hoisted_697 = { class: "eb-field" }
+const _hoisted_698 = { value: "" }
+const _hoisted_699 = { value: "left" }
+const _hoisted_700 = { value: "center" }
+const _hoisted_701 = { value: "right" }
+const _hoisted_702 = { value: "free" }
+const _hoisted_703 = { class: "eb-field wide" }
+const _hoisted_704 = { class: "eb-pick" }
+const _hoisted_705 = ["onClick", "title"]
+const _hoisted_706 = ["innerHTML"]
+const _hoisted_707 = { class: "nm" }
+const _hoisted_708 = { class: "eb-field" }
 const _hoisted_709 = {
-  key: 1,
+  key: 0,
   class: "eb-field"
 }
 const _hoisted_710 = { value: "" }
-const _hoisted_711 = { value: "eb-v-mid" }
-const _hoisted_712 = { value: "eb-v-bot" }
+const _hoisted_711 = { value: "eb-yoko" }
+const _hoisted_712 = { value: "eb-tate" }
 const _hoisted_713 = {
+  key: 1,
+  class: "eb-field"
+}
+const _hoisted_714 = { value: "" }
+const _hoisted_715 = { value: "eb-v-mid" }
+const _hoisted_716 = { value: "eb-v-bot" }
+const _hoisted_717 = {
   key: 0,
   class: "eb-sect"
 }
-const _hoisted_714 = {
+const _hoisted_718 = {
   key: 1,
   class: "eb-row eb-frow"
 }
-const _hoisted_715 = { class: "eb-field" }
-const _hoisted_716 = { class: "btn-pair" }
-const _hoisted_717 = ["disabled"]
-const _hoisted_718 = { class: "eb-field" }
-const _hoisted_719 = ["disabled"]
-const _hoisted_720 = { value: "cover" }
-const _hoisted_721 = { value: "contain" }
-const _hoisted_722 = { value: "tile" }
-const _hoisted_723 = { class: "eb-field" }
-const _hoisted_724 = { class: "eb-field" }
-const _hoisted_725 = {
+const _hoisted_719 = { class: "eb-field" }
+const _hoisted_720 = { class: "btn-pair" }
+const _hoisted_721 = ["disabled"]
+const _hoisted_722 = { class: "eb-field" }
+const _hoisted_723 = ["disabled"]
+const _hoisted_724 = { value: "cover" }
+const _hoisted_725 = { value: "contain" }
+const _hoisted_726 = { value: "tile" }
+const _hoisted_727 = { class: "eb-field" }
+const _hoisted_728 = { class: "eb-field" }
+const _hoisted_729 = {
   key: 2,
   class: "eb-row eb-frow"
 }
-const _hoisted_726 = { class: "eb-field" }
-const _hoisted_727 = { class: "opt" }
-const _hoisted_728 = { class: "eb-field" }
-const _hoisted_729 = ["disabled"]
 const _hoisted_730 = { class: "eb-field" }
-const _hoisted_731 = ["disabled"]
+const _hoisted_731 = { class: "opt" }
 const _hoisted_732 = { class: "eb-field" }
 const _hoisted_733 = ["disabled"]
 const _hoisted_734 = { class: "eb-field" }
 const _hoisted_735 = ["disabled"]
 const _hoisted_736 = { class: "eb-field" }
-const _hoisted_737 = { value: "" }
-const _hoisted_738 = { value: "eb-al-l" }
-const _hoisted_739 = { value: "eb-al-c" }
-const _hoisted_740 = { value: "eb-al-r" }
-const _hoisted_741 = { value: "eb-al-j" }
-const _hoisted_742 = { class: "eb-field" }
-const _hoisted_743 = { value: "" }
-const _hoisted_744 = { value: "left" }
-const _hoisted_745 = { value: "right" }
-const _hoisted_746 = {
+const _hoisted_737 = ["disabled"]
+const _hoisted_738 = { class: "eb-field" }
+const _hoisted_739 = ["disabled"]
+const _hoisted_740 = { class: "eb-field" }
+const _hoisted_741 = { value: "" }
+const _hoisted_742 = { value: "eb-al-l" }
+const _hoisted_743 = { value: "eb-al-c" }
+const _hoisted_744 = { value: "eb-al-r" }
+const _hoisted_745 = { value: "eb-al-j" }
+const _hoisted_746 = { class: "eb-field" }
+const _hoisted_747 = { value: "" }
+const _hoisted_748 = { value: "left" }
+const _hoisted_749 = { value: "right" }
+const _hoisted_750 = {
   key: 3,
   class: "eb-row"
 }
-const _hoisted_747 = { class: "eb-field" }
-const _hoisted_748 = { class: "eb-field" }
-const _hoisted_749 = { class: "eb-field" }
-const _hoisted_750 = { class: "btn-pair" }
-const _hoisted_751 = {
+const _hoisted_751 = { class: "eb-field" }
+const _hoisted_752 = { class: "eb-field" }
+const _hoisted_753 = { class: "eb-field" }
+const _hoisted_754 = { class: "btn-pair" }
+const _hoisted_755 = {
   key: 4,
   class: "eb-tip"
 }
-const _hoisted_752 = {
+const _hoisted_756 = {
   key: 5,
   class: "eb-tip"
 }
-const _hoisted_753 = { class: "eb-sect" }
-const _hoisted_754 = { class: "eb-row" }
-const _hoisted_755 = { class: "eb-field" }
-const _hoisted_756 = ["placeholder"]
-const _hoisted_757 = { class: "eb-field" }
-const _hoisted_758 = ["placeholder"]
+const _hoisted_757 = { class: "eb-sect" }
+const _hoisted_758 = { class: "eb-row" }
 const _hoisted_759 = { class: "eb-field" }
 const _hoisted_760 = ["placeholder"]
-const _hoisted_761 = { class: "eb-sect" }
-const _hoisted_762 = { class: "eb-row" }
+const _hoisted_761 = { class: "eb-field" }
+const _hoisted_762 = ["placeholder"]
 const _hoisted_763 = { class: "eb-field" }
-const _hoisted_764 = { class: "eb-field" }
-const _hoisted_765 = { class: "eb-field" }
-const _hoisted_766 = { class: "eb-field" }
-const _hoisted_767 = { class: "eb-sect" }
-const _hoisted_768 = { class: "eb-row eb-frow" }
-const _hoisted_769 = { class: "eb-field b-style" }
-const _hoisted_770 = { value: "" }
-const _hoisted_771 = { value: "none" }
-const _hoisted_772 = { value: "solid" }
-const _hoisted_773 = { value: "dashed" }
-const _hoisted_774 = { value: "dotted" }
-const _hoisted_775 = { value: "double" }
-const _hoisted_776 = { class: "eb-field" }
-const _hoisted_777 = { class: "eb-field" }
-const _hoisted_778 = { class: "eb-field" }
-const _hoisted_779 = { class: "eb-row" }
+const _hoisted_764 = ["placeholder"]
+const _hoisted_765 = { class: "eb-sect" }
+const _hoisted_766 = { class: "eb-row" }
+const _hoisted_767 = { class: "eb-field" }
+const _hoisted_768 = { class: "eb-field" }
+const _hoisted_769 = { class: "eb-field" }
+const _hoisted_770 = { class: "eb-field" }
+const _hoisted_771 = { class: "eb-sect" }
+const _hoisted_772 = { class: "eb-row eb-frow" }
+const _hoisted_773 = { class: "eb-field b-style" }
+const _hoisted_774 = { value: "" }
+const _hoisted_775 = { value: "none" }
+const _hoisted_776 = { value: "solid" }
+const _hoisted_777 = { value: "dashed" }
+const _hoisted_778 = { value: "dotted" }
+const _hoisted_779 = { value: "double" }
 const _hoisted_780 = { class: "eb-field" }
-const _hoisted_781 = { class: "colour-pair" }
-const _hoisted_782 = ["value"]
-const _hoisted_783 = { class: "eb-field" }
+const _hoisted_781 = { class: "eb-field" }
+const _hoisted_782 = { class: "eb-field" }
+const _hoisted_783 = { class: "eb-row" }
 const _hoisted_784 = { class: "eb-field" }
-const _hoisted_785 = { class: "eb-field" }
-const _hoisted_786 = { class: "opt" }
-const _hoisted_787 = { class: "opt" }
-const _hoisted_788 = { class: "eb-tip" }
-const _hoisted_789 = { class: "foot" }
-const _hoisted_790 = { class: "hd" }
-const _hoisted_791 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_792 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_793 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_794 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_795 = ["disabled"]
-const _hoisted_796 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+X", -1 /* HOISTED */)
-const _hoisted_797 = ["disabled"]
-const _hoisted_798 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+C", -1 /* HOISTED */)
-const _hoisted_799 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+V", -1 /* HOISTED */)
-const _hoisted_800 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+Shift+V", -1 /* HOISTED */)
+const _hoisted_785 = { class: "colour-pair" }
+const _hoisted_786 = ["value"]
+const _hoisted_787 = { class: "eb-field" }
+const _hoisted_788 = { class: "eb-field" }
+const _hoisted_789 = { class: "eb-field" }
+const _hoisted_790 = { class: "opt" }
+const _hoisted_791 = { class: "opt" }
+const _hoisted_792 = { class: "eb-tip" }
+const _hoisted_793 = { class: "foot" }
+const _hoisted_794 = { class: "hd" }
+const _hoisted_795 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_796 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_797 = { class: "hd" }
+const _hoisted_798 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_799 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_800 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_801 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_802 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+K", -1 /* HOISTED */)
-const _hoisted_803 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_804 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_805 = { class: "fly" }
-const _hoisted_806 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_807 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_808 = { class: "fly" }
-const _hoisted_809 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+B", -1 /* HOISTED */)
-const _hoisted_810 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+I", -1 /* HOISTED */)
-const _hoisted_811 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+U", -1 /* HOISTED */)
-const _hoisted_812 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_813 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_814 = { class: "fly" }
-const _hoisted_815 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_816 = { class: "fly" }
-const _hoisted_817 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Tab", -1 /* HOISTED */)
-const _hoisted_818 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Shift+Tab", -1 /* HOISTED */)
+const _hoisted_802 = ["disabled"]
+const _hoisted_803 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+X", -1 /* HOISTED */)
+const _hoisted_804 = ["disabled"]
+const _hoisted_805 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+C", -1 /* HOISTED */)
+const _hoisted_806 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+V", -1 /* HOISTED */)
+const _hoisted_807 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+Shift+V", -1 /* HOISTED */)
+const _hoisted_808 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_809 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+K", -1 /* HOISTED */)
+const _hoisted_810 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_811 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_812 = { class: "fly" }
+const _hoisted_813 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_814 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_815 = { class: "fly" }
+const _hoisted_816 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+B", -1 /* HOISTED */)
+const _hoisted_817 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+I", -1 /* HOISTED */)
+const _hoisted_818 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Ctrl+U", -1 /* HOISTED */)
 const _hoisted_819 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_820 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
 const _hoisted_821 = { class: "fly" }
-const _hoisted_822 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_823 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_824 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_825 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_822 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_823 = { class: "fly" }
+const _hoisted_824 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Tab", -1 /* HOISTED */)
+const _hoisted_825 = /*#__PURE__*/_createElementVNode("span", { class: "s k" }, "Shift+Tab", -1 /* HOISTED */)
 const _hoisted_826 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_827 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
 const _hoisted_828 = { class: "fly" }
@@ -7361,132 +7364,139 @@ const _hoisted_829 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, n
 const _hoisted_830 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_831 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_832 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_833 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_834 = { class: "fly" }
-const _hoisted_835 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_836 = { class: "fly" }
-const _hoisted_837 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
-const _hoisted_838 = { class: "fly" }
+const _hoisted_833 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_834 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_835 = { class: "fly" }
+const _hoisted_836 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_837 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_838 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_839 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
 const _hoisted_840 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
 const _hoisted_841 = { class: "fly" }
-const _hoisted_842 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_843 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_844 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
-const _hoisted_845 = { class: "body" }
-const _hoisted_846 = { class: "eb-tip" }
-const _hoisted_847 = { class: "eb-row eb-frow" }
-const _hoisted_848 = { class: "eb-field" }
-const _hoisted_849 = { value: "" }
-const _hoisted_850 = ["value"]
-const _hoisted_851 = { class: "eb-field" }
-const _hoisted_852 = { class: "eb-field" }
-const _hoisted_853 = { class: "eb-field" }
-const _hoisted_854 = { class: "colour-pair" }
-const _hoisted_855 = { class: "eb-row eb-frow" }
-const _hoisted_856 = { class: "eb-field" }
-const _hoisted_857 = { class: "opt" }
-const _hoisted_858 = { class: "opt" }
+const _hoisted_842 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_843 = { class: "fly" }
+const _hoisted_844 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_845 = { class: "fly" }
+const _hoisted_846 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_847 = /*#__PURE__*/_createElementVNode("span", { class: "s" }, "›", -1 /* HOISTED */)
+const _hoisted_848 = { class: "fly" }
+const _hoisted_849 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_850 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_851 = /*#__PURE__*/_createElementVNode("div", { class: "sep" }, null, -1 /* HOISTED */)
+const _hoisted_852 = { class: "body" }
+const _hoisted_853 = { class: "eb-tip" }
+const _hoisted_854 = { class: "eb-row eb-frow" }
+const _hoisted_855 = { class: "eb-field" }
+const _hoisted_856 = { value: "" }
+const _hoisted_857 = ["value"]
+const _hoisted_858 = { class: "eb-field" }
 const _hoisted_859 = { class: "eb-field" }
-const _hoisted_860 = { class: "opt" }
-const _hoisted_861 = { class: "opt" }
-const _hoisted_862 = { class: "eb-field" }
-const _hoisted_863 = { value: "" }
-const _hoisted_864 = { value: "super" }
-const _hoisted_865 = { value: "sub" }
+const _hoisted_860 = { class: "eb-field" }
+const _hoisted_861 = { class: "colour-pair" }
+const _hoisted_862 = { class: "eb-row eb-frow" }
+const _hoisted_863 = { class: "eb-field" }
+const _hoisted_864 = { class: "opt" }
+const _hoisted_865 = { class: "opt" }
 const _hoisted_866 = { class: "eb-field" }
-const _hoisted_867 = { class: "eb-row eb-frow" }
-const _hoisted_868 = { class: "eb-field" }
+const _hoisted_867 = { class: "opt" }
+const _hoisted_868 = { class: "opt" }
 const _hoisted_869 = { class: "eb-field" }
-const _hoisted_870 = { class: "eb-field" }
-const _hoisted_871 = { class: "opt" }
-const _hoisted_872 = { class: "eb-field" }
-const _hoisted_873 = ["disabled"]
-const _hoisted_874 = { class: "eb-field" }
-const _hoisted_875 = ["disabled"]
+const _hoisted_870 = { value: "" }
+const _hoisted_871 = { value: "super" }
+const _hoisted_872 = { value: "sub" }
+const _hoisted_873 = { class: "eb-field" }
+const _hoisted_874 = { class: "eb-row eb-frow" }
+const _hoisted_875 = { class: "eb-field" }
 const _hoisted_876 = { class: "eb-field" }
-const _hoisted_877 = ["disabled"]
-const _hoisted_878 = { class: "eb-field" }
-const _hoisted_879 = ["disabled"]
-const _hoisted_880 = { class: "foot" }
-const _hoisted_881 = { class: "body" }
-const _hoisted_882 = { class: "eb-row" }
+const _hoisted_877 = { class: "eb-field" }
+const _hoisted_878 = { class: "opt" }
+const _hoisted_879 = { class: "eb-field" }
+const _hoisted_880 = ["disabled"]
+const _hoisted_881 = { class: "eb-field" }
+const _hoisted_882 = ["disabled"]
 const _hoisted_883 = { class: "eb-field" }
-const _hoisted_884 = { value: "" }
-const _hoisted_885 = { value: "left" }
-const _hoisted_886 = { value: "center" }
-const _hoisted_887 = { value: "right" }
-const _hoisted_888 = { value: "justify" }
-const _hoisted_889 = { class: "eb-field" }
-const _hoisted_890 = ["placeholder"]
-const _hoisted_891 = { class: "eb-row" }
-const _hoisted_892 = { class: "eb-field" }
-const _hoisted_893 = { class: "eb-field" }
-const _hoisted_894 = { class: "eb-row" }
-const _hoisted_895 = { class: "eb-field" }
+const _hoisted_884 = ["disabled"]
+const _hoisted_885 = { class: "eb-field" }
+const _hoisted_886 = ["disabled"]
+const _hoisted_887 = { class: "foot" }
+const _hoisted_888 = { class: "body" }
+const _hoisted_889 = { class: "eb-row" }
+const _hoisted_890 = { class: "eb-field" }
+const _hoisted_891 = { value: "" }
+const _hoisted_892 = { value: "left" }
+const _hoisted_893 = { value: "center" }
+const _hoisted_894 = { value: "right" }
+const _hoisted_895 = { value: "justify" }
 const _hoisted_896 = { class: "eb-field" }
-const _hoisted_897 = { class: "eb-field" }
-const _hoisted_898 = { class: "eb-row eb-frow" }
-const _hoisted_899 = { class: "eb-field b-style" }
-const _hoisted_900 = { value: "" }
-const _hoisted_901 = { value: "solid" }
-const _hoisted_902 = { value: "dashed" }
-const _hoisted_903 = { value: "dotted" }
-const _hoisted_904 = { value: "double" }
-const _hoisted_905 = { class: "eb-field b-style" }
-const _hoisted_906 = ["disabled"]
-const _hoisted_907 = { value: "all" }
-const _hoisted_908 = { value: "top" }
-const _hoisted_909 = { value: "bottom" }
-const _hoisted_910 = { value: "topbottom" }
-const _hoisted_911 = { value: "left" }
-const _hoisted_912 = { class: "eb-field" }
+const _hoisted_897 = ["placeholder"]
+const _hoisted_898 = { class: "eb-row" }
+const _hoisted_899 = { class: "eb-field" }
+const _hoisted_900 = { class: "eb-field" }
+const _hoisted_901 = { class: "eb-row" }
+const _hoisted_902 = { class: "eb-field" }
+const _hoisted_903 = { class: "eb-field" }
+const _hoisted_904 = { class: "eb-field" }
+const _hoisted_905 = { class: "eb-row eb-frow" }
+const _hoisted_906 = { class: "eb-field b-style" }
+const _hoisted_907 = { value: "" }
+const _hoisted_908 = { value: "solid" }
+const _hoisted_909 = { value: "dashed" }
+const _hoisted_910 = { value: "dotted" }
+const _hoisted_911 = { value: "double" }
+const _hoisted_912 = { class: "eb-field b-style" }
 const _hoisted_913 = ["disabled"]
-const _hoisted_914 = { class: "eb-field" }
-const _hoisted_915 = ["disabled"]
-const _hoisted_916 = { class: "eb-row" }
-const _hoisted_917 = { class: "eb-field" }
-const _hoisted_918 = { class: "colour-pair" }
-const _hoisted_919 = ["value"]
-const _hoisted_920 = { class: "eb-field" }
-const _hoisted_921 = { class: "opt" }
-const _hoisted_922 = { class: "opt" }
-const _hoisted_923 = { class: "opt" }
-const _hoisted_924 = { class: "opt" }
-const _hoisted_925 = { class: "eb-tip" }
-const _hoisted_926 = { class: "foot" }
-const _hoisted_927 = { class: "body" }
-const _hoisted_928 = { class: "eb-field" }
-const _hoisted_929 = { class: "eb-tip" }
-const _hoisted_930 = { class: "foot" }
-const _hoisted_931 = { class: "body" }
-const _hoisted_932 = { class: "chips" }
-const _hoisted_933 = ["onClick"]
-const _hoisted_934 = { class: "eb-chargrid" }
-const _hoisted_935 = ["onClick"]
+const _hoisted_914 = { value: "all" }
+const _hoisted_915 = { value: "top" }
+const _hoisted_916 = { value: "bottom" }
+const _hoisted_917 = { value: "topbottom" }
+const _hoisted_918 = { value: "left" }
+const _hoisted_919 = { class: "eb-field" }
+const _hoisted_920 = ["disabled"]
+const _hoisted_921 = { class: "eb-field" }
+const _hoisted_922 = ["disabled"]
+const _hoisted_923 = { class: "eb-row" }
+const _hoisted_924 = { class: "eb-field" }
+const _hoisted_925 = { class: "colour-pair" }
+const _hoisted_926 = ["value"]
+const _hoisted_927 = { class: "eb-field" }
+const _hoisted_928 = { class: "opt" }
+const _hoisted_929 = { class: "opt" }
+const _hoisted_930 = { class: "opt" }
+const _hoisted_931 = { class: "opt" }
+const _hoisted_932 = { class: "eb-tip" }
+const _hoisted_933 = { class: "foot" }
+const _hoisted_934 = { class: "body" }
+const _hoisted_935 = { class: "eb-field" }
 const _hoisted_936 = { class: "eb-tip" }
 const _hoisted_937 = { class: "foot" }
 const _hoisted_938 = { class: "body" }
-const _hoisted_939 = { class: "eb-field" }
-const _hoisted_940 = { class: "eb-tip" }
-const _hoisted_941 = {
+const _hoisted_939 = { class: "chips" }
+const _hoisted_940 = ["onClick"]
+const _hoisted_941 = { class: "eb-chargrid" }
+const _hoisted_942 = ["onClick"]
+const _hoisted_943 = { class: "eb-tip" }
+const _hoisted_944 = { class: "foot" }
+const _hoisted_945 = { class: "body" }
+const _hoisted_946 = { class: "eb-field" }
+const _hoisted_947 = { class: "eb-tip" }
+const _hoisted_948 = {
   key: 0,
   class: "eb-tip"
 }
-const _hoisted_942 = { class: "foot" }
-const _hoisted_943 = ["disabled"]
-const _hoisted_944 = { class: "body" }
-const _hoisted_945 = { class: "eb-field" }
-const _hoisted_946 = ["placeholder"]
-const _hoisted_947 = { class: "eb-field" }
-const _hoisted_948 = { class: "eb-tip" }
 const _hoisted_949 = { class: "foot" }
-const _hoisted_950 = { class: "body" }
-const _hoisted_951 = { class: "eb-field" }
-const _hoisted_952 = { class: "eb-tip" }
-const _hoisted_953 = { class: "foot" }
-const _hoisted_954 = {
-  key: 28,
+const _hoisted_950 = ["disabled"]
+const _hoisted_951 = { class: "body" }
+const _hoisted_952 = { class: "eb-field" }
+const _hoisted_953 = ["placeholder"]
+const _hoisted_954 = { class: "eb-field" }
+const _hoisted_955 = { class: "eb-tip" }
+const _hoisted_956 = { class: "foot" }
+const _hoisted_957 = { class: "body" }
+const _hoisted_958 = { class: "eb-field" }
+const _hoisted_959 = { class: "eb-tip" }
+const _hoisted_960 = { class: "foot" }
+const _hoisted_961 = {
+  key: 29,
   class: "eb-toast"
 }
 
@@ -7540,11 +7550,12 @@ return function render(_ctx, _cache) {
           return (_openBlock(), _createElementBlock("button", {
             key: d.id,
             class: _normalizeClass(["eb-docitem", { active: d.id === _ctx.doc.id }]),
-            onClick: $event => (_ctx.openDoc(d.id))
+            onClick: $event => (_ctx.openDoc(d.id)),
+            onContextmenu: _withModifiers($event => (_ctx.docCtx($event, d)), ["prevent","stop"])
           }, [
             _createElementVNode("span", _hoisted_11, _toDisplayString(d.title), 1 /* TEXT */),
             _createElementVNode("span", _hoisted_12, _toDisplayString(_ctx.when(d.mtime)) + " · " + _toDisplayString(_ctx.size(d.size)), 1 /* TEXT */)
-          ], 10 /* CLASS, PROPS */, _hoisted_10))
+          ], 42 /* CLASS, PROPS, NEED_HYDRATION */, _hoisted_10))
         }), 128 /* KEYED_FRAGMENT */))
       ]),
       _createElementVNode("div", _hoisted_13, [
@@ -10874,28 +10885,73 @@ return function render(_ctx, _cache) {
           ])
         ]))
       : _createCommentVNode("v-if", true),
-    _createCommentVNode(" cropping a picture: a shape for the frame and a place to look at "),
-    (_ctx.cropOpen)
+    _createCommentVNode(" What a document is: told from the file, not from the screen. "),
+    (_ctx.props.open)
       ? (_openBlock(), _createElementBlock("div", {
           key: 12,
           class: "eb-modal-back",
-          onClick: _cache[385] || (_cache[385] = $event => (_ctx.cropOpen = false))
+          onClick: _cache[381] || (_cache[381] = $event => (_ctx.props.open = false))
+        }, [
+          _createElementVNode("div", {
+            class: "eb-modal",
+            style: {"width":"min(460px,100%)"},
+            onClick: _cache[380] || (_cache[380] = _withModifiers(() => {}, ["stop"]))
+          }, [
+            _createElementVNode("h3", null, _toDisplayString(_ctx.props.title || _ctx.props.name), 1 /* TEXT */),
+            _createElementVNode("div", _hoisted_627, [
+              (_ctx.props.error)
+                ? (_openBlock(), _createElementBlock("p", _hoisted_628, _toDisplayString(_ctx.props.error), 1 /* TEXT */))
+                : _createCommentVNode("v-if", true),
+              _createElementVNode("dl", _hoisted_629, [
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('File name')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.props.name), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Where it is')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.settings.folder), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Size')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.size(_ctx.props.size)), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Last saved')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.when(_ctx.props.mtime)), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Paper')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.props.busy ? '…' : _ctx.props.paper), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Characters')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.props.busy ? '…' : _ctx.props.chars), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Pictures')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.props.busy ? '…' : _ctx.props.pictures), 1 /* TEXT */),
+                _createElementVNode("dt", null, _toDisplayString(_ctx.t('Tables')), 1 /* TEXT */),
+                _createElementVNode("dd", null, _toDisplayString(_ctx.props.busy ? '…' : _ctx.props.tables), 1 /* TEXT */)
+              ])
+            ]),
+            _createElementVNode("div", _hoisted_630, [
+              _createElementVNode("button", {
+                class: "eb-btn primary",
+                onClick: _cache[379] || (_cache[379] = $event => (_ctx.props.open = false))
+              }, _toDisplayString(_ctx.t('Done')), 1 /* TEXT */)
+            ])
+          ])
+        ]))
+      : _createCommentVNode("v-if", true),
+    _createCommentVNode(" cropping a picture: a shape for the frame and a place to look at "),
+    (_ctx.cropOpen)
+      ? (_openBlock(), _createElementBlock("div", {
+          key: 13,
+          class: "eb-modal-back",
+          onClick: _cache[388] || (_cache[388] = $event => (_ctx.cropOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(520px,100%)"},
-            onClick: _cache[384] || (_cache[384] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[387] || (_cache[387] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Crop')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_627, [
-              _createElementVNode("div", _hoisted_628, [
+            _createElementVNode("div", _hoisted_631, [
+              _createElementVNode("div", _hoisted_632, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Shape')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("select", {
-                  "onUpdate:modelValue": _cache[379] || (_cache[379] = $event => ((_ctx.crop.ratio) = $event))
+                  "onUpdate:modelValue": _cache[382] || (_cache[382] = $event => ((_ctx.crop.ratio) = $event))
                 }, [
-                  _createElementVNode("option", _hoisted_629, _toDisplayString(_ctx.t('The whole picture')), 1 /* TEXT */),
-                  _createElementVNode("option", _hoisted_630, _toDisplayString(_ctx.t('Square (1:1)')), 1 /* TEXT */),
-                  _hoisted_631
+                  _createElementVNode("option", _hoisted_633, _toDisplayString(_ctx.t('The whole picture')), 1 /* TEXT */),
+                  _createElementVNode("option", _hoisted_634, _toDisplayString(_ctx.t('Square (1:1)')), 1 /* TEXT */),
+                  _hoisted_635
                 ], 512 /* NEED_PATCH */), [
                   [_vModelSelect, _ctx.crop.ratio]
                 ])
@@ -10905,29 +10961,29 @@ return function render(_ctx, _cache) {
                     key: 0,
                     class: "eb-cropbox",
                     style: _normalizeStyle({ aspectRatio: _ctx.crop.ratio }),
-                    onPointerdown: _cache[380] || (_cache[380] = _withModifiers((...args) => (_ctx.cropGrab && _ctx.cropGrab(...args)), ["prevent"]))
+                    onPointerdown: _cache[383] || (_cache[383] = _withModifiers((...args) => (_ctx.cropGrab && _ctx.cropGrab(...args)), ["prevent"]))
                   }, [
                     _createElementVNode("img", {
                       src: _ctx.cropSrc,
                       style: _normalizeStyle({ objectPosition: _ctx.crop.x + '% ' + _ctx.crop.y + '%' })
-                    }, null, 12 /* STYLE, PROPS */, _hoisted_636),
-                    _createElementVNode("span", _hoisted_637, _toDisplayString(_ctx.t('Drag the picture to choose what shows.')), 1 /* TEXT */)
+                    }, null, 12 /* STYLE, PROPS */, _hoisted_640),
+                    _createElementVNode("span", _hoisted_641, _toDisplayString(_ctx.t('Drag the picture to choose what shows.')), 1 /* TEXT */)
                   ], 36 /* STYLE, NEED_HYDRATION */))
                 : _createCommentVNode("v-if", true),
-              _createElementVNode("p", _hoisted_638, _toDisplayString(_ctx.t('Nothing is cut away: the whole picture stays in the file and the frame simply shows part of it, so the crop can be changed or undone at any time.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_642, _toDisplayString(_ctx.t('Nothing is cut away: the whole picture stays in the file and the frame simply shows part of it, so the crop can be changed or undone at any time.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_639, [
+            _createElementVNode("div", _hoisted_643, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[381] || (_cache[381] = $event => (_ctx.crop.ratio = ''))
+                onClick: _cache[384] || (_cache[384] = $event => (_ctx.crop.ratio = ''))
               }, _toDisplayString(_ctx.t('The whole picture')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[382] || (_cache[382] = $event => (_ctx.cropOpen = false))
+                onClick: _cache[385] || (_cache[385] = $event => (_ctx.cropOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[383] || (_cache[383] = (...args) => (_ctx.applyCrop && _ctx.applyCrop(...args)))
+                onClick: _cache[386] || (_cache[386] = (...args) => (_ctx.applyCrop && _ctx.applyCrop(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -10936,78 +10992,78 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" a rule round the chosen cells "),
     (_ctx.cellBorderOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 13,
+          key: 14,
           class: "eb-modal-back",
-          onClick: _cache[393] || (_cache[393] = $event => (_ctx.cellBorderOpen = false))
+          onClick: _cache[396] || (_cache[396] = $event => (_ctx.cellBorderOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(560px,100%)"},
-            onClick: _cache[392] || (_cache[392] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[395] || (_cache[395] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Rule round the cells')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_640, [
-              _createElementVNode("div", _hoisted_641, [
-                _createElementVNode("div", _hoisted_642, [
+            _createElementVNode("div", _hoisted_644, [
+              _createElementVNode("div", _hoisted_645, [
+                _createElementVNode("div", _hoisted_646, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Rule')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[386] || (_cache[386] = $event => ((_ctx.cellBorder.style) = $event))
+                    "onUpdate:modelValue": _cache[389] || (_cache[389] = $event => ((_ctx.cellBorder.style) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_643, _toDisplayString(_ctx.t('As the style says')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_644, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_645, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_646, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_647, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_648, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_647, _toDisplayString(_ctx.t('As the style says')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_648, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_649, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_650, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_651, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_652, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.cellBorder.style]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_649, [
+                _createElementVNode("div", _hoisted_653, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('On which edges')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[387] || (_cache[387] = $event => ((_ctx.cellBorder.sides) = $event))
+                    "onUpdate:modelValue": _cache[390] || (_cache[390] = $event => ((_ctx.cellBorder.sides) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_650, _toDisplayString(_ctx.t('All four')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_651, _toDisplayString(_ctx.t('Above')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_652, _toDisplayString(_ctx.t('Below')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_653, _toDisplayString(_ctx.t('Above and below')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_654, _toDisplayString(_ctx.t('At the left')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_654, _toDisplayString(_ctx.t('All four')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_655, _toDisplayString(_ctx.t('Above')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_656, _toDisplayString(_ctx.t('Below')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_657, _toDisplayString(_ctx.t('Above and below')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_658, _toDisplayString(_ctx.t('At the left')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.cellBorder.sides]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_655, [
+                _createElementVNode("div", _hoisted_659, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Thickness (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0.25",
                     step: "0.25",
-                    "onUpdate:modelValue": _cache[388] || (_cache[388] = $event => ((_ctx.cellBorder.width) = $event))
+                    "onUpdate:modelValue": _cache[391] || (_cache[391] = $event => ((_ctx.cellBorder.width) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.cellBorder.width]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_656, [
+                _createElementVNode("div", _hoisted_660, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Line colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[389] || (_cache[389] = $event => ((_ctx.cellBorder.colour) = $event))
+                    "onUpdate:modelValue": _cache[392] || (_cache[392] = $event => ((_ctx.cellBorder.colour) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.cellBorder.colour]
                   ])
                 ])
               ]),
-              _createElementVNode("p", _hoisted_657, _toDisplayString(_ctx.t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_661, _toDisplayString(_ctx.t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_658, [
+            _createElementVNode("div", _hoisted_662, [
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[390] || (_cache[390] = $event => (_ctx.cellBorderOpen = false))
+                onClick: _cache[393] || (_cache[393] = $event => (_ctx.cellBorderOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[391] || (_cache[391] = (...args) => (_ctx.applyCellBorder && _ctx.applyCellBorder(...args)))
+                onClick: _cache[394] || (_cache[394] = (...args) => (_ctx.applyCellBorder && _ctx.applyCellBorder(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -11016,53 +11072,53 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" a reading over a word "),
     (_ctx.rubyOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 14,
+          key: 15,
           class: "eb-modal-back",
-          onClick: _cache[400] || (_cache[400] = $event => (_ctx.rubyOpen = false))
+          onClick: _cache[403] || (_cache[403] = $event => (_ctx.rubyOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(420px,100%)"},
-            onClick: _cache[399] || (_cache[399] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[402] || (_cache[402] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Reading')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_659, [
-              _createElementVNode("div", _hoisted_660, [
+            _createElementVNode("div", _hoisted_663, [
+              _createElementVNode("div", _hoisted_664, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Word')), 1 /* TEXT */),
                 _createElementVNode("input", {
                   type: "text",
                   value: _ctx.rubyWord,
                   readonly: ""
-                }, null, 8 /* PROPS */, _hoisted_661)
+                }, null, 8 /* PROPS */, _hoisted_665)
               ]),
-              _createElementVNode("div", _hoisted_662, [
+              _createElementVNode("div", _hoisted_666, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Reading')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   ref: "rubyInput",
                   type: "text",
-                  "onUpdate:modelValue": _cache[394] || (_cache[394] = $event => ((_ctx.rubyText) = $event)),
-                  onKeydown: _cache[395] || (_cache[395] = _withKeys(_withModifiers((...args) => (_ctx.applyRubyText && _ctx.applyRubyText(...args)), ["prevent"]), ["enter"]))
+                  "onUpdate:modelValue": _cache[397] || (_cache[397] = $event => ((_ctx.rubyText) = $event)),
+                  onKeydown: _cache[398] || (_cache[398] = _withKeys(_withModifiers((...args) => (_ctx.applyRubyText && _ctx.applyRubyText(...args)), ["prevent"]), ["enter"]))
                 }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                   [_vModelText, _ctx.rubyText]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_663, _toDisplayString(_ctx.t('The reading is written above the word, at half its size, using the element HTML has for exactly this.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_667, _toDisplayString(_ctx.t('The reading is written above the word, at half its size, using the element HTML has for exactly this.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_664, [
+            _createElementVNode("div", _hoisted_668, [
               (_ctx.fmt.ruby)
                 ? (_openBlock(), _createElementBlock("button", {
                     key: 0,
                     class: "eb-btn ghost",
-                    onClick: _cache[396] || (_cache[396] = (...args) => (_ctx.dropRuby && _ctx.dropRuby(...args)))
+                    onClick: _cache[399] || (_cache[399] = (...args) => (_ctx.dropRuby && _ctx.dropRuby(...args)))
                   }, _toDisplayString(_ctx.t('Remove the reading')), 1 /* TEXT */))
                 : _createCommentVNode("v-if", true),
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[397] || (_cache[397] = $event => (_ctx.rubyOpen = false))
+                onClick: _cache[400] || (_cache[400] = $event => (_ctx.rubyOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[398] || (_cache[398] = (...args) => (_ctx.applyRubyText && _ctx.applyRubyText(...args)))
+                onClick: _cache[401] || (_cache[401] = (...args) => (_ctx.applyRubyText && _ctx.applyRubyText(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -11071,37 +11127,37 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" a note "),
     (_ctx.noteOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 15,
+          key: 16,
           class: "eb-modal-back",
-          onClick: _cache[405] || (_cache[405] = $event => (_ctx.noteOpen = false))
+          onClick: _cache[408] || (_cache[408] = $event => (_ctx.noteOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(520px,100%)"},
-            onClick: _cache[404] || (_cache[404] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[407] || (_cache[407] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Note')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_665, [
-              _createElementVNode("div", _hoisted_666, [
+            _createElementVNode("div", _hoisted_669, [
+              _createElementVNode("div", _hoisted_670, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('The note')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("textarea", {
                   ref: "noteInput",
                   rows: "4",
-                  "onUpdate:modelValue": _cache[401] || (_cache[401] = $event => ((_ctx.noteText) = $event))
+                  "onUpdate:modelValue": _cache[404] || (_cache[404] = $event => ((_ctx.noteText) = $event))
                 }, null, 512 /* NEED_PATCH */), [
                   [_vModelText, _ctx.noteText]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_667, _toDisplayString(_ctx.t('A number goes in at the cursor and the note is added to the list at the end of the document. The numbers follow the order the notes are cited in and look after themselves. A browser cannot put a note at the foot of the page that cites it: nothing in CSS moves text from one page to another.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_671, _toDisplayString(_ctx.t('A number goes in at the cursor and the note is added to the list at the end of the document. The numbers follow the order the notes are cited in and look after themselves. A browser cannot put a note at the foot of the page that cites it: nothing in CSS moves text from one page to another.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_668, [
+            _createElementVNode("div", _hoisted_672, [
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[402] || (_cache[402] = $event => (_ctx.noteOpen = false))
+                onClick: _cache[405] || (_cache[405] = $event => (_ctx.noteOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[403] || (_cache[403] = (...args) => (_ctx.applyNote && _ctx.applyNote(...args)))
+                onClick: _cache[406] || (_cache[406] = (...args) => (_ctx.applyNote && _ctx.applyNote(...args)))
               }, _toDisplayString(_ctx.t('Insert')), 1 /* TEXT */)
             ])
           ])
@@ -11110,27 +11166,27 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" columns "),
     (_ctx.colsOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 16,
+          key: 17,
           class: "eb-modal-back",
-          onClick: _cache[411] || (_cache[411] = $event => (_ctx.colsOpen = false))
+          onClick: _cache[414] || (_cache[414] = $event => (_ctx.colsOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(460px,100%)"},
-            onClick: _cache[410] || (_cache[410] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[413] || (_cache[413] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Columns')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_669, [
-              _createElementVNode("div", _hoisted_670, [
-                _createElementVNode("div", _hoisted_671, [
+            _createElementVNode("div", _hoisted_673, [
+              _createElementVNode("div", _hoisted_674, [
+                _createElementVNode("div", _hoisted_675, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Columns')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[406] || (_cache[406] = $event => ((_ctx.cols.count) = $event))
+                    "onUpdate:modelValue": _cache[409] || (_cache[409] = $event => ((_ctx.cols.count) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_672, _toDisplayString(_ctx.t('One (no columns)')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_673, _toDisplayString(_ctx.t('Two')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_674, _toDisplayString(_ctx.t('Three')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_675, _toDisplayString(_ctx.t('Four')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_676, _toDisplayString(_ctx.t('One (no columns)')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_677, _toDisplayString(_ctx.t('Two')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_678, _toDisplayString(_ctx.t('Three')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_679, _toDisplayString(_ctx.t('Four')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [
                       _vModelSelect,
@@ -11140,14 +11196,14 @@ return function render(_ctx, _cache) {
                     ]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_676, [
+                _createElementVNode("div", _hoisted_680, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Gap (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "40",
                     step: "1",
-                    "onUpdate:modelValue": _cache[407] || (_cache[407] = $event => ((_ctx.cols.gap) = $event))
+                    "onUpdate:modelValue": _cache[410] || (_cache[410] = $event => ((_ctx.cols.gap) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [
                       _vModelText,
@@ -11158,16 +11214,16 @@ return function render(_ctx, _cache) {
                   ])
                 ])
               ]),
-              _createElementVNode("p", _hoisted_677, _toDisplayString(_ctx.t('The paragraphs you have selected are laid out in columns. Select a paragraph inside them and choose one column to take the columns off again.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_681, _toDisplayString(_ctx.t('The paragraphs you have selected are laid out in columns. Select a paragraph inside them and choose one column to take the columns off again.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_678, [
+            _createElementVNode("div", _hoisted_682, [
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[408] || (_cache[408] = $event => (_ctx.colsOpen = false))
+                onClick: _cache[411] || (_cache[411] = $event => (_ctx.colsOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[409] || (_cache[409] = (...args) => (_ctx.applyCols && _ctx.applyCols(...args)))
+                onClick: _cache[412] || (_cache[412] = (...args) => (_ctx.applyCols && _ctx.applyCols(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -11176,63 +11232,27 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" the running header and footer "),
     (_ctx.runOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 17,
+          key: 18,
           class: "eb-modal-back",
-          onClick: _cache[427] || (_cache[427] = $event => (_ctx.runOpen = false))
+          onClick: _cache[430] || (_cache[430] = $event => (_ctx.runOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
-            onClick: _cache[426] || (_cache[426] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[429] || (_cache[429] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Header and footer')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_679, [
+            _createElementVNode("div", _hoisted_683, [
               _createElementVNode("label", null, _toDisplayString(_ctx.t('Header')), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_680, [
-                _createElementVNode("div", _hoisted_681, [
-                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
-                  _withDirectives(_createElementVNode("input", {
-                    type: "text",
-                    maxlength: "120",
-                    "onUpdate:modelValue": _cache[412] || (_cache[412] = $event => ((_ctx.doc.paper.header.l) = $event)),
-                    onInput: _cache[413] || (_cache[413] = (...args) => (_ctx.touch && _ctx.touch(...args)))
-                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
-                    [_vModelText, _ctx.doc.paper.header.l]
-                  ])
-                ]),
-                _createElementVNode("div", _hoisted_682, [
-                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
-                  _withDirectives(_createElementVNode("input", {
-                    type: "text",
-                    maxlength: "120",
-                    "onUpdate:modelValue": _cache[414] || (_cache[414] = $event => ((_ctx.doc.paper.header.c) = $event)),
-                    onInput: _cache[415] || (_cache[415] = (...args) => (_ctx.touch && _ctx.touch(...args)))
-                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
-                    [_vModelText, _ctx.doc.paper.header.c]
-                  ])
-                ]),
-                _createElementVNode("div", _hoisted_683, [
-                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
-                  _withDirectives(_createElementVNode("input", {
-                    type: "text",
-                    maxlength: "120",
-                    "onUpdate:modelValue": _cache[416] || (_cache[416] = $event => ((_ctx.doc.paper.header.r) = $event)),
-                    onInput: _cache[417] || (_cache[417] = (...args) => (_ctx.touch && _ctx.touch(...args)))
-                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
-                    [_vModelText, _ctx.doc.paper.header.r]
-                  ])
-                ])
-              ]),
-              _createElementVNode("label", null, _toDisplayString(_ctx.t('Footer')), 1 /* TEXT */),
               _createElementVNode("div", _hoisted_684, [
                 _createElementVNode("div", _hoisted_685, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "text",
                     maxlength: "120",
-                    "onUpdate:modelValue": _cache[418] || (_cache[418] = $event => ((_ctx.doc.paper.footer.l) = $event)),
-                    onInput: _cache[419] || (_cache[419] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    "onUpdate:modelValue": _cache[415] || (_cache[415] = $event => ((_ctx.doc.paper.header.l) = $event)),
+                    onInput: _cache[416] || (_cache[416] = (...args) => (_ctx.touch && _ctx.touch(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
-                    [_vModelText, _ctx.doc.paper.footer.l]
+                    [_vModelText, _ctx.doc.paper.header.l]
                   ])
                 ]),
                 _createElementVNode("div", _hoisted_686, [
@@ -11240,10 +11260,10 @@ return function render(_ctx, _cache) {
                   _withDirectives(_createElementVNode("input", {
                     type: "text",
                     maxlength: "120",
-                    "onUpdate:modelValue": _cache[420] || (_cache[420] = $event => ((_ctx.doc.paper.footer.c) = $event)),
-                    onInput: _cache[421] || (_cache[421] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    "onUpdate:modelValue": _cache[417] || (_cache[417] = $event => ((_ctx.doc.paper.header.c) = $event)),
+                    onInput: _cache[418] || (_cache[418] = (...args) => (_ctx.touch && _ctx.touch(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
-                    [_vModelText, _ctx.doc.paper.footer.c]
+                    [_vModelText, _ctx.doc.paper.header.c]
                   ])
                 ]),
                 _createElementVNode("div", _hoisted_687, [
@@ -11251,23 +11271,59 @@ return function render(_ctx, _cache) {
                   _withDirectives(_createElementVNode("input", {
                     type: "text",
                     maxlength: "120",
-                    "onUpdate:modelValue": _cache[422] || (_cache[422] = $event => ((_ctx.doc.paper.footer.r) = $event)),
-                    onInput: _cache[423] || (_cache[423] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                    "onUpdate:modelValue": _cache[419] || (_cache[419] = $event => ((_ctx.doc.paper.header.r) = $event)),
+                    onInput: _cache[420] || (_cache[420] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
+                    [_vModelText, _ctx.doc.paper.header.r]
+                  ])
+                ])
+              ]),
+              _createElementVNode("label", null, _toDisplayString(_ctx.t('Footer')), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_688, [
+                _createElementVNode("div", _hoisted_689, [
+                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
+                  _withDirectives(_createElementVNode("input", {
+                    type: "text",
+                    maxlength: "120",
+                    "onUpdate:modelValue": _cache[421] || (_cache[421] = $event => ((_ctx.doc.paper.footer.l) = $event)),
+                    onInput: _cache[422] || (_cache[422] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
+                    [_vModelText, _ctx.doc.paper.footer.l]
+                  ])
+                ]),
+                _createElementVNode("div", _hoisted_690, [
+                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
+                  _withDirectives(_createElementVNode("input", {
+                    type: "text",
+                    maxlength: "120",
+                    "onUpdate:modelValue": _cache[423] || (_cache[423] = $event => ((_ctx.doc.paper.footer.c) = $event)),
+                    onInput: _cache[424] || (_cache[424] = (...args) => (_ctx.touch && _ctx.touch(...args)))
+                  }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
+                    [_vModelText, _ctx.doc.paper.footer.c]
+                  ])
+                ]),
+                _createElementVNode("div", _hoisted_691, [
+                  _createElementVNode("label", null, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
+                  _withDirectives(_createElementVNode("input", {
+                    type: "text",
+                    maxlength: "120",
+                    "onUpdate:modelValue": _cache[425] || (_cache[425] = $event => ((_ctx.doc.paper.footer.r) = $event)),
+                    onInput: _cache[426] || (_cache[426] = (...args) => (_ctx.touch && _ctx.touch(...args)))
                   }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                     [_vModelText, _ctx.doc.paper.footer.r]
                   ])
                 ])
               ]),
-              _createElementVNode("p", _hoisted_688, _toDisplayString(_ctx.t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_692, _toDisplayString(_ctx.t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_689, [
+            _createElementVNode("div", _hoisted_693, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[424] || (_cache[424] = (...args) => (_ctx.clearRunning && _ctx.clearRunning(...args)))
+                onClick: _cache[427] || (_cache[427] = (...args) => (_ctx.clearRunning && _ctx.clearRunning(...args)))
               }, _toDisplayString(_ctx.t('Clear')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[425] || (_cache[425] = $event => (_ctx.runOpen = false))
+                onClick: _cache[428] || (_cache[428] = $event => (_ctx.runOpen = false))
               }, _toDisplayString(_ctx.t('Done')), 1 /* TEXT */)
             ])
           ])
@@ -11276,35 +11332,35 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" frame properties: everything here is written on the object as inline CSS,\n       so the saved file carries its own layout and needs nothing to read it "),
     (_ctx.fpropsOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 18,
+          key: 19,
           class: "eb-modal-back",
-          onClick: _cache[469] || (_cache[469] = $event => (_ctx.fpropsOpen = false))
+          onClick: _cache[472] || (_cache[472] = $event => (_ctx.fpropsOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal tall",
-            onClick: _cache[468] || (_cache[468] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[471] || (_cache[471] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('{name} properties', { name: _ctx.frameLabel })), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_690, [
-              _createElementVNode("h4", _hoisted_691, _toDisplayString(_ctx.t('Where it stands')), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_692, [
-                _createElementVNode("div", _hoisted_693, [
+            _createElementVNode("div", _hoisted_694, [
+              _createElementVNode("h4", _hoisted_695, _toDisplayString(_ctx.t('Where it stands')), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_696, [
+                _createElementVNode("div", _hoisted_697, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Placement')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[428] || (_cache[428] = $event => ((_ctx.fprops.place) = $event))
+                    "onUpdate:modelValue": _cache[431] || (_cache[431] = $event => ((_ctx.fprops.place) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_694, _toDisplayString(_ctx.t('In the flow of the text')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_695, _toDisplayString(_ctx.t('In the flow, at the left')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_696, _toDisplayString(_ctx.t('In the flow, centred')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_697, _toDisplayString(_ctx.t('In the flow, at the right')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_698, _toDisplayString(_ctx.t('Placed freely')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_698, _toDisplayString(_ctx.t('In the flow of the text')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_699, _toDisplayString(_ctx.t('In the flow, at the left')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_700, _toDisplayString(_ctx.t('In the flow, centred')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_701, _toDisplayString(_ctx.t('In the flow, at the right')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_702, _toDisplayString(_ctx.t('Placed freely')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.fprops.place]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_699, [
+                _createElementVNode("div", _hoisted_703, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Where the words go')), 1 /* TEXT */),
-                  _createElementVNode("div", _hoisted_700, [
+                  _createElementVNode("div", _hoisted_704, [
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.wrapChoices, (w) => {
                       return (_openBlock(), _createElementBlock("button", {
                         key: w.kind,
@@ -11314,48 +11370,48 @@ return function render(_ctx, _cache) {
                       }, [
                         _createElementVNode("span", {
                           innerHTML: w.icon
-                        }, null, 8 /* PROPS */, _hoisted_702),
-                        _createElementVNode("span", _hoisted_703, _toDisplayString(w.label), 1 /* TEXT */)
-                      ], 10 /* CLASS, PROPS */, _hoisted_701))
+                        }, null, 8 /* PROPS */, _hoisted_706),
+                        _createElementVNode("span", _hoisted_707, _toDisplayString(w.label), 1 /* TEXT */)
+                      ], 10 /* CLASS, PROPS */, _hoisted_705))
                     }), 128 /* KEYED_FRAGMENT */))
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_704, [
+                _createElementVNode("div", _hoisted_708, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Gap to the text (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "60",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[429] || (_cache[429] = $event => ((_ctx.fprops.wrapGap) = $event)),
+                    "onUpdate:modelValue": _cache[432] || (_cache[432] = $event => ((_ctx.fprops.wrapGap) = $event)),
                     placeholder: '3'
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.wrapGap]
                   ])
                 ]),
                 (_ctx.frameHoldsWords)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_705, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_709, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Which way the words run')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("select", {
-                        "onUpdate:modelValue": _cache[430] || (_cache[430] = $event => ((_ctx.fprops.flow) = $event))
+                        "onUpdate:modelValue": _cache[433] || (_cache[433] = $event => ((_ctx.fprops.flow) = $event))
                       }, [
-                        _createElementVNode("option", _hoisted_706, _toDisplayString(_ctx.t('As the page runs')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_707, _toDisplayString(_ctx.t('Across (horizontal)')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_708, _toDisplayString(_ctx.t('Down (vertical)')), 1 /* TEXT */)
+                        _createElementVNode("option", _hoisted_710, _toDisplayString(_ctx.t('As the page runs')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_711, _toDisplayString(_ctx.t('Across (horizontal)')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_712, _toDisplayString(_ctx.t('Down (vertical)')), 1 /* TEXT */)
                       ], 512 /* NEED_PATCH */), [
                         [_vModelSelect, _ctx.fprops.flow]
                       ])
                     ]))
                   : _createCommentVNode("v-if", true),
                 (_ctx.frameHoldsWords)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_709, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_713, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Text down the box')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("select", {
-                        "onUpdate:modelValue": _cache[431] || (_cache[431] = $event => ((_ctx.fprops.vpos) = $event))
+                        "onUpdate:modelValue": _cache[434] || (_cache[434] = $event => ((_ctx.fprops.vpos) = $event))
                       }, [
-                        _createElementVNode("option", _hoisted_710, _toDisplayString(_ctx.t('At the top')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_711, _toDisplayString(_ctx.t('In the middle')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_712, _toDisplayString(_ctx.t('At the bottom')), 1 /* TEXT */)
+                        _createElementVNode("option", _hoisted_714, _toDisplayString(_ctx.t('At the top')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_715, _toDisplayString(_ctx.t('In the middle')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_716, _toDisplayString(_ctx.t('At the bottom')), 1 /* TEXT */)
                       ], 512 /* NEED_PATCH */), [
                         [_vModelSelect, _ctx.fprops.vpos]
                       ])
@@ -11364,55 +11420,55 @@ return function render(_ctx, _cache) {
               ]),
               _createCommentVNode(" How the writing itself is dressed: a picture behind it, an outline\n             round each letter, a shadow under them. Written as CSS on the object,\n             so the saved file carries the look with it. "),
               (_ctx.frameHoldsWords)
-                ? (_openBlock(), _createElementBlock("h4", _hoisted_713, _toDisplayString(_ctx.t('How the words are dressed')), 1 /* TEXT */))
+                ? (_openBlock(), _createElementBlock("h4", _hoisted_717, _toDisplayString(_ctx.t('How the words are dressed')), 1 /* TEXT */))
                 : _createCommentVNode("v-if", true),
               (_ctx.frameHoldsWords)
-                ? (_openBlock(), _createElementBlock("div", _hoisted_714, [
-                    _createElementVNode("div", _hoisted_715, [
+                ? (_openBlock(), _createElementBlock("div", _hoisted_718, [
+                    _createElementVNode("div", _hoisted_719, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Picture behind the words')), 1 /* TEXT */),
-                      _createElementVNode("div", _hoisted_716, [
+                      _createElementVNode("div", _hoisted_720, [
                         _createElementVNode("button", {
                           class: "eb-btn",
-                          onClick: _cache[432] || (_cache[432] = $event => (_ctx.openObjectBg()))
+                          onClick: _cache[435] || (_cache[435] = $event => (_ctx.openObjectBg()))
                         }, _toDisplayString(_ctx.fprops.bgImage ? _ctx.t('Change…') : _ctx.t('Choose…')), 1 /* TEXT */),
                         _createElementVNode("button", {
                           class: "eb-btn",
                           disabled: !_ctx.fprops.bgImage,
-                          onClick: _cache[433] || (_cache[433] = $event => (_ctx.clearObjectBg()))
-                        }, _toDisplayString(_ctx.t('None')), 9 /* TEXT, PROPS */, _hoisted_717)
+                          onClick: _cache[436] || (_cache[436] = $event => (_ctx.clearObjectBg()))
+                        }, _toDisplayString(_ctx.t('None')), 9 /* TEXT, PROPS */, _hoisted_721)
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_718, [
+                    _createElementVNode("div", _hoisted_722, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('How it fills')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("select", {
-                        "onUpdate:modelValue": _cache[434] || (_cache[434] = $event => ((_ctx.fprops.bgFit) = $event)),
+                        "onUpdate:modelValue": _cache[437] || (_cache[437] = $event => ((_ctx.fprops.bgFit) = $event)),
                         disabled: !_ctx.fprops.bgImage
                       }, [
-                        _createElementVNode("option", _hoisted_720, _toDisplayString(_ctx.t('Fill the box')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_721, _toDisplayString(_ctx.t('Fit inside')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_722, _toDisplayString(_ctx.t('Tiled')), 1 /* TEXT */)
-                      ], 8 /* PROPS */, _hoisted_719), [
+                        _createElementVNode("option", _hoisted_724, _toDisplayString(_ctx.t('Fill the box')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_725, _toDisplayString(_ctx.t('Fit inside')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_726, _toDisplayString(_ctx.t('Tiled')), 1 /* TEXT */)
+                      ], 8 /* PROPS */, _hoisted_723), [
                         [_vModelSelect, _ctx.fprops.bgFit]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_723, [
+                    _createElementVNode("div", _hoisted_727, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Outline (mm)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         min: "0",
                         max: "3",
                         step: "0.05",
-                        "onUpdate:modelValue": _cache[435] || (_cache[435] = $event => ((_ctx.fprops.strokeWidth) = $event)),
+                        "onUpdate:modelValue": _cache[438] || (_cache[438] = $event => ((_ctx.fprops.strokeWidth) = $event)),
                         placeholder: "0"
                       }, null, 512 /* NEED_PATCH */), [
                         [_vModelText, _ctx.fprops.strokeWidth]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_724, [
+                    _createElementVNode("div", _hoisted_728, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Outline colour')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "color",
-                        "onUpdate:modelValue": _cache[436] || (_cache[436] = $event => ((_ctx.fprops.strokeColour) = $event))
+                        "onUpdate:modelValue": _cache[439] || (_cache[439] = $event => ((_ctx.fprops.strokeColour) = $event))
                       }, null, 512 /* NEED_PATCH */), [
                         [_vModelText, _ctx.fprops.strokeColour]
                       ])
@@ -11420,90 +11476,90 @@ return function render(_ctx, _cache) {
                   ]))
                 : _createCommentVNode("v-if", true),
               (_ctx.frameHoldsWords)
-                ? (_openBlock(), _createElementBlock("div", _hoisted_725, [
-                    _createElementVNode("div", _hoisted_726, [
+                ? (_openBlock(), _createElementBlock("div", _hoisted_729, [
+                    _createElementVNode("div", _hoisted_730, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Shadow under the letters')), 1 /* TEXT */),
-                      _createElementVNode("label", _hoisted_727, [
+                      _createElementVNode("label", _hoisted_731, [
                         _withDirectives(_createElementVNode("input", {
                           type: "checkbox",
-                          "onUpdate:modelValue": _cache[437] || (_cache[437] = $event => ((_ctx.fprops.textShadow) = $event))
+                          "onUpdate:modelValue": _cache[440] || (_cache[440] = $event => ((_ctx.fprops.textShadow) = $event))
                         }, null, 512 /* NEED_PATCH */), [
                           [_vModelCheckbox, _ctx.fprops.textShadow]
                         ]),
                         _createTextVNode(" " + _toDisplayString(_ctx.t('On')), 1 /* TEXT */)
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_728, [
+                    _createElementVNode("div", _hoisted_732, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Across (pt)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         min: "-20",
                         max: "20",
                         step: "0.5",
-                        "onUpdate:modelValue": _cache[438] || (_cache[438] = $event => ((_ctx.fprops.shadowX) = $event)),
+                        "onUpdate:modelValue": _cache[441] || (_cache[441] = $event => ((_ctx.fprops.shadowX) = $event)),
                         disabled: !_ctx.fprops.textShadow
-                      }, null, 8 /* PROPS */, _hoisted_729), [
+                      }, null, 8 /* PROPS */, _hoisted_733), [
                         [_vModelText, _ctx.fprops.shadowX]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_730, [
+                    _createElementVNode("div", _hoisted_734, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Down (pt)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         min: "-20",
                         max: "20",
                         step: "0.5",
-                        "onUpdate:modelValue": _cache[439] || (_cache[439] = $event => ((_ctx.fprops.shadowY) = $event)),
+                        "onUpdate:modelValue": _cache[442] || (_cache[442] = $event => ((_ctx.fprops.shadowY) = $event)),
                         disabled: !_ctx.fprops.textShadow
-                      }, null, 8 /* PROPS */, _hoisted_731), [
+                      }, null, 8 /* PROPS */, _hoisted_735), [
                         [_vModelText, _ctx.fprops.shadowY]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_732, [
+                    _createElementVNode("div", _hoisted_736, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Softness (pt)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         min: "0",
                         max: "30",
                         step: "0.5",
-                        "onUpdate:modelValue": _cache[440] || (_cache[440] = $event => ((_ctx.fprops.shadowBlur) = $event)),
+                        "onUpdate:modelValue": _cache[443] || (_cache[443] = $event => ((_ctx.fprops.shadowBlur) = $event)),
                         disabled: !_ctx.fprops.textShadow
-                      }, null, 8 /* PROPS */, _hoisted_733), [
+                      }, null, 8 /* PROPS */, _hoisted_737), [
                         [_vModelText, _ctx.fprops.shadowBlur]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_734, [
+                    _createElementVNode("div", _hoisted_738, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Shadow colour')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "color",
-                        "onUpdate:modelValue": _cache[441] || (_cache[441] = $event => ((_ctx.fprops.shadowColour) = $event)),
+                        "onUpdate:modelValue": _cache[444] || (_cache[444] = $event => ((_ctx.fprops.shadowColour) = $event)),
                         disabled: !_ctx.fprops.textShadow
-                      }, null, 8 /* PROPS */, _hoisted_735), [
+                      }, null, 8 /* PROPS */, _hoisted_739), [
                         [_vModelText, _ctx.fprops.shadowColour]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_736, [
+                    _createElementVNode("div", _hoisted_740, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Text inside it')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("select", {
-                        "onUpdate:modelValue": _cache[442] || (_cache[442] = $event => ((_ctx.fprops.inner) = $event))
+                        "onUpdate:modelValue": _cache[445] || (_cache[445] = $event => ((_ctx.fprops.inner) = $event))
                       }, [
-                        _createElementVNode("option", _hoisted_737, _toDisplayString(_ctx.t('As the document is set')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_738, _toDisplayString(_ctx.t('Ranged left')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_739, _toDisplayString(_ctx.t('Centred')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_740, _toDisplayString(_ctx.t('Ranged right')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_741, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
+                        _createElementVNode("option", _hoisted_741, _toDisplayString(_ctx.t('As the document is set')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_742, _toDisplayString(_ctx.t('Ranged left')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_743, _toDisplayString(_ctx.t('Centred')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_744, _toDisplayString(_ctx.t('Ranged right')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_745, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
                       ], 512 /* NEED_PATCH */), [
                         [_vModelSelect, _ctx.fprops.inner]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_742, [
+                    _createElementVNode("div", _hoisted_746, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Text wrap')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("select", {
-                        "onUpdate:modelValue": _cache[443] || (_cache[443] = $event => ((_ctx.fprops.wrap) = $event))
+                        "onUpdate:modelValue": _cache[446] || (_cache[446] = $event => ((_ctx.fprops.wrap) = $event))
                       }, [
-                        _createElementVNode("option", _hoisted_743, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_744, _toDisplayString(_ctx.t('Text wraps on the right')), 1 /* TEXT */),
-                        _createElementVNode("option", _hoisted_745, _toDisplayString(_ctx.t('Text wraps on the left')), 1 /* TEXT */)
+                        _createElementVNode("option", _hoisted_747, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_748, _toDisplayString(_ctx.t('Text wraps on the right')), 1 /* TEXT */),
+                        _createElementVNode("option", _hoisted_749, _toDisplayString(_ctx.t('Text wraps on the left')), 1 /* TEXT */)
                       ], 512 /* NEED_PATCH */), [
                         [_vModelSelect, _ctx.fprops.wrap]
                       ])
@@ -11511,238 +11567,238 @@ return function render(_ctx, _cache) {
                   ]))
                 : _createCommentVNode("v-if", true),
               (_ctx.freePlacement)
-                ? (_openBlock(), _createElementBlock("div", _hoisted_746, [
-                    _createElementVNode("div", _hoisted_747, [
+                ? (_openBlock(), _createElementBlock("div", _hoisted_750, [
+                    _createElementVNode("div", _hoisted_751, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('From the left (mm)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         step: "1",
-                        "onUpdate:modelValue": _cache[444] || (_cache[444] = $event => ((_ctx.fprops.x) = $event))
+                        "onUpdate:modelValue": _cache[447] || (_cache[447] = $event => ((_ctx.fprops.x) = $event))
                       }, null, 512 /* NEED_PATCH */), [
                         [_vModelText, _ctx.fprops.x]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_748, [
+                    _createElementVNode("div", _hoisted_752, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('From the top (mm)')), 1 /* TEXT */),
                       _withDirectives(_createElementVNode("input", {
                         type: "number",
                         step: "1",
-                        "onUpdate:modelValue": _cache[445] || (_cache[445] = $event => ((_ctx.fprops.y) = $event))
+                        "onUpdate:modelValue": _cache[448] || (_cache[448] = $event => ((_ctx.fprops.y) = $event))
                       }, null, 512 /* NEED_PATCH */), [
                         [_vModelText, _ctx.fprops.y]
                       ])
                     ]),
-                    _createElementVNode("div", _hoisted_749, [
+                    _createElementVNode("div", _hoisted_753, [
                       _createElementVNode("label", null, _toDisplayString(_ctx.t('Overlapping')), 1 /* TEXT */),
-                      _createElementVNode("div", _hoisted_750, [
+                      _createElementVNode("div", _hoisted_754, [
                         _createElementVNode("button", {
                           class: "eb-btn ghost",
-                          onClick: _cache[446] || (_cache[446] = $event => (_ctx.stackFromProps('front')))
+                          onClick: _cache[449] || (_cache[449] = $event => (_ctx.stackFromProps('front')))
                         }, _toDisplayString(_ctx.t('Bring to front')), 1 /* TEXT */),
                         _createElementVNode("button", {
                           class: "eb-btn ghost",
-                          onClick: _cache[447] || (_cache[447] = $event => (_ctx.stackFromProps('back')))
+                          onClick: _cache[450] || (_cache[450] = $event => (_ctx.stackFromProps('back')))
                         }, _toDisplayString(_ctx.t('Send to back')), 1 /* TEXT */)
                       ])
                     ])
                   ]))
                 : _createCommentVNode("v-if", true),
               (_ctx.freePlacement)
-                ? (_openBlock(), _createElementBlock("p", _hoisted_751, _toDisplayString(_ctx.t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.')), 1 /* TEXT */))
+                ? (_openBlock(), _createElementBlock("p", _hoisted_755, _toDisplayString(_ctx.t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.')), 1 /* TEXT */))
                 : (_ctx.fprops.wrap)
-                  ? (_openBlock(), _createElementBlock("p", _hoisted_752, _toDisplayString(_ctx.t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.')), 1 /* TEXT */))
+                  ? (_openBlock(), _createElementBlock("p", _hoisted_756, _toDisplayString(_ctx.t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.')), 1 /* TEXT */))
                   : _createCommentVNode("v-if", true),
-              _createElementVNode("h4", _hoisted_753, _toDisplayString(_ctx.t('How big it is')), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_754, [
-                _createElementVNode("div", _hoisted_755, [
+              _createElementVNode("h4", _hoisted_757, _toDisplayString(_ctx.t('How big it is')), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_758, [
+                _createElementVNode("div", _hoisted_759, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Width (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "5",
                     step: "1",
-                    "onUpdate:modelValue": _cache[448] || (_cache[448] = $event => ((_ctx.fprops.width) = $event)),
+                    "onUpdate:modelValue": _cache[451] || (_cache[451] = $event => ((_ctx.fprops.width) = $event)),
                     placeholder: _ctx.t('auto')
-                  }, null, 8 /* PROPS */, _hoisted_756), [
+                  }, null, 8 /* PROPS */, _hoisted_760), [
                     [_vModelText, _ctx.fprops.width]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_757, [
+                _createElementVNode("div", _hoisted_761, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Height (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "3",
                     step: "1",
-                    "onUpdate:modelValue": _cache[449] || (_cache[449] = $event => ((_ctx.fprops.height) = $event)),
+                    "onUpdate:modelValue": _cache[452] || (_cache[452] = $event => ((_ctx.fprops.height) = $event)),
                     placeholder: _ctx.t('auto')
-                  }, null, 8 /* PROPS */, _hoisted_758), [
+                  }, null, 8 /* PROPS */, _hoisted_762), [
                     [_vModelText, _ctx.fprops.height]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_759, [
+                _createElementVNode("div", _hoisted_763, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Inner margin (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[450] || (_cache[450] = $event => ((_ctx.fprops.pad) = $event)),
+                    "onUpdate:modelValue": _cache[453] || (_cache[453] = $event => ((_ctx.fprops.pad) = $event)),
                     placeholder: _ctx.t('auto')
-                  }, null, 8 /* PROPS */, _hoisted_760), [
+                  }, null, 8 /* PROPS */, _hoisted_764), [
                     [_vModelText, _ctx.fprops.pad]
                   ])
                 ])
               ]),
-              _createElementVNode("h4", _hoisted_761, _toDisplayString(_ctx.t('The room round it')), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_762, [
-                _createElementVNode("div", _hoisted_763, [
+              _createElementVNode("h4", _hoisted_765, _toDisplayString(_ctx.t('The room round it')), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_766, [
+                _createElementVNode("div", _hoisted_767, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space above (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[451] || (_cache[451] = $event => ((_ctx.fprops.mt) = $event))
+                    "onUpdate:modelValue": _cache[454] || (_cache[454] = $event => ((_ctx.fprops.mt) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.mt]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_764, [
+                _createElementVNode("div", _hoisted_768, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space below (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[452] || (_cache[452] = $event => ((_ctx.fprops.mb) = $event))
+                    "onUpdate:modelValue": _cache[455] || (_cache[455] = $event => ((_ctx.fprops.mb) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.mb]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_765, [
+                _createElementVNode("div", _hoisted_769, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space left (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[453] || (_cache[453] = $event => ((_ctx.fprops.ml) = $event))
+                    "onUpdate:modelValue": _cache[456] || (_cache[456] = $event => ((_ctx.fprops.ml) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.ml]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_766, [
+                _createElementVNode("div", _hoisted_770, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space right (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[454] || (_cache[454] = $event => ((_ctx.fprops.mr) = $event))
+                    "onUpdate:modelValue": _cache[457] || (_cache[457] = $event => ((_ctx.fprops.mr) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.mr]
                   ])
                 ])
               ]),
-              _createElementVNode("h4", _hoisted_767, _toDisplayString(_ctx.t('Its own look')), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_768, [
-                _createElementVNode("div", _hoisted_769, [
+              _createElementVNode("h4", _hoisted_771, _toDisplayString(_ctx.t('Its own look')), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_772, [
+                _createElementVNode("div", _hoisted_773, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Border')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[455] || (_cache[455] = $event => ((_ctx.fprops.border) = $event))
+                    "onUpdate:modelValue": _cache[458] || (_cache[458] = $event => ((_ctx.fprops.border) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_770, _toDisplayString(_ctx.t('As the style says')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_771, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_772, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_773, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_774, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_775, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_774, _toDisplayString(_ctx.t('As the style says')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_775, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_776, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_777, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_778, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_779, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.fprops.border]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_776, [
+                _createElementVNode("div", _hoisted_780, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Thickness (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0.25",
                     step: "0.25",
-                    "onUpdate:modelValue": _cache[456] || (_cache[456] = $event => ((_ctx.fprops.borderWidth) = $event))
+                    "onUpdate:modelValue": _cache[459] || (_cache[459] = $event => ((_ctx.fprops.borderWidth) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.borderWidth]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_777, [
+                _createElementVNode("div", _hoisted_781, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Line colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[457] || (_cache[457] = $event => ((_ctx.fprops.borderColour) = $event))
+                    "onUpdate:modelValue": _cache[460] || (_cache[460] = $event => ((_ctx.fprops.borderColour) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.borderColour]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_778, [
+                _createElementVNode("div", _hoisted_782, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Corners (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     step: "1",
-                    "onUpdate:modelValue": _cache[458] || (_cache[458] = $event => ((_ctx.fprops.radius) = $event))
+                    "onUpdate:modelValue": _cache[461] || (_cache[461] = $event => ((_ctx.fprops.radius) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.radius]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_779, [
-                _createElementVNode("div", _hoisted_780, [
+              _createElementVNode("div", _hoisted_783, [
+                _createElementVNode("div", _hoisted_784, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Fill colour')), 1 /* TEXT */),
-                  _createElementVNode("div", _hoisted_781, [
+                  _createElementVNode("div", _hoisted_785, [
                     _createElementVNode("input", {
                       type: "color",
                       value: _ctx.fprops.fill || '#ffffff',
-                      onInput: _cache[459] || (_cache[459] = $event => (_ctx.fprops.fill = $event.target.value))
-                    }, null, 40 /* PROPS, NEED_HYDRATION */, _hoisted_782),
+                      onInput: _cache[462] || (_cache[462] = $event => (_ctx.fprops.fill = $event.target.value))
+                    }, null, 40 /* PROPS, NEED_HYDRATION */, _hoisted_786),
                     _createElementVNode("button", {
                       class: _normalizeClass(["eb-btn ghost", { on: !_ctx.fprops.fill }]),
-                      onClick: _cache[460] || (_cache[460] = $event => (_ctx.fprops.fill = ''))
+                      onClick: _cache[463] || (_cache[463] = $event => (_ctx.fprops.fill = ''))
                     }, _toDisplayString(_ctx.t('Transparent')), 3 /* TEXT, CLASS */)
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_783, [
+                _createElementVNode("div", _hoisted_787, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Opacity (%)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "10",
                     max: "100",
                     step: "5",
-                    "onUpdate:modelValue": _cache[461] || (_cache[461] = $event => ((_ctx.fprops.opacity) = $event)),
+                    "onUpdate:modelValue": _cache[464] || (_cache[464] = $event => ((_ctx.fprops.opacity) = $event)),
                     placeholder: "100"
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.opacity]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_784, [
+                _createElementVNode("div", _hoisted_788, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Turn (degrees)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-180",
                     max: "180",
                     step: "5",
-                    "onUpdate:modelValue": _cache[462] || (_cache[462] = $event => ((_ctx.fprops.rotate) = $event)),
+                    "onUpdate:modelValue": _cache[465] || (_cache[465] = $event => ((_ctx.fprops.rotate) = $event)),
                     placeholder: "0"
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.fprops.rotate]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_785, [
+                _createElementVNode("div", _hoisted_789, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Effects')), 1 /* TEXT */),
-                  _createElementVNode("label", _hoisted_786, [
+                  _createElementVNode("label", _hoisted_790, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[463] || (_cache[463] = $event => ((_ctx.fprops.shadow) = $event))
+                      "onUpdate:modelValue": _cache[466] || (_cache[466] = $event => ((_ctx.fprops.shadow) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.fprops.shadow]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('Drop shadow')), 1 /* TEXT */)
                   ]),
-                  _createElementVNode("label", _hoisted_787, [
+                  _createElementVNode("label", _hoisted_791, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[464] || (_cache[464] = $event => ((_ctx.fprops.keep) = $event))
+                      "onUpdate:modelValue": _cache[467] || (_cache[467] = $event => ((_ctx.fprops.keep) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.fprops.keep]
                     ]),
@@ -11750,20 +11806,20 @@ return function render(_ctx, _cache) {
                   ])
                 ])
               ]),
-              _createElementVNode("p", _hoisted_788, _toDisplayString(_ctx.t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_792, _toDisplayString(_ctx.t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_789, [
+            _createElementVNode("div", _hoisted_793, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[465] || (_cache[465] = (...args) => (_ctx.clearFrameProps && _ctx.clearFrameProps(...args)))
+                onClick: _cache[468] || (_cache[468] = (...args) => (_ctx.clearFrameProps && _ctx.clearFrameProps(...args)))
               }, _toDisplayString(_ctx.t('Clear')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn",
-                onClick: _cache[466] || (_cache[466] = $event => (_ctx.fpropsOpen = false))
+                onClick: _cache[469] || (_cache[469] = $event => (_ctx.fpropsOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[467] || (_cache[467] = (...args) => (_ctx.applyFrameProps && _ctx.applyFrameProps(...args)))
+                onClick: _cache[470] || (_cache[470] = (...args) => (_ctx.applyFrameProps && _ctx.applyFrameProps(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -11771,816 +11827,839 @@ return function render(_ctx, _cache) {
       : _createCommentVNode("v-if", true),
     (_ctx.ctx.open)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 19,
+          key: 20,
           class: "eb-ctx-back",
-          onMousedown: _cache[470] || (_cache[470] = _withModifiers(() => {}, ["prevent"])),
-          onClick: _cache[471] || (_cache[471] = (...args) => (_ctx.closeCtxIfSettled && _ctx.closeCtxIfSettled(...args))),
-          onTouchend: _cache[472] || (_cache[472] = _withModifiers((...args) => (_ctx.closeCtxIfSettled && _ctx.closeCtxIfSettled(...args)), ["prevent"])),
-          onContextmenu: _cache[473] || (_cache[473] = _withModifiers((...args) => (_ctx.closeCtx && _ctx.closeCtx(...args)), ["prevent"]))
+          onMousedown: _cache[473] || (_cache[473] = _withModifiers(() => {}, ["prevent"])),
+          onClick: _cache[474] || (_cache[474] = (...args) => (_ctx.closeCtxIfSettled && _ctx.closeCtxIfSettled(...args))),
+          onTouchend: _cache[475] || (_cache[475] = _withModifiers((...args) => (_ctx.closeCtxIfSettled && _ctx.closeCtxIfSettled(...args)), ["prevent"])),
+          onContextmenu: _cache[476] || (_cache[476] = _withModifiers((...args) => (_ctx.closeCtx && _ctx.closeCtx(...args)), ["prevent"]))
         }, null, 32 /* NEED_HYDRATION */))
       : _createCommentVNode("v-if", true),
     (_ctx.ctx.open)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 20,
+          key: 21,
           class: _normalizeClass(["eb-ctxmenu", { flip: _ctx.ctx.flip }]),
           style: _normalizeStyle({ left: _ctx.ctx.x + 'px', top: _ctx.ctx.y + 'px' }),
-          onMousedown: _cache[586] || (_cache[586] = _withModifiers(() => {}, ["prevent"])),
-          onContextmenu: _cache[587] || (_cache[587] = _withModifiers(() => {}, ["prevent"]))
+          onMousedown: _cache[593] || (_cache[593] = _withModifiers(() => {}, ["prevent"])),
+          onContextmenu: _cache[594] || (_cache[594] = _withModifiers(() => {}, ["prevent"]))
         }, [
-          _createCommentVNode(" The right button on a sheet in the page bar. A page is not a thing in the\n         document but a place the writing fell, so these act on what stands on it. "),
-          (_ctx.ctx.page)
+          _createCommentVNode(" The right button on a document in the list down the left. "),
+          (_ctx.ctx.doc)
             ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
-                _createElementVNode("div", _hoisted_790, _toDisplayString(_ctx.t('Page {n}', { n: _ctx.ctx.page })), 1 /* TEXT */),
+                _createElementVNode("div", _hoisted_794, _toDisplayString(_ctx.ctx.doc.title), 1 /* TEXT */),
                 _createElementVNode("button", {
                   class: "ci",
-                  onClick: _cache[474] || (_cache[474] = $event => {_ctx.goToPage(_ctx.ctx.page); _ctx.closeCtx()})
-                }, _toDisplayString(_ctx.t('Go to this page')), 1 /* TEXT */),
-                _hoisted_791,
+                  onClick: _cache[477] || (_cache[477] = $event => {_ctx.closeCtx(); _ctx.openDoc(_ctx.ctx.doc.id)})
+                }, _toDisplayString(_ctx.t('Open')), 1 /* TEXT */),
+                _hoisted_795,
                 _createElementVNode("button", {
                   class: "ci",
-                  onClick: _cache[475] || (_cache[475] = $event => (_ctx.breakBeforePage(_ctx.ctx.page)))
-                }, _toDisplayString(_ctx.t('Start this page on a sheet of its own')), 1 /* TEXT */),
+                  onClick: _cache[478] || (_cache[478] = $event => (_ctx.duplicateDoc(_ctx.ctx.doc.id)))
+                }, _toDisplayString(_ctx.t('Duplicate')), 1 /* TEXT */),
                 _createElementVNode("button", {
                   class: "ci",
-                  onClick: _cache[476] || (_cache[476] = $event => (_ctx.duplicatePage(_ctx.ctx.page)))
-                }, _toDisplayString(_ctx.t('Duplicate this page')), 1 /* TEXT */),
-                _hoisted_792,
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[477] || (_cache[477] = $event => (_ctx.addPage(_ctx.ctx.page, false)))
-                }, _toDisplayString(_ctx.t('Add a page above')), 1 /* TEXT */),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[478] || (_cache[478] = $event => (_ctx.addPage(_ctx.ctx.page, true)))
-                }, _toDisplayString(_ctx.t('Add a page below')), 1 /* TEXT */),
-                _hoisted_793,
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[479] || (_cache[479] = $event => {_ctx.paperOpen = true; _ctx.closeCtx()})
-                }, _toDisplayString(_ctx.t('Paper setup')), 1 /* TEXT */),
-                _hoisted_794,
+                  onClick: _cache[479] || (_cache[479] = $event => (_ctx.openDocProps(_ctx.ctx.doc)))
+                }, _toDisplayString(_ctx.t('Properties…')), 1 /* TEXT */),
+                _hoisted_796,
                 _createElementVNode("button", {
                   class: "ci danger",
-                  onClick: _cache[480] || (_cache[480] = $event => (_ctx.deletePage(_ctx.ctx.page)))
-                }, _toDisplayString(_ctx.t('Delete everything on this page')), 1 /* TEXT */)
+                  onClick: _cache[480] || (_cache[480] = $event => (_ctx.deleteDoc(_ctx.ctx.doc)))
+                }, _toDisplayString(_ctx.t('Delete')), 1 /* TEXT */)
               ], 64 /* STABLE_FRAGMENT */))
-            : (_openBlock(), _createElementBlock(_Fragment, { key: 1 }, [
-                _createElementVNode("button", {
-                  class: "ci",
-                  disabled: !_ctx.ctx.selection,
-                  onClick: _cache[481] || (_cache[481] = $event => (_ctx.ctxDo('cut')))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Cut')), 1 /* TEXT */),
-                  _hoisted_796
-                ], 8 /* PROPS */, _hoisted_795),
-                _createElementVNode("button", {
-                  class: "ci",
-                  disabled: !_ctx.ctx.selection,
-                  onClick: _cache[482] || (_cache[482] = $event => (_ctx.ctxDo('copy')))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Copy')), 1 /* TEXT */),
-                  _hoisted_798
-                ], 8 /* PROPS */, _hoisted_797),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[483] || (_cache[483] = $event => (_ctx.ctxDo('paste')))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Paste')), 1 /* TEXT */),
-                  _hoisted_799
-                ]),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[484] || (_cache[484] = $event => (_ctx.ctxDo('pasteText')))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Paste as plain text')), 1 /* TEXT */),
-                  _hoisted_800
-                ]),
-                _hoisted_801,
-                (_ctx.ctx.link)
-                  ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
+            : (_ctx.ctx.page)
+              ? (_openBlock(), _createElementBlock(_Fragment, { key: 1 }, [
+                  _createCommentVNode(" The right button on a sheet in the page bar. A page is not a thing in the\n         document but a place the writing fell, so these act on what stands on it. "),
+                  _createElementVNode("div", _hoisted_797, _toDisplayString(_ctx.t('Page {n}', { n: _ctx.ctx.page })), 1 /* TEXT */),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[481] || (_cache[481] = $event => {_ctx.goToPage(_ctx.ctx.page); _ctx.closeCtx()})
+                  }, _toDisplayString(_ctx.t('Go to this page')), 1 /* TEXT */),
+                  _hoisted_798,
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[482] || (_cache[482] = $event => (_ctx.breakBeforePage(_ctx.ctx.page)))
+                  }, _toDisplayString(_ctx.t('Start this page on a sheet of its own')), 1 /* TEXT */),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[483] || (_cache[483] = $event => (_ctx.duplicatePage(_ctx.ctx.page)))
+                  }, _toDisplayString(_ctx.t('Duplicate this page')), 1 /* TEXT */),
+                  _hoisted_799,
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[484] || (_cache[484] = $event => (_ctx.addPage(_ctx.ctx.page, false)))
+                  }, _toDisplayString(_ctx.t('Add a page above')), 1 /* TEXT */),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[485] || (_cache[485] = $event => (_ctx.addPage(_ctx.ctx.page, true)))
+                  }, _toDisplayString(_ctx.t('Add a page below')), 1 /* TEXT */),
+                  _hoisted_800,
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[486] || (_cache[486] = $event => {_ctx.paperOpen = true; _ctx.closeCtx()})
+                  }, _toDisplayString(_ctx.t('Paper setup')), 1 /* TEXT */),
+                  _hoisted_801,
+                  _createElementVNode("button", {
+                    class: "ci danger",
+                    onClick: _cache[487] || (_cache[487] = $event => (_ctx.deletePage(_ctx.ctx.page)))
+                  }, _toDisplayString(_ctx.t('Delete everything on this page')), 1 /* TEXT */)
+                ], 64 /* STABLE_FRAGMENT */))
+              : (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
+                  _createElementVNode("button", {
+                    class: "ci",
+                    disabled: !_ctx.ctx.selection,
+                    onClick: _cache[488] || (_cache[488] = $event => (_ctx.ctxDo('cut')))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Cut')), 1 /* TEXT */),
+                    _hoisted_803
+                  ], 8 /* PROPS */, _hoisted_802),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    disabled: !_ctx.ctx.selection,
+                    onClick: _cache[489] || (_cache[489] = $event => (_ctx.ctxDo('copy')))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Copy')), 1 /* TEXT */),
+                    _hoisted_805
+                  ], 8 /* PROPS */, _hoisted_804),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[490] || (_cache[490] = $event => (_ctx.ctxDo('paste')))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Paste')), 1 /* TEXT */),
+                    _hoisted_806
+                  ]),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[491] || (_cache[491] = $event => (_ctx.ctxDo('pasteText')))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Paste as plain text')), 1 /* TEXT */),
+                    _hoisted_807
+                  ]),
+                  _hoisted_808,
+                  (_ctx.ctx.link)
+                    ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
+                        _createElementVNode("button", {
+                          class: "ci",
+                          onClick: _cache[492] || (_cache[492] = $event => (_ctx.ctxDo('linkOpen')))
+                        }, _toDisplayString(_ctx.t('Open the link')), 1 /* TEXT */),
+                        _createElementVNode("button", {
+                          class: "ci",
+                          onClick: _cache[493] || (_cache[493] = $event => (_ctx.ctxDo('link')))
+                        }, _toDisplayString(_ctx.t('Edit the link…')), 1 /* TEXT */),
+                        _createElementVNode("button", {
+                          class: "ci",
+                          onClick: _cache[494] || (_cache[494] = $event => (_ctx.ctxDo('linkDel')))
+                        }, _toDisplayString(_ctx.t('Remove the link')), 1 /* TEXT */)
+                      ], 64 /* STABLE_FRAGMENT */))
+                    : (_openBlock(), _createElementBlock("button", {
+                        key: 1,
+                        class: "ci",
+                        onClick: _cache[495] || (_cache[495] = $event => (_ctx.ctxDo('link')))
+                      }, [
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Hyperlink…')), 1 /* TEXT */),
+                        _hoisted_809
+                      ])),
+                  _hoisted_810,
+                  _createElementVNode("div", {
+                    class: "ci has-sub",
+                    onMouseenter: _cache[504] || (_cache[504] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                    onClick: _cache[505] || (_cache[505] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Paragraph style')), 1 /* TEXT */),
+                    _hoisted_811,
+                    _createElementVNode("div", _hoisted_812, [
                       _createElementVNode("button", {
                         class: "ci",
-                        onClick: _cache[485] || (_cache[485] = $event => (_ctx.ctxDo('linkOpen')))
-                      }, _toDisplayString(_ctx.t('Open the link')), 1 /* TEXT */),
+                        onClick: _cache[496] || (_cache[496] = $event => (_ctx.ctxDo('block','P')))
+                      }, _toDisplayString(_ctx.t('Body text')), 1 /* TEXT */),
                       _createElementVNode("button", {
                         class: "ci",
-                        onClick: _cache[486] || (_cache[486] = $event => (_ctx.ctxDo('link')))
-                      }, _toDisplayString(_ctx.t('Edit the link…')), 1 /* TEXT */),
+                        onClick: _cache[497] || (_cache[497] = $event => (_ctx.ctxDo('block','H1')))
+                      }, _toDisplayString(_ctx.t('Heading 1')), 1 /* TEXT */),
                       _createElementVNode("button", {
                         class: "ci",
-                        onClick: _cache[487] || (_cache[487] = $event => (_ctx.ctxDo('linkDel')))
-                      }, _toDisplayString(_ctx.t('Remove the link')), 1 /* TEXT */)
-                    ], 64 /* STABLE_FRAGMENT */))
-                  : (_openBlock(), _createElementBlock("button", {
-                      key: 1,
-                      class: "ci",
-                      onClick: _cache[488] || (_cache[488] = $event => (_ctx.ctxDo('link')))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Hyperlink…')), 1 /* TEXT */),
-                      _hoisted_802
-                    ])),
-                _hoisted_803,
-                _createElementVNode("div", {
-                  class: "ci has-sub",
-                  onMouseenter: _cache[497] || (_cache[497] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                  onClick: _cache[498] || (_cache[498] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Paragraph style')), 1 /* TEXT */),
-                  _hoisted_804,
-                  _createElementVNode("div", _hoisted_805, [
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[489] || (_cache[489] = $event => (_ctx.ctxDo('block','P')))
-                    }, _toDisplayString(_ctx.t('Body text')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[490] || (_cache[490] = $event => (_ctx.ctxDo('block','H1')))
-                    }, _toDisplayString(_ctx.t('Heading 1')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[491] || (_cache[491] = $event => (_ctx.ctxDo('block','H2')))
-                    }, _toDisplayString(_ctx.t('Heading 2')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[492] || (_cache[492] = $event => (_ctx.ctxDo('block','H3')))
-                    }, _toDisplayString(_ctx.t('Heading 3')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[493] || (_cache[493] = $event => (_ctx.ctxDo('block','H4')))
-                    }, _toDisplayString(_ctx.t('Heading 4')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[494] || (_cache[494] = $event => (_ctx.ctxDo('block','BLOCKQUOTE')))
-                    }, _toDisplayString(_ctx.t('Quotation')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[495] || (_cache[495] = $event => (_ctx.ctxDo('block','PRE')))
-                    }, _toDisplayString(_ctx.t('Preformatted')), 1 /* TEXT */),
-                    _hoisted_806,
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[496] || (_cache[496] = $event => {_ctx.closeCtx(); _ctx.openStyles()})
-                    }, _toDisplayString(_ctx.t('Change this style everywhere…')), 1 /* TEXT */)
-                  ])
-                ], 32 /* NEED_HYDRATION */),
-                _createElementVNode("div", {
-                  class: "ci has-sub",
-                  onMouseenter: _cache[512] || (_cache[512] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                  onClick: _cache[513] || (_cache[513] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Character')), 1 /* TEXT */),
-                  _hoisted_807,
-                  _createElementVNode("div", _hoisted_808, [
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[499] || (_cache[499] = $event => (_ctx.ctxDo('inline','bold')))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Bold')), 1 /* TEXT */),
-                      _hoisted_809
-                    ]),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[500] || (_cache[500] = $event => (_ctx.ctxDo('inline','italic')))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Italic')), 1 /* TEXT */),
-                      _hoisted_810
-                    ]),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[501] || (_cache[501] = $event => (_ctx.ctxDo('inline','underline')))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Underline')), 1 /* TEXT */),
-                      _hoisted_811
-                    ]),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[502] || (_cache[502] = $event => (_ctx.ctxDo('inline','strike')))
-                    }, _toDisplayString(_ctx.t('Strikethrough')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[503] || (_cache[503] = $event => (_ctx.ctxDo('inline','kenten')))
-                    }, _toDisplayString(_ctx.t('Emphasis dots')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[504] || (_cache[504] = $event => (_ctx.ctxDo('inline','sup')))
-                    }, _toDisplayString(_ctx.t('Superscript')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[505] || (_cache[505] = $event => (_ctx.ctxDo('inline','sub')))
-                    }, _toDisplayString(_ctx.t('Subscript')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[506] || (_cache[506] = $event => (_ctx.ctxDo('inline','code')))
-                    }, _toDisplayString(_ctx.t('Monospaced')), 1 /* TEXT */),
-                    _hoisted_812,
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[507] || (_cache[507] = $event => (_ctx.ctxDo('case','wide')))
-                    }, _toDisplayString(_ctx.t('To full width')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[508] || (_cache[508] = $event => (_ctx.ctxDo('case','narrow')))
-                    }, _toDisplayString(_ctx.t('To half width')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[509] || (_cache[509] = $event => (_ctx.ctxDo('case','upper')))
-                    }, _toDisplayString(_ctx.t('UPPER CASE')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[510] || (_cache[510] = $event => (_ctx.ctxDo('case','lower')))
-                    }, _toDisplayString(_ctx.t('lower case')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[511] || (_cache[511] = $event => (_ctx.ctxDo('case','title')))
-                    }, _toDisplayString(_ctx.t('Capitalise Each Word')), 1 /* TEXT */)
-                  ])
-                ], 32 /* NEED_HYDRATION */),
-                _createElementVNode("div", {
-                  class: "ci has-sub",
-                  onMouseenter: _cache[518] || (_cache[518] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                  onClick: _cache[519] || (_cache[519] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('Alignment')), 1 /* TEXT */),
-                  _hoisted_813,
-                  _createElementVNode("div", _hoisted_814, [
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[514] || (_cache[514] = $event => (_ctx.ctxDo('align','left')))
-                    }, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[515] || (_cache[515] = $event => (_ctx.ctxDo('align','center')))
-                    }, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[516] || (_cache[516] = $event => (_ctx.ctxDo('align','right')))
-                    }, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[517] || (_cache[517] = $event => (_ctx.ctxDo('align','justify')))
-                    }, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
-                  ])
-                ], 32 /* NEED_HYDRATION */),
-                _createElementVNode("div", {
-                  class: "ci has-sub",
-                  onMouseenter: _cache[524] || (_cache[524] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                  onClick: _cache[525] || (_cache[525] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                }, [
-                  _createElementVNode("span", null, _toDisplayString(_ctx.t('List')), 1 /* TEXT */),
-                  _hoisted_815,
-                  _createElementVNode("div", _hoisted_816, [
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[520] || (_cache[520] = $event => (_ctx.ctxDo('list','UL')))
-                    }, _toDisplayString(_ctx.t('Bulleted list')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[521] || (_cache[521] = $event => (_ctx.ctxDo('list','OL')))
-                    }, _toDisplayString(_ctx.t('Numbered list')), 1 /* TEXT */),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[522] || (_cache[522] = $event => (_ctx.ctxDo('indent',1)))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Increase indent')), 1 /* TEXT */),
-                      _hoisted_817
-                    ]),
-                    _createElementVNode("button", {
-                      class: "ci",
-                      onClick: _cache[523] || (_cache[523] = $event => (_ctx.ctxDo('indent',-1)))
-                    }, [
-                      _createElementVNode("span", null, _toDisplayString(_ctx.t('Decrease indent')), 1 /* TEXT */),
-                      _hoisted_818
+                        onClick: _cache[498] || (_cache[498] = $event => (_ctx.ctxDo('block','H2')))
+                      }, _toDisplayString(_ctx.t('Heading 2')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[499] || (_cache[499] = $event => (_ctx.ctxDo('block','H3')))
+                      }, _toDisplayString(_ctx.t('Heading 3')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[500] || (_cache[500] = $event => (_ctx.ctxDo('block','H4')))
+                      }, _toDisplayString(_ctx.t('Heading 4')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[501] || (_cache[501] = $event => (_ctx.ctxDo('block','BLOCKQUOTE')))
+                      }, _toDisplayString(_ctx.t('Quotation')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[502] || (_cache[502] = $event => (_ctx.ctxDo('block','PRE')))
+                      }, _toDisplayString(_ctx.t('Preformatted')), 1 /* TEXT */),
+                      _hoisted_813,
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[503] || (_cache[503] = $event => {_ctx.closeCtx(); _ctx.openStyles()})
+                      }, _toDisplayString(_ctx.t('Change this style everywhere…')), 1 /* TEXT */)
                     ])
-                  ])
-                ], 32 /* NEED_HYDRATION */),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[526] || (_cache[526] = $event => (_ctx.ctxDo('para')))
-                }, _toDisplayString(_ctx.t('Paragraph settings…')), 1 /* TEXT */),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[527] || (_cache[527] = $event => (_ctx.ctxDo('chars')))
-                }, _toDisplayString(_ctx.t('Special character…')), 1 /* TEXT */),
-                (_ctx.ctx.table)
-                  ? (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
+                  ], 32 /* NEED_HYDRATION */),
+                  _createElementVNode("div", {
+                    class: "ci has-sub",
+                    onMouseenter: _cache[519] || (_cache[519] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                    onClick: _cache[520] || (_cache[520] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Character')), 1 /* TEXT */),
+                    _hoisted_814,
+                    _createElementVNode("div", _hoisted_815, [
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[506] || (_cache[506] = $event => (_ctx.ctxDo('inline','bold')))
+                      }, [
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Bold')), 1 /* TEXT */),
+                        _hoisted_816
+                      ]),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[507] || (_cache[507] = $event => (_ctx.ctxDo('inline','italic')))
+                      }, [
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Italic')), 1 /* TEXT */),
+                        _hoisted_817
+                      ]),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[508] || (_cache[508] = $event => (_ctx.ctxDo('inline','underline')))
+                      }, [
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Underline')), 1 /* TEXT */),
+                        _hoisted_818
+                      ]),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[509] || (_cache[509] = $event => (_ctx.ctxDo('inline','strike')))
+                      }, _toDisplayString(_ctx.t('Strikethrough')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[510] || (_cache[510] = $event => (_ctx.ctxDo('inline','kenten')))
+                      }, _toDisplayString(_ctx.t('Emphasis dots')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[511] || (_cache[511] = $event => (_ctx.ctxDo('inline','sup')))
+                      }, _toDisplayString(_ctx.t('Superscript')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[512] || (_cache[512] = $event => (_ctx.ctxDo('inline','sub')))
+                      }, _toDisplayString(_ctx.t('Subscript')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[513] || (_cache[513] = $event => (_ctx.ctxDo('inline','code')))
+                      }, _toDisplayString(_ctx.t('Monospaced')), 1 /* TEXT */),
                       _hoisted_819,
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[541] || (_cache[541] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[542] || (_cache[542] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[514] || (_cache[514] = $event => (_ctx.ctxDo('case','wide')))
+                      }, _toDisplayString(_ctx.t('To full width')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[515] || (_cache[515] = $event => (_ctx.ctxDo('case','narrow')))
+                      }, _toDisplayString(_ctx.t('To half width')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[516] || (_cache[516] = $event => (_ctx.ctxDo('case','upper')))
+                      }, _toDisplayString(_ctx.t('UPPER CASE')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[517] || (_cache[517] = $event => (_ctx.ctxDo('case','lower')))
+                      }, _toDisplayString(_ctx.t('lower case')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[518] || (_cache[518] = $event => (_ctx.ctxDo('case','title')))
+                      }, _toDisplayString(_ctx.t('Capitalise Each Word')), 1 /* TEXT */)
+                    ])
+                  ], 32 /* NEED_HYDRATION */),
+                  _createElementVNode("div", {
+                    class: "ci has-sub",
+                    onMouseenter: _cache[525] || (_cache[525] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                    onClick: _cache[526] || (_cache[526] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('Alignment')), 1 /* TEXT */),
+                    _hoisted_820,
+                    _createElementVNode("div", _hoisted_821, [
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[521] || (_cache[521] = $event => (_ctx.ctxDo('align','left')))
+                      }, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[522] || (_cache[522] = $event => (_ctx.ctxDo('align','center')))
+                      }, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[523] || (_cache[523] = $event => (_ctx.ctxDo('align','right')))
+                      }, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[524] || (_cache[524] = $event => (_ctx.ctxDo('align','justify')))
+                      }, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
+                    ])
+                  ], 32 /* NEED_HYDRATION */),
+                  _createElementVNode("div", {
+                    class: "ci has-sub",
+                    onMouseenter: _cache[531] || (_cache[531] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                    onClick: _cache[532] || (_cache[532] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                  }, [
+                    _createElementVNode("span", null, _toDisplayString(_ctx.t('List')), 1 /* TEXT */),
+                    _hoisted_822,
+                    _createElementVNode("div", _hoisted_823, [
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[527] || (_cache[527] = $event => (_ctx.ctxDo('list','UL')))
+                      }, _toDisplayString(_ctx.t('Bulleted list')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[528] || (_cache[528] = $event => (_ctx.ctxDo('list','OL')))
+                      }, _toDisplayString(_ctx.t('Numbered list')), 1 /* TEXT */),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[529] || (_cache[529] = $event => (_ctx.ctxDo('indent',1)))
                       }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Table')), 1 /* TEXT */),
-                        _hoisted_820,
-                        _createElementVNode("div", _hoisted_821, [
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[528] || (_cache[528] = $event => (_ctx.ctxDo('table','rowAbove')))
-                          }, _toDisplayString(_ctx.t('Insert a row above')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[529] || (_cache[529] = $event => (_ctx.ctxDo('table','rowBelow')))
-                          }, _toDisplayString(_ctx.t('Insert a row below')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[530] || (_cache[530] = $event => (_ctx.ctxDo('table','colLeft')))
-                          }, _toDisplayString(_ctx.t('Insert a column to the left')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[531] || (_cache[531] = $event => (_ctx.ctxDo('table','colRight')))
-                          }, _toDisplayString(_ctx.t('Insert a column to the right')), 1 /* TEXT */),
-                          _hoisted_822,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[532] || (_cache[532] = $event => (_ctx.ctxDo('table','rowDel')))
-                          }, _toDisplayString(_ctx.t('Delete the row')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[533] || (_cache[533] = $event => (_ctx.ctxDo('table','colDel')))
-                          }, _toDisplayString(_ctx.t('Delete the column')), 1 /* TEXT */),
-                          _hoisted_823,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[534] || (_cache[534] = $event => (_ctx.ctxDo('merge')))
-                          }, _toDisplayString(_ctx.t('Merge the cells')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[535] || (_cache[535] = $event => (_ctx.ctxDo('split')))
-                          }, _toDisplayString(_ctx.t('Split the cell')), 1 /* TEXT */),
-                          _hoisted_824,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[536] || (_cache[536] = $event => (_ctx.ctxDo('cellAlign','left')))
-                          }, _toDisplayString(_ctx.t('Cell text left')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[537] || (_cache[537] = $event => (_ctx.ctxDo('cellAlign','center')))
-                          }, _toDisplayString(_ctx.t('Cell text centred')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[538] || (_cache[538] = $event => (_ctx.ctxDo('cellAlign','right')))
-                          }, _toDisplayString(_ctx.t('Cell text right')), 1 /* TEXT */),
-                          _hoisted_825,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[539] || (_cache[539] = $event => (_ctx.ctxDo('table','header')))
-                          }, _toDisplayString(_ctx.t('Header row')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[540] || (_cache[540] = $event => (_ctx.ctxDo('table','delete')))
-                          }, _toDisplayString(_ctx.t('Delete the table')), 1 /* TEXT */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */)
-                    ], 64 /* STABLE_FRAGMENT */))
-                  : _createCommentVNode("v-if", true),
-                (_ctx.ctx.image)
-                  ? (_openBlock(), _createElementBlock(_Fragment, { key: 3 }, [
-                      _hoisted_826,
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[555] || (_cache[555] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[556] || (_cache[556] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Increase indent')), 1 /* TEXT */),
+                        _hoisted_824
+                      ]),
+                      _createElementVNode("button", {
+                        class: "ci",
+                        onClick: _cache[530] || (_cache[530] = $event => (_ctx.ctxDo('indent',-1)))
                       }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Picture')), 1 /* TEXT */),
-                        _hoisted_827,
-                        _createElementVNode("div", _hoisted_828, [
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[543] || (_cache[543] = $event => (_ctx.ctxDo('image','eb-img-s')))
-                          }, _toDisplayString(_ctx.t('Small')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[544] || (_cache[544] = $event => (_ctx.ctxDo('image','eb-img-m')))
-                          }, _toDisplayString(_ctx.t('Medium')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[545] || (_cache[545] = $event => (_ctx.ctxDo('image','eb-img-l')))
-                          }, _toDisplayString(_ctx.t('Large')), 1 /* TEXT */),
-                          _hoisted_829,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[546] || (_cache[546] = $event => (_ctx.ctxDo('float','')))
-                          }, _toDisplayString(_ctx.t('No text wrap')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[547] || (_cache[547] = $event => (_ctx.ctxDo('float','left')))
-                          }, _toDisplayString(_ctx.t('Wrap text on the right')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[548] || (_cache[548] = $event => (_ctx.ctxDo('float','right')))
-                          }, _toDisplayString(_ctx.t('Wrap text on the left')), 1 /* TEXT */),
-                          _hoisted_830,
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'below' }]),
-                            onClick: _cache[549] || (_cache[549] = $event => (_ctx.ctxDo('caption','below')))
-                          }, _toDisplayString(_ctx.t('Caption under the picture')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'above' }]),
-                            onClick: _cache[550] || (_cache[550] = $event => (_ctx.ctxDo('caption','above')))
-                          }, _toDisplayString(_ctx.t('Caption over the picture')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'inside' }]),
-                            onClick: _cache[551] || (_cache[551] = $event => (_ctx.ctxDo('caption','inside')))
-                          }, _toDisplayString(_ctx.t('Caption inside the picture')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'none' }]),
-                            onClick: _cache[552] || (_cache[552] = $event => (_ctx.ctxDo('caption','none')))
-                          }, _toDisplayString(_ctx.t('No caption')), 3 /* TEXT, CLASS */),
-                          _hoisted_831,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[553] || (_cache[553] = $event => (_ctx.ctxDo('alt')))
-                          }, _toDisplayString(_ctx.t('Alternative text…')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[554] || (_cache[554] = $event => (_ctx.ctxDo('imageDel')))
-                          }, _toDisplayString(_ctx.t('Delete the picture')), 1 /* TEXT */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */)
-                    ], 64 /* STABLE_FRAGMENT */))
-                  : _createCommentVNode("v-if", true),
-                _createCommentVNode(" What a writer who knows LibreOffice reaches for when they right-click a\n         thing on the page: the wrap, the arrangement, the anchor, the size. "),
-                (_ctx.ctx.frame || _ctx.ctx.text)
-                  ? (_openBlock(), _createElementBlock(_Fragment, { key: 4 }, [
-                      _hoisted_832,
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[561] || (_cache[561] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[562] || (_cache[562] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                      }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Wrap')), 1 /* TEXT */),
+                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Decrease indent')), 1 /* TEXT */),
+                        _hoisted_825
+                      ])
+                    ])
+                  ], 32 /* NEED_HYDRATION */),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[533] || (_cache[533] = $event => (_ctx.ctxDo('para')))
+                  }, _toDisplayString(_ctx.t('Paragraph settings…')), 1 /* TEXT */),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[534] || (_cache[534] = $event => (_ctx.ctxDo('chars')))
+                  }, _toDisplayString(_ctx.t('Special character…')), 1 /* TEXT */),
+                  (_ctx.ctx.table)
+                    ? (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
+                        _hoisted_826,
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[548] || (_cache[548] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[549] || (_cache[549] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Table')), 1 /* TEXT */),
+                          _hoisted_827,
+                          _createElementVNode("div", _hoisted_828, [
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[535] || (_cache[535] = $event => (_ctx.ctxDo('table','rowAbove')))
+                            }, _toDisplayString(_ctx.t('Insert a row above')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[536] || (_cache[536] = $event => (_ctx.ctxDo('table','rowBelow')))
+                            }, _toDisplayString(_ctx.t('Insert a row below')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[537] || (_cache[537] = $event => (_ctx.ctxDo('table','colLeft')))
+                            }, _toDisplayString(_ctx.t('Insert a column to the left')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[538] || (_cache[538] = $event => (_ctx.ctxDo('table','colRight')))
+                            }, _toDisplayString(_ctx.t('Insert a column to the right')), 1 /* TEXT */),
+                            _hoisted_829,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[539] || (_cache[539] = $event => (_ctx.ctxDo('table','rowDel')))
+                            }, _toDisplayString(_ctx.t('Delete the row')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[540] || (_cache[540] = $event => (_ctx.ctxDo('table','colDel')))
+                            }, _toDisplayString(_ctx.t('Delete the column')), 1 /* TEXT */),
+                            _hoisted_830,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[541] || (_cache[541] = $event => (_ctx.ctxDo('merge')))
+                            }, _toDisplayString(_ctx.t('Merge the cells')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[542] || (_cache[542] = $event => (_ctx.ctxDo('split')))
+                            }, _toDisplayString(_ctx.t('Split the cell')), 1 /* TEXT */),
+                            _hoisted_831,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[543] || (_cache[543] = $event => (_ctx.ctxDo('cellAlign','left')))
+                            }, _toDisplayString(_ctx.t('Cell text left')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[544] || (_cache[544] = $event => (_ctx.ctxDo('cellAlign','center')))
+                            }, _toDisplayString(_ctx.t('Cell text centred')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[545] || (_cache[545] = $event => (_ctx.ctxDo('cellAlign','right')))
+                            }, _toDisplayString(_ctx.t('Cell text right')), 1 /* TEXT */),
+                            _hoisted_832,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[546] || (_cache[546] = $event => (_ctx.ctxDo('table','header')))
+                            }, _toDisplayString(_ctx.t('Header row')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[547] || (_cache[547] = $event => (_ctx.ctxDo('table','delete')))
+                            }, _toDisplayString(_ctx.t('Delete the table')), 1 /* TEXT */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */)
+                      ], 64 /* STABLE_FRAGMENT */))
+                    : _createCommentVNode("v-if", true),
+                  (_ctx.ctx.image)
+                    ? (_openBlock(), _createElementBlock(_Fragment, { key: 3 }, [
                         _hoisted_833,
-                        _createElementVNode("div", _hoisted_834, [
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'none' }]),
-                            onClick: _cache[557] || (_cache[557] = $event => (_ctx.ctxDo('wrapMode','none')))
-                          }, _toDisplayString(_ctx.t('Above and below')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'left' }]),
-                            onClick: _cache[558] || (_cache[558] = $event => (_ctx.ctxDo('wrapMode','left')))
-                          }, _toDisplayString(_ctx.t('Words to its left')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'right' }]),
-                            onClick: _cache[559] || (_cache[559] = $event => (_ctx.ctxDo('wrapMode','right')))
-                          }, _toDisplayString(_ctx.t('Words to its right')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'through' }]),
-                            onClick: _cache[560] || (_cache[560] = $event => (_ctx.ctxDo('wrapMode','through')))
-                          }, _toDisplayString(_ctx.t('Words underneath it')), 3 /* TEXT, CLASS */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */),
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[567] || (_cache[567] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[568] || (_cache[568] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                      }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Arrange')), 1 /* TEXT */),
-                        _hoisted_835,
-                        _createElementVNode("div", _hoisted_836, [
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[563] || (_cache[563] = $event => (_ctx.ctxDo('frameFront')))
-                          }, _toDisplayString(_ctx.t('Bring to front')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[564] || (_cache[564] = $event => (_ctx.ctxDo('stackStep',1)))
-                          }, _toDisplayString(_ctx.t('Forward one')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[565] || (_cache[565] = $event => (_ctx.ctxDo('stackStep',-1)))
-                          }, _toDisplayString(_ctx.t('Back one')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[566] || (_cache[566] = $event => (_ctx.ctxDo('frameBack')))
-                          }, _toDisplayString(_ctx.t('Send to back')), 1 /* TEXT */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */),
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[573] || (_cache[573] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[574] || (_cache[574] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                      }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Align')), 1 /* TEXT */),
-                        _hoisted_837,
-                        _createElementVNode("div", _hoisted_838, [
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[569] || (_cache[569] = $event => (_ctx.ctxDo('frameAlign','eb-al-l')))
-                          }, _toDisplayString(_ctx.t('Put the frame at the left margin')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[570] || (_cache[570] = $event => (_ctx.ctxDo('frameAlign','eb-al-c')))
-                          }, _toDisplayString(_ctx.t('Centre the frame in the column')), 1 /* TEXT */),
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[571] || (_cache[571] = $event => (_ctx.ctxDo('frameAlign','eb-al-r')))
-                          }, _toDisplayString(_ctx.t('Put the frame at the right margin')), 1 /* TEXT */),
-                          _hoisted_839,
-                          _createElementVNode("button", {
-                            class: "ci",
-                            onClick: _cache[572] || (_cache[572] = $event => (_ctx.ctxDo('frameFit')))
-                          }, _toDisplayString(_ctx.t('Make the frame the width of the column')), 1 /* TEXT */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */),
-                      _createElementVNode("div", {
-                        class: "ci has-sub",
-                        onMouseenter: _cache[577] || (_cache[577] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
-                        onClick: _cache[578] || (_cache[578] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
-                      }, [
-                        _createElementVNode("span", null, _toDisplayString(_ctx.t('Anchor')), 1 /* TEXT */),
-                        _hoisted_840,
-                        _createElementVNode("div", _hoisted_841, [
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: !_ctx.frame.free }]),
-                            onClick: _cache[575] || (_cache[575] = $event => (_ctx.ctxDo('frameInFlow')))
-                          }, _toDisplayString(_ctx.t('As character')), 3 /* TEXT, CLASS */),
-                          _createElementVNode("button", {
-                            class: _normalizeClass(["ci", { on: _ctx.frame.free }]),
-                            onClick: _cache[576] || (_cache[576] = $event => (_ctx.ctxDo('frameToPage')))
-                          }, _toDisplayString(_ctx.t('To paragraph')), 3 /* TEXT, CLASS */)
-                        ])
-                      ], 32 /* NEED_HYDRATION */),
-                      _hoisted_842,
-                      _createElementVNode("button", {
-                        class: "ci strong",
-                        onClick: _cache[579] || (_cache[579] = $event => (_ctx.ctxDo('frameProps')))
-                      }, _toDisplayString(_ctx.t('Object properties…')), 1 /* TEXT */),
-                      (_ctx.ctx.frame)
-                        ? (_openBlock(), _createElementBlock("button", {
-                            key: 0,
-                            class: "ci",
-                            onClick: _cache[580] || (_cache[580] = $event => (_ctx.ctxDo('framePlain')))
-                          }, _toDisplayString(_ctx.t('Clear the formatting inside')), 1 /* TEXT */))
-                        : _createCommentVNode("v-if", true),
-                      (_ctx.ctx.frame)
-                        ? (_openBlock(), _createElementBlock("button", {
-                            key: 1,
-                            class: "ci",
-                            onClick: _cache[581] || (_cache[581] = $event => (_ctx.ctxDo('frameDel')))
-                          }, _toDisplayString(_ctx.t('Delete the frame')), 1 /* TEXT */))
-                        : _createCommentVNode("v-if", true)
-                    ], 64 /* STABLE_FRAGMENT */))
-                  : _createCommentVNode("v-if", true),
-                (_ctx.ctx.selection)
-                  ? (_openBlock(), _createElementBlock(_Fragment, { key: 5 }, [
-                      _hoisted_843,
-                      _createElementVNode("button", {
-                        class: "ci strong",
-                        onClick: _cache[582] || (_cache[582] = $event => (_ctx.ctxDo('runProps')))
-                      }, _toDisplayString(_ctx.t('Properties of the chosen words…')), 1 /* TEXT */)
-                    ], 64 /* STABLE_FRAGMENT */))
-                  : _createCommentVNode("v-if", true),
-                _hoisted_844,
-                (!_ctx.flow)
-                  ? (_openBlock(), _createElementBlock("button", {
-                      key: 6,
-                      class: "ci",
-                      onClick: _cache[583] || (_cache[583] = $event => (_ctx.ctxDo('guides')))
-                    }, _toDisplayString(_ctx.guides ? _ctx.t('Hide the margin boundaries') : _ctx.t('Show the margin boundaries')), 1 /* TEXT */))
-                  : _createCommentVNode("v-if", true),
-                (!_ctx.flow)
-                  ? (_openBlock(), _createElementBlock("button", {
-                      key: 7,
-                      class: "ci",
-                      onClick: _cache[584] || (_cache[584] = $event => (_ctx.ctxDo('boxes')))
-                    }, _toDisplayString(_ctx.boxes ? _ctx.t('Hide the box round every object') : _ctx.t('Show the box round every object')), 1 /* TEXT */))
-                  : _createCommentVNode("v-if", true),
-                _createElementVNode("button", {
-                  class: "ci",
-                  onClick: _cache[585] || (_cache[585] = $event => (_ctx.ctxDo('clear')))
-                }, _toDisplayString(_ctx.t('Clear formatting')), 1 /* TEXT */)
-              ], 64 /* STABLE_FRAGMENT */))
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[562] || (_cache[562] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[563] || (_cache[563] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Picture')), 1 /* TEXT */),
+                          _hoisted_834,
+                          _createElementVNode("div", _hoisted_835, [
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[550] || (_cache[550] = $event => (_ctx.ctxDo('image','eb-img-s')))
+                            }, _toDisplayString(_ctx.t('Small')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[551] || (_cache[551] = $event => (_ctx.ctxDo('image','eb-img-m')))
+                            }, _toDisplayString(_ctx.t('Medium')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[552] || (_cache[552] = $event => (_ctx.ctxDo('image','eb-img-l')))
+                            }, _toDisplayString(_ctx.t('Large')), 1 /* TEXT */),
+                            _hoisted_836,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[553] || (_cache[553] = $event => (_ctx.ctxDo('float','')))
+                            }, _toDisplayString(_ctx.t('No text wrap')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[554] || (_cache[554] = $event => (_ctx.ctxDo('float','left')))
+                            }, _toDisplayString(_ctx.t('Wrap text on the right')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[555] || (_cache[555] = $event => (_ctx.ctxDo('float','right')))
+                            }, _toDisplayString(_ctx.t('Wrap text on the left')), 1 /* TEXT */),
+                            _hoisted_837,
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'below' }]),
+                              onClick: _cache[556] || (_cache[556] = $event => (_ctx.ctxDo('caption','below')))
+                            }, _toDisplayString(_ctx.t('Caption under the picture')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'above' }]),
+                              onClick: _cache[557] || (_cache[557] = $event => (_ctx.ctxDo('caption','above')))
+                            }, _toDisplayString(_ctx.t('Caption over the picture')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'inside' }]),
+                              onClick: _cache[558] || (_cache[558] = $event => (_ctx.ctxDo('caption','inside')))
+                            }, _toDisplayString(_ctx.t('Caption inside the picture')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.ctxCaption === 'none' }]),
+                              onClick: _cache[559] || (_cache[559] = $event => (_ctx.ctxDo('caption','none')))
+                            }, _toDisplayString(_ctx.t('No caption')), 3 /* TEXT, CLASS */),
+                            _hoisted_838,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[560] || (_cache[560] = $event => (_ctx.ctxDo('alt')))
+                            }, _toDisplayString(_ctx.t('Alternative text…')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[561] || (_cache[561] = $event => (_ctx.ctxDo('imageDel')))
+                            }, _toDisplayString(_ctx.t('Delete the picture')), 1 /* TEXT */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */)
+                      ], 64 /* STABLE_FRAGMENT */))
+                    : _createCommentVNode("v-if", true),
+                  _createCommentVNode(" What a writer who knows LibreOffice reaches for when they right-click a\n         thing on the page: the wrap, the arrangement, the anchor, the size. "),
+                  (_ctx.ctx.frame || _ctx.ctx.text)
+                    ? (_openBlock(), _createElementBlock(_Fragment, { key: 4 }, [
+                        _hoisted_839,
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[568] || (_cache[568] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[569] || (_cache[569] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Wrap')), 1 /* TEXT */),
+                          _hoisted_840,
+                          _createElementVNode("div", _hoisted_841, [
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'none' }]),
+                              onClick: _cache[564] || (_cache[564] = $event => (_ctx.ctxDo('wrapMode','none')))
+                            }, _toDisplayString(_ctx.t('Above and below')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'left' }]),
+                              onClick: _cache[565] || (_cache[565] = $event => (_ctx.ctxDo('wrapMode','left')))
+                            }, _toDisplayString(_ctx.t('Words to its left')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'right' }]),
+                              onClick: _cache[566] || (_cache[566] = $event => (_ctx.ctxDo('wrapMode','right')))
+                            }, _toDisplayString(_ctx.t('Words to its right')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.frame.wrap === 'through' }]),
+                              onClick: _cache[567] || (_cache[567] = $event => (_ctx.ctxDo('wrapMode','through')))
+                            }, _toDisplayString(_ctx.t('Words underneath it')), 3 /* TEXT, CLASS */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */),
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[574] || (_cache[574] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[575] || (_cache[575] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Arrange')), 1 /* TEXT */),
+                          _hoisted_842,
+                          _createElementVNode("div", _hoisted_843, [
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[570] || (_cache[570] = $event => (_ctx.ctxDo('frameFront')))
+                            }, _toDisplayString(_ctx.t('Bring to front')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[571] || (_cache[571] = $event => (_ctx.ctxDo('stackStep',1)))
+                            }, _toDisplayString(_ctx.t('Forward one')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[572] || (_cache[572] = $event => (_ctx.ctxDo('stackStep',-1)))
+                            }, _toDisplayString(_ctx.t('Back one')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[573] || (_cache[573] = $event => (_ctx.ctxDo('frameBack')))
+                            }, _toDisplayString(_ctx.t('Send to back')), 1 /* TEXT */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */),
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[580] || (_cache[580] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[581] || (_cache[581] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Align')), 1 /* TEXT */),
+                          _hoisted_844,
+                          _createElementVNode("div", _hoisted_845, [
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[576] || (_cache[576] = $event => (_ctx.ctxDo('frameAlign','eb-al-l')))
+                            }, _toDisplayString(_ctx.t('Put the frame at the left margin')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[577] || (_cache[577] = $event => (_ctx.ctxDo('frameAlign','eb-al-c')))
+                            }, _toDisplayString(_ctx.t('Centre the frame in the column')), 1 /* TEXT */),
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[578] || (_cache[578] = $event => (_ctx.ctxDo('frameAlign','eb-al-r')))
+                            }, _toDisplayString(_ctx.t('Put the frame at the right margin')), 1 /* TEXT */),
+                            _hoisted_846,
+                            _createElementVNode("button", {
+                              class: "ci",
+                              onClick: _cache[579] || (_cache[579] = $event => (_ctx.ctxDo('frameFit')))
+                            }, _toDisplayString(_ctx.t('Make the frame the width of the column')), 1 /* TEXT */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */),
+                        _createElementVNode("div", {
+                          class: "ci has-sub",
+                          onMouseenter: _cache[584] || (_cache[584] = (...args) => (_ctx.placeFly && _ctx.placeFly(...args))),
+                          onClick: _cache[585] || (_cache[585] = (...args) => (_ctx.toggleFly && _ctx.toggleFly(...args)))
+                        }, [
+                          _createElementVNode("span", null, _toDisplayString(_ctx.t('Anchor')), 1 /* TEXT */),
+                          _hoisted_847,
+                          _createElementVNode("div", _hoisted_848, [
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: !_ctx.frame.free }]),
+                              onClick: _cache[582] || (_cache[582] = $event => (_ctx.ctxDo('frameInFlow')))
+                            }, _toDisplayString(_ctx.t('As character')), 3 /* TEXT, CLASS */),
+                            _createElementVNode("button", {
+                              class: _normalizeClass(["ci", { on: _ctx.frame.free }]),
+                              onClick: _cache[583] || (_cache[583] = $event => (_ctx.ctxDo('frameToPage')))
+                            }, _toDisplayString(_ctx.t('To paragraph')), 3 /* TEXT, CLASS */)
+                          ])
+                        ], 32 /* NEED_HYDRATION */),
+                        _hoisted_849,
+                        _createElementVNode("button", {
+                          class: "ci strong",
+                          onClick: _cache[586] || (_cache[586] = $event => (_ctx.ctxDo('frameProps')))
+                        }, _toDisplayString(_ctx.t('Object properties…')), 1 /* TEXT */),
+                        (_ctx.ctx.frame)
+                          ? (_openBlock(), _createElementBlock("button", {
+                              key: 0,
+                              class: "ci",
+                              onClick: _cache[587] || (_cache[587] = $event => (_ctx.ctxDo('framePlain')))
+                            }, _toDisplayString(_ctx.t('Clear the formatting inside')), 1 /* TEXT */))
+                          : _createCommentVNode("v-if", true),
+                        (_ctx.ctx.frame)
+                          ? (_openBlock(), _createElementBlock("button", {
+                              key: 1,
+                              class: "ci",
+                              onClick: _cache[588] || (_cache[588] = $event => (_ctx.ctxDo('frameDel')))
+                            }, _toDisplayString(_ctx.t('Delete the frame')), 1 /* TEXT */))
+                          : _createCommentVNode("v-if", true)
+                      ], 64 /* STABLE_FRAGMENT */))
+                    : _createCommentVNode("v-if", true),
+                  (_ctx.ctx.selection)
+                    ? (_openBlock(), _createElementBlock(_Fragment, { key: 5 }, [
+                        _hoisted_850,
+                        _createElementVNode("button", {
+                          class: "ci strong",
+                          onClick: _cache[589] || (_cache[589] = $event => (_ctx.ctxDo('runProps')))
+                        }, _toDisplayString(_ctx.t('Properties of the chosen words…')), 1 /* TEXT */)
+                      ], 64 /* STABLE_FRAGMENT */))
+                    : _createCommentVNode("v-if", true),
+                  _hoisted_851,
+                  (!_ctx.flow)
+                    ? (_openBlock(), _createElementBlock("button", {
+                        key: 6,
+                        class: "ci",
+                        onClick: _cache[590] || (_cache[590] = $event => (_ctx.ctxDo('guides')))
+                      }, _toDisplayString(_ctx.guides ? _ctx.t('Hide the margin boundaries') : _ctx.t('Show the margin boundaries')), 1 /* TEXT */))
+                    : _createCommentVNode("v-if", true),
+                  (!_ctx.flow)
+                    ? (_openBlock(), _createElementBlock("button", {
+                        key: 7,
+                        class: "ci",
+                        onClick: _cache[591] || (_cache[591] = $event => (_ctx.ctxDo('boxes')))
+                      }, _toDisplayString(_ctx.boxes ? _ctx.t('Hide the box round every object') : _ctx.t('Show the box round every object')), 1 /* TEXT */))
+                    : _createCommentVNode("v-if", true),
+                  _createElementVNode("button", {
+                    class: "ci",
+                    onClick: _cache[592] || (_cache[592] = $event => (_ctx.ctxDo('clear')))
+                  }, _toDisplayString(_ctx.t('Clear formatting')), 1 /* TEXT */)
+                ], 64 /* STABLE_FRAGMENT */))
         ], 38 /* CLASS, STYLE, NEED_HYDRATION */))
       : _createCommentVNode("v-if", true),
     _createCommentVNode(" The properties of a chosen run of words. Everything here is written on the\n       words themselves, so one letter can be dressed differently from the next. "),
     (_ctx.wordsOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 21,
+          key: 22,
           class: "eb-modal-back",
-          onClick: _cache[609] || (_cache[609] = $event => (_ctx.wordsOpen = false))
+          onClick: _cache[616] || (_cache[616] = $event => (_ctx.wordsOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(720px,100%)"},
-            onClick: _cache[608] || (_cache[608] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[615] || (_cache[615] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Properties of the chosen words…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_845, [
-              _createElementVNode("p", _hoisted_846, _toDisplayString(_ctx.t('“{words}” — what is set here is written on these words alone.', { words: _ctx.wordsSample })), 1 /* TEXT */),
-              _createElementVNode("div", _hoisted_847, [
-                _createElementVNode("div", _hoisted_848, [
+            _createElementVNode("div", _hoisted_852, [
+              _createElementVNode("p", _hoisted_853, _toDisplayString(_ctx.t('“{words}” — what is set here is written on these words alone.', { words: _ctx.wordsSample })), 1 /* TEXT */),
+              _createElementVNode("div", _hoisted_854, [
+                _createElementVNode("div", _hoisted_855, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Typeface')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[588] || (_cache[588] = $event => ((_ctx.wordsFmt.family) = $event))
+                    "onUpdate:modelValue": _cache[595] || (_cache[595] = $event => ((_ctx.wordsFmt.family) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_849, _toDisplayString(_ctx.t('Unchanged')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_856, _toDisplayString(_ctx.t('Unchanged')), 1 /* TEXT */),
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.fontChoices, (f) => {
                       return (_openBlock(), _createElementBlock("option", {
                         key: f,
                         value: f
-                      }, _toDisplayString(f), 9 /* TEXT, PROPS */, _hoisted_850))
+                      }, _toDisplayString(f), 9 /* TEXT, PROPS */, _hoisted_857))
                     }), 128 /* KEYED_FRAGMENT */))
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.wordsFmt.family]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_851, [
+                _createElementVNode("div", _hoisted_858, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Size (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "4",
                     max: "300",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[589] || (_cache[589] = $event => ((_ctx.wordsFmt.size) = $event))
+                    "onUpdate:modelValue": _cache[596] || (_cache[596] = $event => ((_ctx.wordsFmt.size) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.wordsFmt.size]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_852, [
+                _createElementVNode("div", _hoisted_859, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[590] || (_cache[590] = $event => ((_ctx.wordsFmt.colour) = $event))
+                    "onUpdate:modelValue": _cache[597] || (_cache[597] = $event => ((_ctx.wordsFmt.colour) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.wordsFmt.colour]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_853, [
+                _createElementVNode("div", _hoisted_860, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Highlight')), 1 /* TEXT */),
-                  _createElementVNode("div", _hoisted_854, [
+                  _createElementVNode("div", _hoisted_861, [
                     _withDirectives(_createElementVNode("input", {
                       type: "color",
-                      "onUpdate:modelValue": _cache[591] || (_cache[591] = $event => ((_ctx.wordsFmt.fill) = $event))
+                      "onUpdate:modelValue": _cache[598] || (_cache[598] = $event => ((_ctx.wordsFmt.fill) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelText, _ctx.wordsFmt.fill]
                     ]),
                     _createElementVNode("button", {
                       class: "eb-btn",
-                      onClick: _cache[592] || (_cache[592] = $event => (_ctx.wordsFmt.fill = ''))
+                      onClick: _cache[599] || (_cache[599] = $event => (_ctx.wordsFmt.fill = ''))
                     }, _toDisplayString(_ctx.t('None')), 1 /* TEXT */)
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_855, [
-                _createElementVNode("div", _hoisted_856, [
+              _createElementVNode("div", _hoisted_862, [
+                _createElementVNode("div", _hoisted_863, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Weight and slope')), 1 /* TEXT */),
-                  _createElementVNode("label", _hoisted_857, [
+                  _createElementVNode("label", _hoisted_864, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[593] || (_cache[593] = $event => ((_ctx.wordsFmt.bold) = $event))
+                      "onUpdate:modelValue": _cache[600] || (_cache[600] = $event => ((_ctx.wordsFmt.bold) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.wordsFmt.bold]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('Bold')), 1 /* TEXT */)
                   ]),
-                  _createElementVNode("label", _hoisted_858, [
+                  _createElementVNode("label", _hoisted_865, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[594] || (_cache[594] = $event => ((_ctx.wordsFmt.italic) = $event))
+                      "onUpdate:modelValue": _cache[601] || (_cache[601] = $event => ((_ctx.wordsFmt.italic) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.wordsFmt.italic]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('Italic')), 1 /* TEXT */)
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_859, [
+                _createElementVNode("div", _hoisted_866, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Lines')), 1 /* TEXT */),
-                  _createElementVNode("label", _hoisted_860, [
+                  _createElementVNode("label", _hoisted_867, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[595] || (_cache[595] = $event => ((_ctx.wordsFmt.underline) = $event))
+                      "onUpdate:modelValue": _cache[602] || (_cache[602] = $event => ((_ctx.wordsFmt.underline) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.wordsFmt.underline]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('Underline')), 1 /* TEXT */)
                   ]),
-                  _createElementVNode("label", _hoisted_861, [
+                  _createElementVNode("label", _hoisted_868, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[596] || (_cache[596] = $event => ((_ctx.wordsFmt.strike) = $event))
+                      "onUpdate:modelValue": _cache[603] || (_cache[603] = $event => ((_ctx.wordsFmt.strike) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.wordsFmt.strike]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('Strikethrough')), 1 /* TEXT */)
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_862, [
+                _createElementVNode("div", _hoisted_869, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Raised or lowered')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[597] || (_cache[597] = $event => ((_ctx.wordsFmt.raise) = $event))
+                    "onUpdate:modelValue": _cache[604] || (_cache[604] = $event => ((_ctx.wordsFmt.raise) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_863, _toDisplayString(_ctx.t('On the line')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_864, _toDisplayString(_ctx.t('Raised')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_865, _toDisplayString(_ctx.t('Lowered')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_870, _toDisplayString(_ctx.t('On the line')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_871, _toDisplayString(_ctx.t('Raised')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_872, _toDisplayString(_ctx.t('Lowered')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.wordsFmt.raise]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_866, [
+                _createElementVNode("div", _hoisted_873, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Letter spacing (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-5",
                     max: "30",
                     step: "0.1",
-                    "onUpdate:modelValue": _cache[598] || (_cache[598] = $event => ((_ctx.wordsFmt.spacing) = $event))
+                    "onUpdate:modelValue": _cache[605] || (_cache[605] = $event => ((_ctx.wordsFmt.spacing) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.wordsFmt.spacing]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_867, [
-                _createElementVNode("div", _hoisted_868, [
+              _createElementVNode("div", _hoisted_874, [
+                _createElementVNode("div", _hoisted_875, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Outline (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "3",
                     step: "0.05",
-                    "onUpdate:modelValue": _cache[599] || (_cache[599] = $event => ((_ctx.wordsFmt.strokeWidth) = $event))
+                    "onUpdate:modelValue": _cache[606] || (_cache[606] = $event => ((_ctx.wordsFmt.strokeWidth) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.wordsFmt.strokeWidth]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_869, [
+                _createElementVNode("div", _hoisted_876, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Outline colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[600] || (_cache[600] = $event => ((_ctx.wordsFmt.strokeColour) = $event))
+                    "onUpdate:modelValue": _cache[607] || (_cache[607] = $event => ((_ctx.wordsFmt.strokeColour) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.wordsFmt.strokeColour]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_870, [
+                _createElementVNode("div", _hoisted_877, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Shadow under the letters')), 1 /* TEXT */),
-                  _createElementVNode("label", _hoisted_871, [
+                  _createElementVNode("label", _hoisted_878, [
                     _withDirectives(_createElementVNode("input", {
                       type: "checkbox",
-                      "onUpdate:modelValue": _cache[601] || (_cache[601] = $event => ((_ctx.wordsFmt.shadow) = $event))
+                      "onUpdate:modelValue": _cache[608] || (_cache[608] = $event => ((_ctx.wordsFmt.shadow) = $event))
                     }, null, 512 /* NEED_PATCH */), [
                       [_vModelCheckbox, _ctx.wordsFmt.shadow]
                     ]),
                     _createTextVNode(" " + _toDisplayString(_ctx.t('On')), 1 /* TEXT */)
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_872, [
+                _createElementVNode("div", _hoisted_879, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Across (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-20",
                     max: "20",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[602] || (_cache[602] = $event => ((_ctx.wordsFmt.shadowX) = $event)),
+                    "onUpdate:modelValue": _cache[609] || (_cache[609] = $event => ((_ctx.wordsFmt.shadowX) = $event)),
                     disabled: !_ctx.wordsFmt.shadow
-                  }, null, 8 /* PROPS */, _hoisted_873), [
+                  }, null, 8 /* PROPS */, _hoisted_880), [
                     [_vModelText, _ctx.wordsFmt.shadowX]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_874, [
+                _createElementVNode("div", _hoisted_881, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Down (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-20",
                     max: "20",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[603] || (_cache[603] = $event => ((_ctx.wordsFmt.shadowY) = $event)),
+                    "onUpdate:modelValue": _cache[610] || (_cache[610] = $event => ((_ctx.wordsFmt.shadowY) = $event)),
                     disabled: !_ctx.wordsFmt.shadow
-                  }, null, 8 /* PROPS */, _hoisted_875), [
+                  }, null, 8 /* PROPS */, _hoisted_882), [
                     [_vModelText, _ctx.wordsFmt.shadowY]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_876, [
+                _createElementVNode("div", _hoisted_883, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Softness (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "30",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[604] || (_cache[604] = $event => ((_ctx.wordsFmt.shadowBlur) = $event)),
+                    "onUpdate:modelValue": _cache[611] || (_cache[611] = $event => ((_ctx.wordsFmt.shadowBlur) = $event)),
                     disabled: !_ctx.wordsFmt.shadow
-                  }, null, 8 /* PROPS */, _hoisted_877), [
+                  }, null, 8 /* PROPS */, _hoisted_884), [
                     [_vModelText, _ctx.wordsFmt.shadowBlur]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_878, [
+                _createElementVNode("div", _hoisted_885, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Shadow colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[605] || (_cache[605] = $event => ((_ctx.wordsFmt.shadowColour) = $event)),
+                    "onUpdate:modelValue": _cache[612] || (_cache[612] = $event => ((_ctx.wordsFmt.shadowColour) = $event)),
                     disabled: !_ctx.wordsFmt.shadow
-                  }, null, 8 /* PROPS */, _hoisted_879), [
+                  }, null, 8 /* PROPS */, _hoisted_886), [
                     [_vModelText, _ctx.wordsFmt.shadowColour]
                   ])
                 ])
               ])
             ]),
-            _createElementVNode("div", _hoisted_880, [
+            _createElementVNode("div", _hoisted_887, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[606] || (_cache[606] = $event => (_ctx.wordsOpen = false))
+                onClick: _cache[613] || (_cache[613] = $event => (_ctx.wordsOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[607] || (_cache[607] = (...args) => (_ctx.applyRunProps && _ctx.applyRunProps(...args)))
+                onClick: _cache[614] || (_cache[614] = (...args) => (_ctx.applyRunProps && _ctx.applyRunProps(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -12589,241 +12668,241 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" paragraph properties, written as inline styles so the file carries them "),
     (_ctx.paraOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 22,
+          key: 23,
           class: "eb-modal-back",
-          onClick: _cache[632] || (_cache[632] = $event => (_ctx.paraOpen = false))
+          onClick: _cache[639] || (_cache[639] = $event => (_ctx.paraOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(580px,100%)"},
-            onClick: _cache[631] || (_cache[631] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[638] || (_cache[638] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Paragraph settings…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_881, [
-              _createElementVNode("div", _hoisted_882, [
-                _createElementVNode("div", _hoisted_883, [
+            _createElementVNode("div", _hoisted_888, [
+              _createElementVNode("div", _hoisted_889, [
+                _createElementVNode("div", _hoisted_890, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Alignment')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[610] || (_cache[610] = $event => ((_ctx.para.align) = $event))
+                    "onUpdate:modelValue": _cache[617] || (_cache[617] = $event => ((_ctx.para.align) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_884, _toDisplayString(_ctx.t('Unchanged')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_885, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_886, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_887, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_888, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_891, _toDisplayString(_ctx.t('Unchanged')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_892, _toDisplayString(_ctx.t('Left')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_893, _toDisplayString(_ctx.t('Centre')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_894, _toDisplayString(_ctx.t('Right')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_895, _toDisplayString(_ctx.t('Justified')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.para.align]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_889, [
+                _createElementVNode("div", _hoisted_896, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Line height')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "1",
                     max: "4",
                     step: "0.05",
-                    "onUpdate:modelValue": _cache[611] || (_cache[611] = $event => ((_ctx.para.lineHeight) = $event)),
+                    "onUpdate:modelValue": _cache[618] || (_cache[618] = $event => ((_ctx.para.lineHeight) = $event)),
                     placeholder: _ctx.t('From the paper setup')
-                  }, null, 8 /* PROPS */, _hoisted_890), [
+                  }, null, 8 /* PROPS */, _hoisted_897), [
                     [_vModelText, _ctx.para.lineHeight]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_891, [
-                _createElementVNode("div", _hoisted_892, [
+              _createElementVNode("div", _hoisted_898, [
+                _createElementVNode("div", _hoisted_899, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space above (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "200",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[612] || (_cache[612] = $event => ((_ctx.para.before) = $event))
+                    "onUpdate:modelValue": _cache[619] || (_cache[619] = $event => ((_ctx.para.before) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.before]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_893, [
+                _createElementVNode("div", _hoisted_900, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Space below (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "200",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[613] || (_cache[613] = $event => ((_ctx.para.after) = $event))
+                    "onUpdate:modelValue": _cache[620] || (_cache[620] = $event => ((_ctx.para.after) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.after]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_894, [
-                _createElementVNode("div", _hoisted_895, [
+              _createElementVNode("div", _hoisted_901, [
+                _createElementVNode("div", _hoisted_902, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Indent left (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-100",
                     max: "200",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[614] || (_cache[614] = $event => ((_ctx.para.left) = $event))
+                    "onUpdate:modelValue": _cache[621] || (_cache[621] = $event => ((_ctx.para.left) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.left]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_896, [
+                _createElementVNode("div", _hoisted_903, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Indent right (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-100",
                     max: "200",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[615] || (_cache[615] = $event => ((_ctx.para.right) = $event))
+                    "onUpdate:modelValue": _cache[622] || (_cache[622] = $event => ((_ctx.para.right) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.right]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_897, [
+                _createElementVNode("div", _hoisted_904, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('First line (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "-100",
                     max: "200",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[616] || (_cache[616] = $event => ((_ctx.para.firstLine) = $event))
+                    "onUpdate:modelValue": _cache[623] || (_cache[623] = $event => ((_ctx.para.firstLine) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.firstLine]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_898, [
-                _createElementVNode("div", _hoisted_899, [
+              _createElementVNode("div", _hoisted_905, [
+                _createElementVNode("div", _hoisted_906, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Rule round the paragraph')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[617] || (_cache[617] = $event => ((_ctx.para.border) = $event))
+                    "onUpdate:modelValue": _cache[624] || (_cache[624] = $event => ((_ctx.para.border) = $event))
                   }, [
-                    _createElementVNode("option", _hoisted_900, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_901, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_902, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_903, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_904, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
+                    _createElementVNode("option", _hoisted_907, _toDisplayString(_ctx.t('None')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_908, _toDisplayString(_ctx.t('Solid')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_909, _toDisplayString(_ctx.t('Dashed')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_910, _toDisplayString(_ctx.t('Dotted')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_911, _toDisplayString(_ctx.t('Double')), 1 /* TEXT */)
                   ], 512 /* NEED_PATCH */), [
                     [_vModelSelect, _ctx.para.border]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_905, [
+                _createElementVNode("div", _hoisted_912, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('On which edges')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("select", {
-                    "onUpdate:modelValue": _cache[618] || (_cache[618] = $event => ((_ctx.para.borderSides) = $event)),
+                    "onUpdate:modelValue": _cache[625] || (_cache[625] = $event => ((_ctx.para.borderSides) = $event)),
                     disabled: !_ctx.para.border
                   }, [
-                    _createElementVNode("option", _hoisted_907, _toDisplayString(_ctx.t('All four')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_908, _toDisplayString(_ctx.t('Above')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_909, _toDisplayString(_ctx.t('Below')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_910, _toDisplayString(_ctx.t('Above and below')), 1 /* TEXT */),
-                    _createElementVNode("option", _hoisted_911, _toDisplayString(_ctx.t('At the left')), 1 /* TEXT */)
-                  ], 8 /* PROPS */, _hoisted_906), [
+                    _createElementVNode("option", _hoisted_914, _toDisplayString(_ctx.t('All four')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_915, _toDisplayString(_ctx.t('Above')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_916, _toDisplayString(_ctx.t('Below')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_917, _toDisplayString(_ctx.t('Above and below')), 1 /* TEXT */),
+                    _createElementVNode("option", _hoisted_918, _toDisplayString(_ctx.t('At the left')), 1 /* TEXT */)
+                  ], 8 /* PROPS */, _hoisted_913), [
                     [_vModelSelect, _ctx.para.borderSides]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_912, [
+                _createElementVNode("div", _hoisted_919, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Thickness (pt)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0.25",
                     step: "0.25",
-                    "onUpdate:modelValue": _cache[619] || (_cache[619] = $event => ((_ctx.para.borderWidth) = $event)),
+                    "onUpdate:modelValue": _cache[626] || (_cache[626] = $event => ((_ctx.para.borderWidth) = $event)),
                     disabled: !_ctx.para.border
-                  }, null, 8 /* PROPS */, _hoisted_913), [
+                  }, null, 8 /* PROPS */, _hoisted_920), [
                     [_vModelText, _ctx.para.borderWidth]
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_914, [
+                _createElementVNode("div", _hoisted_921, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Line colour')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "color",
-                    "onUpdate:modelValue": _cache[620] || (_cache[620] = $event => ((_ctx.para.borderColour) = $event)),
+                    "onUpdate:modelValue": _cache[627] || (_cache[627] = $event => ((_ctx.para.borderColour) = $event)),
                     disabled: !_ctx.para.border
-                  }, null, 8 /* PROPS */, _hoisted_915), [
+                  }, null, 8 /* PROPS */, _hoisted_922), [
                     [_vModelText, _ctx.para.borderColour]
                   ])
                 ])
               ]),
-              _createElementVNode("div", _hoisted_916, [
-                _createElementVNode("div", _hoisted_917, [
+              _createElementVNode("div", _hoisted_923, [
+                _createElementVNode("div", _hoisted_924, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Shading')), 1 /* TEXT */),
-                  _createElementVNode("div", _hoisted_918, [
+                  _createElementVNode("div", _hoisted_925, [
                     _createElementVNode("input", {
                       type: "color",
                       value: _ctx.para.fill || '#ffffff',
-                      onInput: _cache[621] || (_cache[621] = $event => (_ctx.para.fill = $event.target.value))
-                    }, null, 40 /* PROPS, NEED_HYDRATION */, _hoisted_919),
+                      onInput: _cache[628] || (_cache[628] = $event => (_ctx.para.fill = $event.target.value))
+                    }, null, 40 /* PROPS, NEED_HYDRATION */, _hoisted_926),
                     _createElementVNode("button", {
                       class: "eb-btn ghost",
-                      onClick: _cache[622] || (_cache[622] = $event => (_ctx.para.fill = ''))
+                      onClick: _cache[629] || (_cache[629] = $event => (_ctx.para.fill = ''))
                     }, _toDisplayString(_ctx.t('None')), 1 /* TEXT */)
                   ])
                 ]),
-                _createElementVNode("div", _hoisted_920, [
+                _createElementVNode("div", _hoisted_927, [
                   _createElementVNode("label", null, _toDisplayString(_ctx.t('Inner margin (mm)')), 1 /* TEXT */),
                   _withDirectives(_createElementVNode("input", {
                     type: "number",
                     min: "0",
                     max: "40",
                     step: "0.5",
-                    "onUpdate:modelValue": _cache[623] || (_cache[623] = $event => ((_ctx.para.pad) = $event))
+                    "onUpdate:modelValue": _cache[630] || (_cache[630] = $event => ((_ctx.para.pad) = $event))
                   }, null, 512 /* NEED_PATCH */), [
                     [_vModelText, _ctx.para.pad]
                   ])
                 ])
               ]),
-              _createElementVNode("label", _hoisted_921, [
+              _createElementVNode("label", _hoisted_928, [
                 _withDirectives(_createElementVNode("input", {
                   type: "checkbox",
-                  "onUpdate:modelValue": _cache[624] || (_cache[624] = $event => ((_ctx.para.pageBefore) = $event))
+                  "onUpdate:modelValue": _cache[631] || (_cache[631] = $event => ((_ctx.para.pageBefore) = $event))
                 }, null, 512 /* NEED_PATCH */), [
                   [_vModelCheckbox, _ctx.para.pageBefore]
                 ]),
                 _createTextVNode(" " + _toDisplayString(_ctx.t('Start a new page before this paragraph')), 1 /* TEXT */)
               ]),
-              _createElementVNode("label", _hoisted_922, [
+              _createElementVNode("label", _hoisted_929, [
                 _withDirectives(_createElementVNode("input", {
                   type: "checkbox",
-                  "onUpdate:modelValue": _cache[625] || (_cache[625] = $event => ((_ctx.para.keepWithNext) = $event))
+                  "onUpdate:modelValue": _cache[632] || (_cache[632] = $event => ((_ctx.para.keepWithNext) = $event))
                 }, null, 512 /* NEED_PATCH */), [
                   [_vModelCheckbox, _ctx.para.keepWithNext]
                 ]),
                 _createTextVNode(" " + _toDisplayString(_ctx.t('Keep with the next paragraph')), 1 /* TEXT */)
               ]),
-              _createElementVNode("label", _hoisted_923, [
+              _createElementVNode("label", _hoisted_930, [
                 _withDirectives(_createElementVNode("input", {
                   type: "checkbox",
-                  "onUpdate:modelValue": _cache[626] || (_cache[626] = $event => ((_ctx.para.keepTogether) = $event))
+                  "onUpdate:modelValue": _cache[633] || (_cache[633] = $event => ((_ctx.para.keepTogether) = $event))
                 }, null, 512 /* NEED_PATCH */), [
                   [_vModelCheckbox, _ctx.para.keepTogether]
                 ]),
                 _createTextVNode(" " + _toDisplayString(_ctx.t('Do not split this paragraph across pages')), 1 /* TEXT */)
               ]),
-              _createElementVNode("label", _hoisted_924, [
+              _createElementVNode("label", _hoisted_931, [
                 _withDirectives(_createElementVNode("input", {
                   type: "checkbox",
-                  "onUpdate:modelValue": _cache[627] || (_cache[627] = $event => ((_ctx.para.noLoneLines) = $event))
+                  "onUpdate:modelValue": _cache[634] || (_cache[634] = $event => ((_ctx.para.noLoneLines) = $event))
                 }, null, 512 /* NEED_PATCH */), [
                   [_vModelCheckbox, _ctx.para.noLoneLines]
                 ]),
                 _createTextVNode(" " + _toDisplayString(_ctx.t('Never leave one line of it alone on a page')), 1 /* TEXT */)
               ]),
-              _createElementVNode("p", _hoisted_925, _toDisplayString(_ctx.t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_932, _toDisplayString(_ctx.t('Empty means the paragraph inherits from the paper setup. These are written into the file as ordinary CSS, so a browser prints them the same way.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_926, [
+            _createElementVNode("div", _hoisted_933, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[628] || (_cache[628] = (...args) => (_ctx.clearPara && _ctx.clearPara(...args)))
+                onClick: _cache[635] || (_cache[635] = (...args) => (_ctx.clearPara && _ctx.clearPara(...args)))
               }, _toDisplayString(_ctx.t('Reset')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[629] || (_cache[629] = $event => (_ctx.paraOpen = false))
+                onClick: _cache[636] || (_cache[636] = $event => (_ctx.paraOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[630] || (_cache[630] = (...args) => (_ctx.applyPara && _ctx.applyPara(...args)))
+                onClick: _cache[637] || (_cache[637] = (...args) => (_ctx.applyPara && _ctx.applyPara(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -12832,37 +12911,37 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" a table of contents, as links rather than page numbers "),
     (_ctx.tocOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 23,
+          key: 24,
           class: "eb-modal-back",
-          onClick: _cache[638] || (_cache[638] = $event => (_ctx.tocOpen = false))
+          onClick: _cache[645] || (_cache[645] = $event => (_ctx.tocOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(520px,100%)"},
-            onClick: _cache[637] || (_cache[637] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[644] || (_cache[644] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Table of contents…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_927, [
-              _createElementVNode("div", _hoisted_928, [
+            _createElementVNode("div", _hoisted_934, [
+              _createElementVNode("div", _hoisted_935, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Title')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   type: "text",
-                  "onUpdate:modelValue": _cache[633] || (_cache[633] = $event => ((_ctx.tocTitle) = $event)),
-                  onKeydown: _cache[634] || (_cache[634] = _withKeys(_withModifiers((...args) => (_ctx.applyToc && _ctx.applyToc(...args)), ["prevent"]), ["enter"]))
+                  "onUpdate:modelValue": _cache[640] || (_cache[640] = $event => ((_ctx.tocTitle) = $event)),
+                  onKeydown: _cache[641] || (_cache[641] = _withKeys(_withModifiers((...args) => (_ctx.applyToc && _ctx.applyToc(...args)), ["prevent"]), ["enter"]))
                 }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                   [_vModelText, _ctx.tocTitle]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_929, _toDisplayString(_ctx.t('Built from the headings in the document, as links to them. Running it again brings an existing contents list up to date.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_936, _toDisplayString(_ctx.t('Built from the headings in the document, as links to them. Running it again brings an existing contents list up to date.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_930, [
+            _createElementVNode("div", _hoisted_937, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[635] || (_cache[635] = $event => (_ctx.tocOpen = false))
+                onClick: _cache[642] || (_cache[642] = $event => (_ctx.tocOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[636] || (_cache[636] = (...args) => (_ctx.applyToc && _ctx.applyToc(...args)))
+                onClick: _cache[643] || (_cache[643] = (...args) => (_ctx.applyToc && _ctx.applyToc(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -12871,41 +12950,41 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" characters that are awkward to type "),
     (_ctx.charsOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 24,
+          key: 25,
           class: "eb-modal-back",
-          onClick: _cache[641] || (_cache[641] = $event => (_ctx.charsOpen = false))
+          onClick: _cache[648] || (_cache[648] = $event => (_ctx.charsOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(620px,100%)"},
-            onClick: _cache[640] || (_cache[640] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[647] || (_cache[647] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Special character…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_931, [
-              _createElementVNode("div", _hoisted_932, [
+            _createElementVNode("div", _hoisted_938, [
+              _createElementVNode("div", _hoisted_939, [
                 (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.charSets, (c) => {
                   return (_openBlock(), _createElementBlock("button", {
                     key: c.key,
                     class: _normalizeClass(["chip", { on: _ctx.charSet === c.key }]),
                     onClick: $event => (_ctx.charSet = c.key)
-                  }, _toDisplayString(_ctx.t(c.key)), 11 /* TEXT, CLASS, PROPS */, _hoisted_933))
+                  }, _toDisplayString(_ctx.t(c.key)), 11 /* TEXT, CLASS, PROPS */, _hoisted_940))
                 }), 128 /* KEYED_FRAGMENT */))
               ]),
-              _createElementVNode("div", _hoisted_934, [
+              _createElementVNode("div", _hoisted_941, [
                 (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.charsOf(_ctx.charSet), (ch, i) => {
                   return (_openBlock(), _createElementBlock("button", {
                     key: i,
                     class: "eb-charcell",
                     onClick: $event => (_ctx.pickChar(ch))
-                  }, _toDisplayString(ch), 9 /* TEXT, PROPS */, _hoisted_935))
+                  }, _toDisplayString(ch), 9 /* TEXT, PROPS */, _hoisted_942))
                 }), 128 /* KEYED_FRAGMENT */))
               ]),
-              _createElementVNode("p", _hoisted_936, _toDisplayString(_ctx.t('The character goes in at the caret. The dialog stays open so several can be picked.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_943, _toDisplayString(_ctx.t('The character goes in at the caret. The dialog stays open so several can be picked.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_937, [
+            _createElementVNode("div", _hoisted_944, [
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[639] || (_cache[639] = $event => (_ctx.charsOpen = false))
+                onClick: _cache[646] || (_cache[646] = $event => (_ctx.charsOpen = false))
               }, _toDisplayString(_ctx.t('Close')), 1 /* TEXT */)
             ])
           ])
@@ -12914,98 +12993,98 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" a hyperlink "),
     (_ctx.webOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 25,
+          key: 26,
           class: "eb-modal-back",
-          onClick: _cache[647] || (_cache[647] = $event => (_ctx.webOpen = false))
+          onClick: _cache[654] || (_cache[654] = $event => (_ctx.webOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(560px,100%)"},
-            onClick: _cache[646] || (_cache[646] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[653] || (_cache[653] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Bring in a web page…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_938, [
-              _createElementVNode("div", _hoisted_939, [
+            _createElementVNode("div", _hoisted_945, [
+              _createElementVNode("div", _hoisted_946, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Address')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   type: "text",
-                  "onUpdate:modelValue": _cache[642] || (_cache[642] = $event => ((_ctx.webUrl) = $event)),
+                  "onUpdate:modelValue": _cache[649] || (_cache[649] = $event => ((_ctx.webUrl) = $event)),
                   placeholder: "https://example.org/page",
-                  onKeydown: _cache[643] || (_cache[643] = _withKeys(_withModifiers((...args) => (_ctx.fetchWebPage && _ctx.fetchWebPage(...args)), ["prevent"]), ["enter"]))
+                  onKeydown: _cache[650] || (_cache[650] = _withKeys(_withModifiers((...args) => (_ctx.fetchWebPage && _ctx.fetchWebPage(...args)), ["prevent"]), ["enter"]))
                 }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                   [_vModelText, _ctx.webUrl]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_940, _toDisplayString(_ctx.t('The writing on the page is brought in: headings, paragraphs, lists, tables and pictures. Navigation, sidebars and advertising are left behind. Copying a page and pasting it here does the same thing.')), 1 /* TEXT */),
+              _createElementVNode("p", _hoisted_947, _toDisplayString(_ctx.t('The writing on the page is brought in: headings, paragraphs, lists, tables and pictures. Navigation, sidebars and advertising are left behind. Copying a page and pasting it here does the same thing.')), 1 /* TEXT */),
               (_ctx.webBusy)
-                ? (_openBlock(), _createElementBlock("p", _hoisted_941, _toDisplayString(_ctx.t('Fetching…')), 1 /* TEXT */))
+                ? (_openBlock(), _createElementBlock("p", _hoisted_948, _toDisplayString(_ctx.t('Fetching…')), 1 /* TEXT */))
                 : _createCommentVNode("v-if", true)
             ]),
-            _createElementVNode("div", _hoisted_942, [
+            _createElementVNode("div", _hoisted_949, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[644] || (_cache[644] = $event => (_ctx.webOpen = false))
+                onClick: _cache[651] || (_cache[651] = $event => (_ctx.webOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
                 disabled: _ctx.webBusy || !_ctx.webUrl,
-                onClick: _cache[645] || (_cache[645] = (...args) => (_ctx.fetchWebPage && _ctx.fetchWebPage(...args)))
-              }, _toDisplayString(_ctx.t('Bring it in')), 9 /* TEXT, PROPS */, _hoisted_943)
+                onClick: _cache[652] || (_cache[652] = (...args) => (_ctx.fetchWebPage && _ctx.fetchWebPage(...args)))
+              }, _toDisplayString(_ctx.t('Bring it in')), 9 /* TEXT, PROPS */, _hoisted_950)
             ])
           ])
         ]))
       : _createCommentVNode("v-if", true),
     (_ctx.linkOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 26,
+          key: 27,
           class: "eb-modal-back",
-          onClick: _cache[655] || (_cache[655] = $event => (_ctx.linkOpen = false))
+          onClick: _cache[662] || (_cache[662] = $event => (_ctx.linkOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(520px,100%)"},
-            onClick: _cache[654] || (_cache[654] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[661] || (_cache[661] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.link.editing ? _ctx.t('Edit the link…') : _ctx.t('Hyperlink…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_944, [
-              _createElementVNode("div", _hoisted_945, [
+            _createElementVNode("div", _hoisted_951, [
+              _createElementVNode("div", _hoisted_952, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Text')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   type: "text",
-                  "onUpdate:modelValue": _cache[648] || (_cache[648] = $event => ((_ctx.link.text) = $event)),
+                  "onUpdate:modelValue": _cache[655] || (_cache[655] = $event => ((_ctx.link.text) = $event)),
                   placeholder: _ctx.t('The words that carry the link')
-                }, null, 8 /* PROPS */, _hoisted_946), [
+                }, null, 8 /* PROPS */, _hoisted_953), [
                   [_vModelText, _ctx.link.text]
                 ])
               ]),
-              _createElementVNode("div", _hoisted_947, [
+              _createElementVNode("div", _hoisted_954, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Address')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   type: "text",
-                  "onUpdate:modelValue": _cache[649] || (_cache[649] = $event => ((_ctx.link.url) = $event)),
+                  "onUpdate:modelValue": _cache[656] || (_cache[656] = $event => ((_ctx.link.url) = $event)),
                   placeholder: "example.org/page",
-                  onKeydown: _cache[650] || (_cache[650] = _withKeys(_withModifiers((...args) => (_ctx.applyLinkDialog && _ctx.applyLinkDialog(...args)), ["prevent"]), ["enter"]))
+                  onKeydown: _cache[657] || (_cache[657] = _withKeys(_withModifiers((...args) => (_ctx.applyLinkDialog && _ctx.applyLinkDialog(...args)), ["prevent"]), ["enter"]))
                 }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                   [_vModelText, _ctx.link.url]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_948, _toDisplayString(_ctx.t('A bare address becomes https://, and an e-mail address becomes a mailto: link.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_955, _toDisplayString(_ctx.t('A bare address becomes https://, and an e-mail address becomes a mailto: link.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_949, [
+            _createElementVNode("div", _hoisted_956, [
               (_ctx.link.editing)
                 ? (_openBlock(), _createElementBlock("button", {
                     key: 0,
                     class: "eb-btn ghost",
-                    onClick: _cache[651] || (_cache[651] = $event => {_ctx.linkOpen = false; _ctx.ctxDo('linkDel')})
+                    onClick: _cache[658] || (_cache[658] = $event => {_ctx.linkOpen = false; _ctx.ctxDo('linkDel')})
                   }, _toDisplayString(_ctx.t('Remove the link')), 1 /* TEXT */))
                 : _createCommentVNode("v-if", true),
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[652] || (_cache[652] = $event => (_ctx.linkOpen = false))
+                onClick: _cache[659] || (_cache[659] = $event => (_ctx.linkOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[653] || (_cache[653] = (...args) => (_ctx.applyLinkDialog && _ctx.applyLinkDialog(...args)))
+                onClick: _cache[660] || (_cache[660] = (...args) => (_ctx.applyLinkDialog && _ctx.applyLinkDialog(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
@@ -13014,44 +13093,44 @@ return function render(_ctx, _cache) {
     _createCommentVNode(" what a reader hears in place of the picture "),
     (_ctx.altOpen)
       ? (_openBlock(), _createElementBlock("div", {
-          key: 27,
+          key: 28,
           class: "eb-modal-back",
-          onClick: _cache[661] || (_cache[661] = $event => (_ctx.altOpen = false))
+          onClick: _cache[668] || (_cache[668] = $event => (_ctx.altOpen = false))
         }, [
           _createElementVNode("div", {
             class: "eb-modal",
             style: {"width":"min(520px,100%)"},
-            onClick: _cache[660] || (_cache[660] = _withModifiers(() => {}, ["stop"]))
+            onClick: _cache[667] || (_cache[667] = _withModifiers(() => {}, ["stop"]))
           }, [
             _createElementVNode("h3", null, _toDisplayString(_ctx.t('Alternative text…')), 1 /* TEXT */),
-            _createElementVNode("div", _hoisted_950, [
-              _createElementVNode("div", _hoisted_951, [
+            _createElementVNode("div", _hoisted_957, [
+              _createElementVNode("div", _hoisted_958, [
                 _createElementVNode("label", null, _toDisplayString(_ctx.t('Alternative text')), 1 /* TEXT */),
                 _withDirectives(_createElementVNode("input", {
                   type: "text",
-                  "onUpdate:modelValue": _cache[656] || (_cache[656] = $event => ((_ctx.altText) = $event)),
-                  onKeydown: _cache[657] || (_cache[657] = _withKeys(_withModifiers((...args) => (_ctx.applyAlt && _ctx.applyAlt(...args)), ["prevent"]), ["enter"]))
+                  "onUpdate:modelValue": _cache[663] || (_cache[663] = $event => ((_ctx.altText) = $event)),
+                  onKeydown: _cache[664] || (_cache[664] = _withKeys(_withModifiers((...args) => (_ctx.applyAlt && _ctx.applyAlt(...args)), ["prevent"]), ["enter"]))
                 }, null, 544 /* NEED_HYDRATION, NEED_PATCH */), [
                   [_vModelText, _ctx.altText]
                 ])
               ]),
-              _createElementVNode("p", _hoisted_952, _toDisplayString(_ctx.t('This is what a screen reader says, and what shows if the picture cannot be loaded. It is written into the file as the alt attribute.')), 1 /* TEXT */)
+              _createElementVNode("p", _hoisted_959, _toDisplayString(_ctx.t('This is what a screen reader says, and what shows if the picture cannot be loaded. It is written into the file as the alt attribute.')), 1 /* TEXT */)
             ]),
-            _createElementVNode("div", _hoisted_953, [
+            _createElementVNode("div", _hoisted_960, [
               _createElementVNode("button", {
                 class: "eb-btn ghost",
-                onClick: _cache[658] || (_cache[658] = $event => (_ctx.altOpen = false))
+                onClick: _cache[665] || (_cache[665] = $event => (_ctx.altOpen = false))
               }, _toDisplayString(_ctx.t('Cancel')), 1 /* TEXT */),
               _createElementVNode("button", {
                 class: "eb-btn primary",
-                onClick: _cache[659] || (_cache[659] = (...args) => (_ctx.applyAlt && _ctx.applyAlt(...args)))
+                onClick: _cache[666] || (_cache[666] = (...args) => (_ctx.applyAlt && _ctx.applyAlt(...args)))
               }, _toDisplayString(_ctx.t('Apply')), 1 /* TEXT */)
             ])
           ])
         ]))
       : _createCommentVNode("v-if", true),
     (_ctx.toast)
-      ? (_openBlock(), _createElementBlock("div", _hoisted_954, _toDisplayString(_ctx.toast), 1 /* TEXT */))
+      ? (_openBlock(), _createElementBlock("div", _hoisted_961, _toDisplayString(_ctx.toast), 1 /* TEXT */))
       : _createCommentVNode("v-if", true)
   ], 2 /* CLASS */))
 }
@@ -13118,7 +13197,8 @@ return function render(_ctx, _cache) {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0 },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0, doc: null },
+        props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
@@ -13618,30 +13698,80 @@ return function render(_ctx, _cache) {
           await this.loadDocs();
         } catch (e) { this.notify(this.t('Could not rename: {msg}', { msg: e.message })); }
       },
-      async duplicate() {
+      duplicate() {
         this.menuOpen = false;
-        if (!this.doc.id) { return; }
-        await this.save();
+        return this.duplicateDoc(this.doc.id);
+      },
+      /** A copy of a document, whether it is the one open or another in the list. */
+      async duplicateDoc(id) {
+        this.closeCtx();
+        if (!id) { return; }
+        // Only what is on the screen can be out of date; another file is already
+        // whatever it is on disk.
+        if (id === this.doc.id) { await this.save(); }
         try {
-          const copy = await api('documents/' + this.doc.id + '/duplicate', { method: 'POST' });
+          const copy = await api('documents/' + id + '/duplicate', { method: 'POST' });
           await this.loadDocs();
           await this.openDoc(copy.id);
         } catch (e) { this.notify(this.t('Could not duplicate: {msg}', { msg: e.message })); }
       },
-      async removeDoc() {
+      removeDoc() {
         this.menuOpen = false;
-        if (!this.doc.id) { return; }
-        if (!window.confirm(this.t('Move "{name}" to the trash?', { name: this.doc.name }))) { return; }
+        return this.deleteDoc({ id: this.doc.id, name: this.doc.name, title: this.doc.title });
+      },
+      async deleteDoc(d) {
+        this.closeCtx();
+        if (!d || !d.id) { return; }
+        if (!window.confirm(this.t('Move "{name}" to the trash?', { name: d.name || d.title }))) { return; }
         try {
-          await api('documents/' + this.doc.id, { method: 'DELETE' });
-          const id = this.doc.id;
-          this.doc = { id: 0, name: '', title: '', paper: normalisePaper(this.defaultPaper), lang: this.docLang(), foreign: false };
-          canvas().innerHTML = '';
-          this.dirty = false;
+          await api('documents/' + d.id, { method: 'DELETE' });
           await this.loadDocs();
-          const next = this.docs[0];
-          if (next && next.id !== id) { await this.openDoc(next.id); }
+          // Deleting the one being written closes it and opens whatever is left,
+          // so the writer is not left looking at a document that is not there.
+          if (d.id === this.doc.id) {
+            this.doc = { id: 0, name: '', title: '', paper: normalisePaper(this.defaultPaper), styles: normaliseStyles(null), css: '', lang: this.docLang(), foreign: false };
+            canvas().innerHTML = '';
+            this.dirty = false;
+            this.applyDocStyles();
+            const next = this.docs[0];
+            if (next && next.id !== d.id) { await this.openDoc(next.id); }
+          }
         } catch (e) { this.notify(this.t('Could not delete: {msg}', { msg: e.message })); }
+      },
+      /**
+       * What a document is, told from the file rather than from the screen: its
+       * name, where it is, what paper it is set on and how much is written in it.
+       * The one being written is saved first, or the answer would be the answer to
+       * the last save rather than to the question.
+       */
+      async openDocProps(d) {
+        this.closeCtx();
+        if (!d) { return; }
+        this.props = { open: true, busy: true, id: d.id, name: d.name || '', title: d.title || '',
+          size: d.size || 0, mtime: d.mtime || 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' };
+        try {
+          if (d.id === this.doc.id && this.dirty) { await this.save(); }
+          const got = await api('documents/' + d.id);
+          const parsed = parseHtml(got.content);
+          const box = document.createElement('div');
+          box.innerHTML = parsed.body || '';
+          // A reading over a word is not writing, and is not counted as any.
+          Array.from(box.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+          const paper = normalisePaper(parsed.paper);
+          const s2 = sheet(paper);
+          this.props.title = parsed.title || d.title || '';
+          this.props.size = got.size || d.size || 0;
+          this.props.mtime = got.mtime || d.mtime || 0;
+          this.props.chars = String(box.textContent || '').replace(/\s/g, '').length;
+          this.props.pictures = box.querySelectorAll('img').length;
+          this.props.tables = box.querySelectorAll('table').length;
+          this.props.paper = paper.size + ' ' + (paper.orientation === 'landscape' ? this.t('Landscape') : this.t('Portrait'))
+            + ' · ' + s2.w + ' × ' + s2.h + ' mm'
+            + (paper.vertical ? ' · ' + this.t('Down (vertical)') : '');
+        } catch (e) {
+          this.props.error = e && e.message ? e.message : String(e);
+        }
+        this.props.busy = false;
       },
       download() {
         this.menuOpen = false;
@@ -16252,6 +16382,7 @@ return function render(_ctx, _cache) {
         if (!c || !inCanvas(e.target)) { return; }
         e.preventDefault();
         this.ctx.page = 0;
+        this.ctx.doc = null;
         const point = caretFromPoint(e.clientX, e.clientY);
         const sel = getRange();
         let inside = false;
@@ -16327,6 +16458,7 @@ return function render(_ctx, _cache) {
         this.syncFrame();
         const img = el.matches && el.matches('figure.eb-img') ? el.querySelector('img') : null;
         this.ctx.page = 0;
+        this.ctx.doc = null;
         this.ctx.table = !!(el.nodeName === 'TABLE');
         this.ctx.image = !!img;
         this.ctx.captionPlace = img ? captionPlace(img) : '';
@@ -16342,10 +16474,25 @@ return function render(_ctx, _cache) {
        * page. A page is not a thing in the document -- it is where the writing
        * happened to fall -- so these act on the blocks standing on it.
        */
+      /** The right button on a document in the list: what can be done to the file. */
+      docCtx(e, d) {
+        this.ctx.doc = d;
+        this.ctx.page = 0;
+        this.ctx.table = false;
+        this.ctx.image = false;
+        this.ctx.captionPlace = '';
+        this.ctx.frame = false;
+        this.ctx.text = false;
+        this.ctx.link = false;
+        this.ctx.list = false;
+        this.ctx.selection = false;
+        this.placeCtx(e.clientX, e.clientY);
+      },
       pageCtx(e, n) {
         // Not goToPage: scrolling there would shut the menu on the way. Going to
         // the page is the first item in it, for anyone who wants that.
         this.ctx.page = n;
+        this.ctx.doc = null;
         this.ctx.table = false;
         this.ctx.image = false;
         this.ctx.captionPlace = '';
