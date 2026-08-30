@@ -201,7 +201,17 @@
   background-repeat: no-repeat;
 }
 .eb-sheet { position: relative; }
-.eb-pagespacer { display: block; }
+/* The fold: the room left at the foot of a page so that the next block starts on
+   the next sheet. It is a div with contenteditable="false" on it, which is the
+   very thing Nextcloud's server.css dresses as a form field -- so the fold was
+   drawn as a grey 130px box lying across the two sheets. Everything a form
+   field would give it is taken back off here. */
+#editbase-root div.eb-pagespacer,
+#editbase-root div.eb-pagespacer[contenteditable="false"] {
+  display: block; width: auto; min-width: 0; min-height: 0;
+  margin: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; box-shadow: none; outline: none;
+}
 /* Nextcloud's server.css styles every div[contenteditable] as a 130px form
    field (width, padding, margin, min-height).  That selector out-specifies a
    plain class, so the canvas needs the attribute in its own selector to win. */
