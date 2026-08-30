@@ -48,5 +48,11 @@ First working version.
 - The right button on a document in the list opens it, copies it, throws it away,
   or tells what it is: the file's name and where it is, its size, when it was last
   saved, the paper it is set on, and how much is written in it.
+- A running header and footer that really do repeat on every printed page: the
+  writing is put in a table of one cell, which is the one thing a browser repeats
+  across a page break, and each of them stands in a band of its own that the
+  writing never runs into. What they say can carry the title of the document, its
+  file name and the date and time it was saved, written in braces and filled in as
+  the file is written.
 - A view of the raw HTML of the current document.
 - Light and dark themes, chosen per user, and English and Japanese translations.

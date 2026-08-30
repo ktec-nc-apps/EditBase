@@ -718,22 +718,23 @@
 .eb-doc .eb-cols { column-gap: 8mm; column-rule: none; }
 .eb-doc .eb-cols > *:first-child { margin-top: 0; }
 
-/* a running header and footer, repeated on every printed page. On screen the
-   file is a single flow and there are no pages to repeat them on, so they are
-   only drawn when it is printed -- and the editor draws its own on each sheet. */
+/* A running header and footer, repeated on every printed page: the writing sits
+   in a table of one cell, and a browser repeats a table's head and foot on every
+   page it breaks across. The bands they stand in are theirs alone -- the writing
+   begins below the one and ends above the other, on every page. */
+.eb-doc table.eb-run { width: 100%; border-collapse: collapse; border: 0; margin: 0; table-layout: fixed; }
+.eb-doc table.eb-run > thead > tr > th,
+.eb-doc table.eb-run > tfoot > tr > td,
+.eb-doc table.eb-run > tbody > tr > td { border: 0; padding: 0; text-align: left; font-weight: inherit; vertical-align: top; }
 .eb-doc .eb-runhead, .eb-doc .eb-runfoot {
-  display: none; font-size: .85em; color: #444;
+  display: flex; gap: 1em; height: 8mm; font-size: .85em; color: #444; font-weight: normal;
 }
+.eb-doc .eb-runfoot { align-items: flex-end; }
 .eb-doc .eb-runhead .l, .eb-doc .eb-runfoot .l,
 .eb-doc .eb-runhead .c, .eb-doc .eb-runfoot .c,
 .eb-doc .eb-runhead .r, .eb-doc .eb-runfoot .r { flex: 1 1 0; min-width: 0; }
 .eb-doc .eb-runhead .c, .eb-doc .eb-runfoot .c { text-align: center; }
 .eb-doc .eb-runhead .r, .eb-doc .eb-runfoot .r { text-align: right; }
-@media print {
-  .eb-doc .eb-runhead, .eb-doc .eb-runfoot { display: flex; gap: 1em; position: fixed; left: 0; right: 0; }
-  .eb-doc .eb-runhead { top: -9mm; }
-  .eb-doc .eb-runfoot { bottom: -9mm; }
-}
 
 /* mathematics — native MathML, no images and no renderer to install */
 .eb-doc math { font-size: 1.06em; }
@@ -1141,16 +1142,75 @@ ${insideObjects('.eb-paper.boxed')} {
    * This exact string is what gets written to Files and what gets printed.
    */
   /** The header or the footer as three slots, or nothing at all if it is empty. */
-  function runningBlock(cls, slots) {
-    const s = slots || {};
-    if (!(s.l || s.c || s.r)) { return ''; }
-    return '<div class="' + cls + '" aria-hidden="true">'
-      + '<span class="l">' + escapeAttr(s.l || '') + '</span>'
-      + '<span class="c">' + escapeAttr(s.c || '') + '</span>'
-      + '<span class="r">' + escapeAttr(s.r || '') + '</span>'
-      + '</div>\n';
+  /**
+   * A running header or footer says the same thing on every page except for the
+   * parts that count: the page number, and how many there are. A browser cannot
+   * count printed pages -- there is no such thing in HTML -- so the editor, which
+   * has counted them to draw the sheets, writes one running block for each page
+   * with that page's own number in it, standing in the paper's margin. The parts
+   * that change are written by the writer as words in braces.
+   */
+  const RUN_TOKENS = ['title', 'name', 'date', 'time'];
+  function runText(text, about) {
+    const c = about || {};
+    return String(text == null ? '' : text).replace(/\{([a-z]+)\}/gi, (whole, key) => {
+      const k = String(key).toLowerCase();
+      if (RUN_TOKENS.indexOf(k) < 0) { return whole; }
+      const v = c[k];
+      return v == null ? '' : String(v);
+    });
   }
-
+  function hasSlots(s) { return !!(s && (s.l || s.c || s.r)); }
+  /** What the running header and footer say, as they will be written into the file. */
+  function runAbout(doc) {
+    const now = new Date();
+    return {
+      title: doc.title || '', name: doc.name || '',
+      date: now.toLocaleDateString(),
+      time: now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    };
+  }
+  /** The height of the band a running header or footer stands in, in mm. */
+  const RUN_BAND = 8;
+  function runBands(paper) {
+    return {
+      top: hasSlots(paper.header) ? RUN_BAND : 0,
+      bottom: hasSlots(paper.footer) ? RUN_BAND : 0,
+    };
+  }
+  function runRow(cls, slots, about) {
+    const say = (v) => escapeAttr(runText(v || '', about));
+    return '<div class="' + cls + '">'
+      + '<span class="l">' + say(slots.l) + '</span>'
+      + '<span class="c">' + say(slots.c) + '</span>'
+      + '<span class="r">' + say(slots.r) + '</span>'
+      + '</div>';
+  }
+  /**
+   * A running header and footer that really do repeat on every printed page.
+   *
+   * They cannot be placed in the paper's margin: a browser gives no way to put
+   * anything there. Fixed to the top of the page it lands on the first line of
+   * the writing; measured up into the margin it comes out at the foot of the page
+   * before, because the margins are not part of the column the writing flows
+   * down. All four ways were tried and printed to see.
+   *
+   * What a browser does repeat, on every page, is the head and the foot of a
+   * table. So the writing is put in a table of one cell, with the header in its
+   * head and the footer in its foot; the band each of them stands in is taken off
+   * the writing area, on every page, by the table itself. The editor takes the
+   * same band off its own sheets, so the two agree.
+   */
+  function runningTable(paper, doc, body) {
+    if (!hasSlots(paper.header) && !hasSlots(paper.footer)) { return body; }
+    const about = runAbout(doc);
+    return '<table class="eb-run">\n'
+      + (hasSlots(paper.header)
+        ? '<thead><tr><th>' + runRow('eb-runhead', paper.header, about) + '</th></tr></thead>\n' : '')
+      + (hasSlots(paper.footer)
+        ? '<tfoot><tr><td>' + runRow('eb-runfoot', paper.footer, about) + '</td></tr></tfoot>\n' : '')
+      + '<tbody><tr><td>\n' + body + '\n</td></tr></tbody>\n</table>\n';
+  }
   /** The classes the document itself wears: the numbering scheme, if any. */
   function docClasses(paper, clean) {
     const out = ['eb-doc'];
@@ -1234,9 +1294,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // but a document whose first element is not its first paragraph loses the
       // rule that takes the space off the top of the page -- and every line in
       // the file then sat 42.5px lower than the same line in the editor.
-      + body + '\n'
-      + runningBlock('eb-runhead', paper.header)
-      + runningBlock('eb-runfoot', paper.footer)
+      + runningTable(paper, doc, body) + '\n'
       + '</body>\n</html>\n';
   }
 
@@ -1252,7 +1310,16 @@ ${insideObjects('.eb-paper.boxed')} {
     const body = dom.body || dom.createElement('body');
     // The running header and footer are written out of the paper setup, so they
     // are not part of the text and must not come back into the canvas as blocks.
-    Array.from(body.querySelectorAll('.eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
+    // The writing of a document with a running header stands in a table of one
+    // cell, so that a browser repeats the header on every printed page. It comes
+    // back out of the cell here: what the editor holds is the writing itself.
+    const run = body.querySelector(':scope > table.eb-run');
+    if (run) {
+      const cell = run.querySelector(':scope > tbody > tr > td');
+      if (cell) { while (cell.firstChild) { body.insertBefore(cell.firstChild, run); } }
+      run.remove();
+    }
+    Array.from(body.querySelectorAll('.eb-runpage, .eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
     sanitiseInto(body);
     toObjects(body);
     return {
@@ -3710,6 +3777,8 @@ ${insideObjects('.eb-paper.boxed')} {
       bottom: r.bottom - n(cs.borderBottomWidth) - n(cs.paddingBottom),
     };
   }
+  /** The boxes writing is done in, each of which needs its own room made. */
+  const WRAP_HOSTS = 'div.eb-frame, .eb-textbox, aside.eb-box, div.eb-note, td, th, figcaption, li';
   /** A float reaches only the lines in its own formatting context. */
   function flowRoot(el) {
     const c = canvas();
@@ -3804,13 +3873,12 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!root) { return; }
     const z = zoom || 1;
     const mm = (px) => Math.round(px / z * MM * 10) / 10;
-    for (let pass = 0; pass < 3; pass += 1) {
-      clearWrapSpacers(root);
+    for (let pass = 0; pass < 4; pass += 1) {
       // Every object standing over the page, not only the ones that have been
       // told what to do: standing clear of the writing is the default.
       const objects = Array.from(root.querySelectorAll('.eb-anchor > *'))
         .filter((o) => o.nodeType === 1 && ['none', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
-      if (!objects.length) { return; }
+      if (!objects.length) { clearWrapSpacers(root); return; }
       const before = objects.map((o) => o.getBoundingClientRect().top);
       // Writing that is itself standing on the page counts too. It was left out,
       // so a picture laid over a piece of writing that had been placed freely --
@@ -3821,9 +3889,17 @@ ${insideObjects('.eb-paper.boxed')} {
       const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
         .filter((b) => !b.querySelector('.eb-anchor'))
         .filter((b) => !b.closest('header.eb-header, footer.eb-footer'));
+      // Everything is measured with the room already made -- the spacers of the
+      // pass before are still standing -- because an object hangs off an anchor
+      // that the room itself has moved. Measured with them taken out, every pass
+      // described where the object would be if nothing had been done for it, and
+      // the words were held off a place it no longer stood in: two lines of a
+      // paragraph ran straight through a picture that had been told to part them.
+      // So the whole plan is drawn up first and the spacers replaced afterwards.
+      const plan = [];
+      const held = new Map();
       // Nearest first, so two objects over the same paragraph reserve their room
       // one after the other instead of both measuring from the same edge.
-      const held = new Map();
       objects.slice().sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
         .forEach((o) => {
           const or = o.getBoundingClientRect();
@@ -3832,51 +3908,68 @@ ${insideObjects('.eb-paper.boxed')} {
           const gapPx = wrapGap(o) / MM * z;
           const done = new Set();
           const mine = stackRank(o);
+          const peg = o.parentNode;
           blocks.forEach((b) => {
             if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
+            // Only the writing from the line the thing hangs on, and only where
+            // that writing is in the flow: pushing writing that stands above the
+            // line would move the line itself, and the thing hanging from it,
+            // down and down the page. Writing that is itself placed by hand is
+            // out of the flow and moves nothing, so it is always given its room.
             // Only what is underneath moves. See stackRank.
             if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
+            if (peg && peg.compareDocumentPosition && !b.closest('.eb-anchor')
+              && (peg.compareDocumentPosition(b) & 2)) { return; }
             const cb = contentBox(b);
             if (cb.bottom <= or.top - gapPx || cb.top >= or.bottom + gapPx) { return; }
             if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
-            const rootEl = flowRoot(b);
-            // One spacer to each formatting context: a float goes on holding the
-            // lines below it off, so the paragraphs after this one are already
-            // taken care of.
+            // One spacer to each box the words are written in: a float goes on
+            // holding the lines below it off, so the paragraphs after this one in
+            // the same box are already taken care of. A frame counts as a box of
+            // its own even though CSS does not make it one -- a float outside it
+            // shortens its lines but cannot move its border, so the writing
+            // inside a frame is given its room inside the frame.
+            const rootEl = b.closest(WRAP_HOSTS) || flowRoot(b);
             if (done.has(rootEl)) { return; }
             done.add(rootEl);
             const room = cb.right - cb.left;
-            let side = mode;
+            const side = mode;
             let how = mode;
             // A column too narrow to write in is no wrap at all: LibreOffice's own
             // rule is twenty millimetres (TEXT_MIN, 1134 twips), and below that it
             // puts the words above and below instead. See WRAP_MIN_COLUMN.
             if (mode === 'left' || mode === 'right') {
-              const room = mode === 'left'
+              const beside = mode === 'left'
                 ? (or.left - gapPx - cb.left) * MM / z
                 : (cb.right - (or.right + gapPx)) * MM / z;
-              if (room < WRAP_MIN_COLUMN) { how = 'none'; }
+              if (beside < WRAP_MIN_COLUMN) { how = 'none'; }
             }
             const floatSide = how === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
-            const key = b;
-            const taken = held.get(key) || { left: 0, right: 0 };
+            const taken = held.get(b) || { left: 0, right: 0 };
             let w = how === 'none' ? room
               : (floatSide === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
             w = Math.min(Math.max(w - taken[floatSide], 0), room);
             const h = (or.bottom + gapPx) - cb.top;
             if (w <= 0 || h <= 0) { return; }
             taken[floatSide] += w;
-            held.set(key, taken);
+            held.set(b, taken);
             const inset = Math.max(0, (or.top - gapPx) - cb.top);
-            const spacer = document.createElement('span');
-            spacer.className = 'eb-flow';
-            spacer.setAttribute('contenteditable', 'false');
-            spacer.setAttribute('aria-hidden', 'true');
-            spacer.setAttribute('style', 'float:' + floatSide + ';width:' + mm(w) + 'mm;height:' + mm(h) + 'mm;'
-              + (inset > 0.5 ? 'shape-outside:inset(' + mm(inset) + 'mm 0 0 0);' : ''));
-            b.insertBefore(spacer, b.firstChild);
+            plan.push({
+              block: b,
+              style: 'float:' + floatSide + ';width:' + mm(w) + 'mm;height:' + mm(h) + 'mm;'
+                + (inset > 0.5 ? 'shape-outside:inset(' + mm(inset) + 'mm 0 0 0);' : ''),
+            });
           });
         });
+      clearWrapSpacers(root);
+      plan.forEach((job) => {
+        const spacer = document.createElement('span');
+        spacer.className = 'eb-flow';
+        spacer.setAttribute('contenteditable', 'false');
+        spacer.setAttribute('aria-hidden', 'true');
+        spacer.setAttribute('style', job.style);
+        job.block.insertBefore(spacer, job.block.firstChild);
+      });
       const after = objects.map((o) => o.getBoundingClientRect().top);
       if (after.every((t, i) => Math.abs(t - before[i]) < 0.5)) { return; }
     }
@@ -4370,6 +4463,15 @@ ${insideObjects('.eb-paper.boxed')} {
     // foot of its page instead. Standing so near that foot that not even a line
     // of it would fit, there is nothing to cut off: it goes over whole as well,
     // and is cut on the page it lands on.
+    // Above the top edge of its own sheet -- which the writing shrinking under it
+    // can do -- it is brought back on to the paper.
+    const head = page * geom.usable - geom.mt;
+    if (top < head - 0.5) {
+      const own = el.style.top || '';
+      top = head;
+      el.style.top = round1((top - paperTop) * MM) + 'mm';
+      if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); }
+    }
     const overPaper = top + height > page * geom.usable + geom.usable + geom.mb + 0.5;
     const room = page * geom.usable + geom.usable - top;
     const move = height && (height <= geom.usable
@@ -4397,12 +4499,16 @@ ${insideObjects('.eb-paper.boxed')} {
    * on the page after it. Dropped in a margin, it is taken to the writing.
    */
   function placeFreeAsDrawn(el, geom) {
+    if (!el || !geom || !objectFree(el)) { return; }
+    placeFreeAt(el, geom, topOnPaper(el) - geom.mt);
+  }
+  /** The same, for a place it is to be drawn at rather than the one it is at. */
+  function placeFreeAt(el, geom, drawn) {
     if (!el || !geom || !objectFree(el) || !el.parentNode) { return; }
     const step = geom.usable + geom.extra;
     const anchorTop = topOnPaper(el.parentNode) - geom.mt;
     const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
     const paperTop = anchorTop - ka * geom.extra;
-    const drawn = topOnPaper(el) - geom.mt;
     let page = Math.max(0, Math.floor((drawn + geom.mt) / step));
     let off = drawn - page * step;
     // The first page's top margin is the one margin a thing can begin in: it is
@@ -4417,6 +4523,70 @@ ${insideObjects('.eb-paper.boxed')} {
     if (Math.abs(px) > 0.5) { el.style.setProperty('--eb-shift', round1(px) + 'px'); }
     else { el.style.removeProperty('--eb-shift'); }
   }
+  /**
+   * A thing placed by hand belongs to the line of writing it is drawn over. That
+   * is what its offset in the file is measured from, and it is also what makes
+   * room for it possible at all: room is made by pushing writing down, and
+   * pushing writing that stands above the line the thing hangs from moves that
+   * line -- and the thing with it, further down the page, needing room lower
+   * down, and so on down the document. Pegged to the block it stands on, the
+   * room is always made below the peg and nothing chases anything.
+   */
+  function reanchor(el, geom) {
+    const c = canvas();
+    if (!c || !el || !objectFree(el) || !el.getBoundingClientRect) { return false; }
+    const anchor = el.parentNode;
+    const r = el.getBoundingClientRect();
+    if (!r.height && !r.width) { return false; }
+    const over = blockOver(el, r.top + 1);
+    if (!over || !over.parentNode || over === anchor) { return false; }
+    let after = anchor.nextElementSibling;
+    while (after && after.classList && after.classList.contains('eb-pagespacer')) { after = after.nextElementSibling; }
+    if (after === over) { return false; }
+    // Where it is drawn now, before the peg moves: moving the peg moves the thing
+    // hanging off it, and the whole point is that the thing does not move. Without
+    // this it kept the offset instead of the place, and walked down the page a
+    // paragraph at a time, once for every turn of the layout.
+    const was = topOnPaper(el) - geom.mt;
+    const from = lengthPx(el.style.top);
+    over.parentNode.insertBefore(anchor, over);
+    placeFreeAt(el, geom, was);
+    // Where the writer put it is remembered as an offset from the peg, so when
+    // the peg moves that memory has to move with it -- by the same amount the
+    // thing's own offset just moved. Left as it was, the memory pointed at a
+    // place a page further down every time the peg changed, and a thing pushed
+    // off the foot of the paper walked off the end of the document.
+    if (el.hasAttribute('data-free-top')) {
+      const mark = el.getAttribute('data-free-top');
+      if (mark) {
+        el.setAttribute('data-free-top',
+          round1((lengthPx(mark) + (lengthPx(el.style.top) - from)) * MM) + 'mm');
+      }
+    }
+    return true;
+  }
+  /**
+   * The innermost block the given height falls in -- inside a frame if that is
+   * where it falls, because that is the writing that has to make room. Never the
+   * thing's own writing, and never another placed thing: a peg belongs in the
+   * text of the page, not in something else standing on it.
+   */
+  function blockOver(el, y) {
+    const c = canvas();
+    if (!c) { return null; }
+    const found = [];
+    Array.from(c.querySelectorAll(TEXT_SEL + ', div.eb-frame, table.eb-table, aside.eb-box')).forEach((b) => {
+      if (b === el || b.contains(el) || el.contains(b)) { return; }
+      if (b.closest('.eb-anchor')) { return; }
+      if (b.closest('header.eb-header, footer.eb-footer')) { return; }
+      if (b.parentNode && b.parentNode.nodeName === 'P') { return; }
+      const rect = b.getBoundingClientRect();
+      if (rect.top <= y && rect.bottom > y) { found.push(b); }
+    });
+    if (!found.length) { return null; }
+    // The innermost of them: the one that holds none of the others.
+    return found.filter((b) => !found.some((o) => o !== b && b.contains(o)))[0] || found[0];
+  }
   /** Every freely placed thing put back on to a sheet. Returns whether any moved. */
   function settleFreeObjects() {
     const c = canvas();
@@ -4424,6 +4594,7 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!geom) { return false; }
     let moved = false;
     Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
+      if (reanchor(el, geom)) { moved = true; }
       if (settleFree(el, geom)) { moved = true; }
     });
     return moved;
@@ -4905,7 +5076,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
-    'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
+    'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'eb-run', 'l', 'c', 'r',
     'eb-header', 'eb-footer',
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
@@ -6699,10 +6870,10 @@ ${insideObjects('.eb-paper.boxed')} {
         <div class="eb-sheets" aria-hidden="true" v-if="!flow">
           <div class="eb-sheet" v-for="n in pageCount" :key="n">
             <div class="run head" v-if="hasRunning">
-              <span class="l">{{ doc.paper.header.l }}</span><span class="c">{{ doc.paper.header.c }}</span><span class="r">{{ doc.paper.header.r }}</span>
+              <span class="l">{{ runSay('header', 'l') }}</span><span class="c">{{ runSay('header', 'c') }}</span><span class="r">{{ runSay('header', 'r') }}</span>
             </div>
             <div class="run foot" v-if="hasRunning">
-              <span class="l">{{ doc.paper.footer.l }}</span><span class="c">{{ doc.paper.footer.c }}</span><span class="r">{{ doc.paper.footer.r }}</span>
+              <span class="l">{{ runSay('footer', 'l') }}</span><span class="c">{{ runSay('footer', 'c') }}</span><span class="r">{{ runSay('footer', 'r') }}</span>
             </div>
           </div>
         </div>
@@ -6801,13 +6972,13 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="group" v-for="(g, gi) in layers" :key="g.level">
         <div class="glabel">{{ t('Layer {n}', { n: g.level }) }}</div>
         <ol class="list">
-          <li v-for="it in g.items" :key="it.id" :draggable="it.movable"
+          <li v-for="it in g.items" :key="it.id" draggable="true"
             @contextmenu.prevent.stop="layerCtx($event, it.id)"
             :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
             @dragstart="layerDragStart(it.id, $event)" @dragend="layerDragEnd"
             @dragover.prevent="layerDragOver(it.id, $event)" @dragleave="dropLayer = -1"
             @drop.prevent="layerDrop(it.id)">
-            <button class="pick" @click="chooseLayer(it.id)" :title="it.text">
+            <button class="pick" draggable="true" @click="chooseLayer(it.id)" :title="it.text">
               <span class="ic" v-html="it.icon"></span>
               <span class="nm">{{ it.name }}</span>
               <span class="tx">{{ it.text }}</span>
@@ -7533,17 +7704,26 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="body">
         <label>{{ t('Header') }}</label>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.l" @input="touch"></div>
-          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.c" @input="touch"></div>
-          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.r" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.l" @focus="runAt = ['header','l']" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.c" @focus="runAt = ['header','c']" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.header.r" @focus="runAt = ['header','r']" @input="touch"></div>
         </div>
         <label>{{ t('Footer') }}</label>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.l" @input="touch"></div>
-          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.c" @input="touch"></div>
-          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.r" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Left') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.l" @focus="runAt = ['footer','l']" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.c" @focus="runAt = ['footer','c']" @input="touch"></div>
+          <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.r" @focus="runAt = ['footer','r']" @input="touch"></div>
         </div>
-        <p class="eb-tip">{{ t('These repeat in the margin of every printed page. They are plain text: page numbers cannot be counted by a browser, and come from its own print dialogue instead.') }}</p>
+        <h4 class="eb-sect">{{ t('The parts that change') }}</h4>
+        <div class="eb-chips">
+          <button class="eb-btn ghost" v-for="k in runTokens" :key="k.tag" @click="putRunToken(k.tag)" :title="k.what">{{ k.tag }}</button>
+        </div>
+        <p class="eb-tip">{{ t('These repeat in the margin of every printed page. Anything in braces is filled in as the page is written: {page} is the number of the page it stands on, {pages} how many there are in all, {title} the title of the document, {name} its file name, {date} and {time} when it was saved.') }}</p>
+        <div class="eb-runpreview" v-if="hasRunning">
+          <span class="cap">{{ t('On every page') }}</span>
+          <span class="row"><span class="l">{{ runSay('header', 'l') }}</span><span class="c">{{ runSay('header', 'c') }}</span><span class="r">{{ runSay('header', 'r') }}</span></span>
+          <span class="row"><span class="l">{{ runSay('footer', 'l') }}</span><span class="c">{{ runSay('footer', 'c') }}</span><span class="r">{{ runSay('footer', 'r') }}</span></span>
+        </div>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearRunning">{{ t('Clear') }}</button>
@@ -8182,6 +8362,7 @@ ${insideObjects('.eb-paper.boxed')} {
         docs: [],
         doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), css: '', lang: 'ja', foreign: false },
         stylesOpen: false, styleKey: 'h2', cssOpen: false, cssRules: 0, cssBad: false,
+        runAt: ['header', 'c'],
         dirty: false,
         saving: false,
         savedAt: 0,
@@ -8283,14 +8464,21 @@ ${insideObjects('.eb-paper.boxed')} {
         const s = sheet(p);
         const f = resolveFonts(p, this.doc.lang);
         const art = pageArt(p);
+        const band = runBands(p);
         return {
           '--eb-paper-w': s.w + 'mm',
           '--eb-paper-h': s.h + 'mm',
-          '--eb-mt': p.margin.top + 'mm',
+          // The running header and footer stand in bands of their own, and the
+          // writing begins below the one and ends above the other -- on paper it
+          // is the table's head and foot that take the room, and here it is the
+          // page's own padding, so that both come to the same place.
+          '--eb-mt': (p.margin.top + band.top) + 'mm',
           '--eb-mr': p.margin.right + 'mm',
-          '--eb-mb': p.margin.bottom + 'mm',
+          '--eb-mb': (p.margin.bottom + band.bottom) + 'mm',
           '--eb-ml': p.margin.left + 'mm',
-          '--eb-pageh': (s.h - p.margin.top - p.margin.bottom) + 'mm',
+          '--eb-band-t': band.top + 'mm',
+          '--eb-band-b': band.bottom + 'mm',
+          '--eb-pageh': (s.h - p.margin.top - p.margin.bottom - band.top - band.bottom) + 'mm',
           '--eb-pageart': art.any ? 'url("' + art.url + '")' : 'none',
           '--eb-font-body': fontStack(f.body, 'serif'),
           '--eb-font-head': fontStack(f.head, 'sans'),
@@ -8463,6 +8651,16 @@ ${insideObjects('.eb-paper.boxed')} {
           if (n && out.indexOf(n) < 0) { out.push(n); }
         });
         return out;
+      },
+      /** The parts of a running header that are filled in, and what each says. */
+      runTokens() {
+        const what = {
+          title: this.t('The title of the document'),
+          name: this.t('The name of the file'),
+          date: this.t('The day it was saved'),
+          time: this.t('The time it was saved'),
+        };
+        return RUN_TOKENS.map((k) => ({ tag: '{' + k + '}', what: what[k] || k }));
       },
       hasRunning() {
         const h = this.doc.paper.header || {};
@@ -8689,6 +8887,7 @@ ${insideObjects('.eb-paper.boxed')} {
           styles: this.doc.styles,
           css: this.doc.css,
           lang: this.doc.lang,
+          name: this.doc.name,
           body: this.exportBody(),
         });
       },
@@ -8871,6 +9070,25 @@ ${insideObjects('.eb-paper.boxed')} {
               const moved = settleFreeObjects();
               if (!reflowFrames() && !moved) { break; }
               pages = paginate();
+            }
+            // And the room the objects take out of the writing last of all. It is
+            // measured, so it can only be measured once everything is where it is
+            // going to be: done before the pages were laid out, the spacers
+            // described a layout that no longer existed, and the words ran
+            // straight through a picture that had been told to part them. Moving
+            // the words moves the pages, so they are counted again -- until the
+            // spacers stop changing, which is when the two agree.
+            const c = canvas();
+            // Where the objects stand. Making room for them moves the writing,
+            // moving the writing moves the pages, and moving the pages moves the
+            // objects again -- so a round that moves nothing is the one to stop on.
+            const where = () => Array.from(c.querySelectorAll('.eb-anchor > *'))
+              .map((el) => Math.round(el.getBoundingClientRect().top)).join(',');
+            for (let round = 0; round < 4; round += 1) {
+              const was = where();
+              applyWrap(c, this.frameZoom());
+              pages = paginate();
+              if (where() === was) { break; }
             }
           }
           const done = () => {
@@ -10383,6 +10601,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!geom) { return; }
         el.removeAttribute('data-free-top');
         placeFreeAsDrawn(el, geom);
+        reanchor(el, geom);
         settleFree(el, geom);
       },
       alignObject(el, cls) {
@@ -11168,11 +11387,29 @@ ${insideObjects('.eb-paper.boxed')} {
         this.dragLayer = -1;
         this.dropLayer = -1;
         if (!from || !onto || from === onto) { return; }
-        // Only the things that stand on the paper take part: the bar lists the
-        // writing as well now, and renumbering a paragraph that is not positioned
-        // does nothing but eat a place in the pile.
+        // Two things that stand on the paper change places in the pile. Anything
+        // else -- a paragraph, a table, a frame in the run of the text -- has no
+        // place in a pile to change, so dragging its row moves the thing itself
+        // through the document, which is the other thing the bar shows: the page
+        // in the order it is written. Dragging a row used to do nothing at all
+        // unless both ends of it were placed by hand, which is most of the bar.
         const pile = layerEls.filter((el) => el && el.closest('.eb-anchor'));
-        if (pile.indexOf(from) < 0 || pile.indexOf(onto) < 0) { return; }
+        if (pile.indexOf(from) < 0 || pile.indexOf(onto) < 0) {
+          const fromHost = objectFree(from) ? from.parentNode : from;
+          const ontoHost = objectFree(onto) ? onto.parentNode : onto;
+          // Only within one box: a paragraph of the page and a paragraph inside a
+          // frame are in different places, and moving one into the other is not
+          // what dragging a row a little way down the list means.
+          if (!fromHost.parentNode || fromHost.parentNode !== ontoHost.parentNode) { return; }
+          if (fromHost === ontoHost || fromHost.contains(ontoHost)) { return; }
+          history.push(true);
+          const kids = Array.from(fromHost.parentNode.children);
+          const down = kids.indexOf(fromHost) < kids.indexOf(ontoHost);
+          ontoHost.parentNode.insertBefore(fromHost, down ? ontoHost.nextSibling : ontoHost);
+          this.touch();
+          this.settleFrame();
+          return;
+        }
         history.push(true);
         // Work in the order the list shows -- top of the pile first -- so that
         // dropping a row on to the top row puts it on top, and on to the bottom
@@ -11755,6 +11992,18 @@ ${insideObjects('.eb-paper.boxed')} {
         this.repaginate();
       },
       openRunning() { this.menu = ''; this.runOpen = true; },
+      /** What a slot of the running header says, as the file will have it. */
+      runSay(which, slot) {
+        const paper = normalisePaper(this.doc.paper);
+        return runText((paper[which] || {})[slot] || '', runAbout(this.doc));
+      },
+      /** Put one of those parts into the box the writer was last typing in. */
+      putRunToken(tag) {
+        const which = this.runAt[0] === 'footer' ? 'footer' : 'header';
+        const slot = ['l', 'c', 'r'].indexOf(this.runAt[1]) >= 0 ? this.runAt[1] : 'c';
+        this.doc.paper[which][slot] = String(this.doc.paper[which][slot] || '') + tag;
+        this.touch();
+      },
       clearRunning() {
         history.pushPrev(this.prevSettings);
         this.doc.paper.header = { l: '', c: '', r: '' };
