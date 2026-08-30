@@ -690,8 +690,11 @@
 .eb-sheet .run .l, .eb-sheet .run .c, .eb-sheet .run .r { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
 .eb-sheet .run .c { text-align: center; }
 .eb-sheet .run .r { text-align: right; }
-.eb-sheet .run.head { top: calc(var(--eb-mt) - 9mm); }
-.eb-sheet .run.foot { top: calc(var(--eb-paper-h) - var(--eb-mb) + 9mm); }
+/* The band each one stands in is taken off the writing area, as the table's head
+   and foot take it on paper: the header sits at the top of its band, the footer
+   at the bottom of its own. */
+.eb-sheet .run.head { top: calc(var(--eb-mt) - var(--eb-band-t, 0mm)); height: var(--eb-band-t, 0mm); }
+.eb-sheet .run.foot { top: calc(var(--eb-paper-h) - var(--eb-mb)); height: var(--eb-band-b, 0mm); align-items: flex-end; }
 
 /* the line between two columns of a table, as something to take hold of */
 .eb-fsel .cg {
@@ -1056,3 +1059,18 @@
 #editbase-root .eb-props { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 6px 0 2px; }
 #editbase-root .eb-props dt { color: var(--muted); font-size: 12.5px; }
 #editbase-root .eb-props dd { margin: 0; font-size: 13.5px; word-break: break-all; }
+
+/* The parts of a running header that are filled in, and what one page's header
+   and footer will actually say. */
+#editbase-root .eb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+#editbase-root .eb-chips .eb-btn { padding: 2px 8px; font-size: 12.5px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+#editbase-root .eb-runpreview {
+  display: block; border: 1px dashed var(--border); border-radius: 9px; padding: 8px 10px; margin-top: 8px;
+  background: var(--surface-2); font-size: 12px; color: var(--muted);
+}
+#editbase-root .eb-runpreview .cap { display: block; font-size: 11px; margin-bottom: 4px; }
+#editbase-root .eb-runpreview .row { display: flex; gap: 1em; color: var(--text); }
+#editbase-root .eb-runpreview .row + .row { margin-top: 4px; }
+#editbase-root .eb-runpreview .l, #editbase-root .eb-runpreview .c, #editbase-root .eb-runpreview .r { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+#editbase-root .eb-runpreview .c { text-align: center; }
+#editbase-root .eb-runpreview .r { text-align: right; }
