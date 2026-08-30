@@ -718,6 +718,9 @@
 .eb-doc .eb-cols { column-gap: 8mm; column-rule: none; }
 .eb-doc .eb-cols > *:first-child { margin-top: 0; }
 
+/* Nothing at all, standing where the writing on the last page stops, so that the
+   footer is at the foot of that page as it is on every other. */
+.eb-doc .eb-runfill { display: block; }
 /* A running header and footer, repeated on every printed page: the writing sits
    in a table of one cell, and a browser repeats a table's head and foot on every
    page it breaks across. The bands they stand in are theirs alone -- the writing
@@ -1204,12 +1207,21 @@ ${insideObjects('.eb-paper.boxed')} {
   function runningTable(paper, doc, body) {
     if (!hasSlots(paper.header) && !hasSlots(paper.footer)) { return body; }
     const about = runAbout(doc);
+    // The foot of a table follows what the table holds, so on the last page --
+    // where the writing stops half way down -- the footer would ride up under it
+    // instead of standing at the foot of the page. The room left on that page is
+    // filled with nothing, so it stands where it does on every other page. A few
+    // millimetres short of the true gap, so that a browser laying the file out a
+    // line differently does not push the footer on to a page of its own.
+    const fill = hasSlots(paper.footer) && doc.fill > 34 ? doc.fill - 20 : 0;
     return '<table class="eb-run">\n'
       + (hasSlots(paper.header)
         ? '<thead><tr><th>' + runRow('eb-runhead', paper.header, about) + '</th></tr></thead>\n' : '')
       + (hasSlots(paper.footer)
         ? '<tfoot><tr><td>' + runRow('eb-runfoot', paper.footer, about) + '</td></tr></tfoot>\n' : '')
-      + '<tbody><tr><td>\n' + body + '\n</td></tr></tbody>\n</table>\n';
+      + '<tbody><tr><td>\n' + body
+      + (fill ? '\n<div class="eb-runfill" aria-hidden="true" style="height: ' + round1(fill) + 'mm"></div>' : '')
+      + '\n</td></tr></tbody>\n</table>\n';
   }
   /** The classes the document itself wears: the numbering scheme, if any. */
   function docClasses(paper, clean) {
@@ -4583,7 +4595,23 @@ ${insideObjects('.eb-paper.boxed')} {
       const rect = b.getBoundingClientRect();
       if (rect.top <= y && rect.bottom > y) { found.push(b); }
     });
-    if (!found.length) { return null; }
+    if (!found.length) {
+      // Nothing at that height at all: the thing is drawn above the writing, in
+      // the margin at the top of the page. It is pegged to the first block it
+      // reaches instead, so that block can still be asked to make room -- pegged
+      // any later, the room would have to be made above the peg, which moves it.
+      const box = el.getBoundingClientRect();
+      const after = [];
+      Array.from(c.querySelectorAll(TEXT_SEL + ', div.eb-frame, table.eb-table, aside.eb-box')).forEach((b) => {
+        if (b === el || b.contains(el) || el.contains(b)) { return; }
+        if (b.closest('.eb-anchor') || b.closest('header.eb-header, footer.eb-footer')) { return; }
+        if (b.parentNode && b.parentNode.nodeName === 'P') { return; }
+        const rect = b.getBoundingClientRect();
+        if (rect.bottom > box.top && rect.top < box.bottom) { after.push(b); }
+      });
+      if (!after.length) { return null; }
+      return after.filter((b) => !after.some((o) => o !== b && b.contains(o)))[0] || after[0];
+    }
     // The innermost of them: the one that holds none of the others.
     return found.filter((b) => !found.some((o) => o !== b && b.contains(o)))[0] || found[0];
   }
@@ -5076,7 +5104,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
-    'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'eb-run', 'l', 'c', 'r',
+    'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'eb-run', 'eb-runfill', 'l', 'c', 'r',
     'eb-header', 'eb-footer',
     'eb-ins', 'eb-del',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
@@ -6593,6 +6621,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
             <button class="eb-btn wide" @click="openStyles(); menuOpen = false">🅰 {{ t('Styles of this document') }}</button>
             <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
+            <button class="eb-btn wide" @click="runCheck(); menuOpen = false">🔍 {{ t('Check the document') }}</button>
             <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
             <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
             <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
@@ -7546,6 +7575,26 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
+  <!-- What is wrong with the page that the writer cannot see by looking. -->
+  <div v-if="checkOpen" class="eb-modal-back" @click="checkOpen = false">
+    <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
+      <h3>{{ t('Check the document') }}</h3>
+      <div class="body">
+        <p class="eb-tip" v-if="!checks.length">{{ t('Nothing to report: everything on the page stands where it should.') }}</p>
+        <ol class="eb-checks" v-else>
+          <li v-for="(c, i) in checks" :key="i">
+            <span class="what">{{ c.what }}</span>
+            <button class="eb-btn ghost" v-if="c.page" @click="showCheck(i)">{{ t('Page {n}', { n: c.page }) }}</button>
+          </li>
+        </ol>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="runCheck()">{{ t('Look again') }}</button>
+        <button class="eb-btn primary" @click="checkOpen = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- What a document is: told from the file, not from the screen. -->
   <div v-if="props.open" class="eb-modal-back" @click="props.open = false">
     <div class="eb-modal" style="width:min(460px,100%)" @click.stop>
@@ -8363,6 +8412,7 @@ ${insideObjects('.eb-paper.boxed')} {
         doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), css: '', lang: 'ja', foreign: false },
         stylesOpen: false, styleKey: 'h2', cssOpen: false, cssRules: 0, cssBad: false,
         runAt: ['header', 'c'],
+        checkOpen: false, checks: [],
         dirty: false,
         saving: false,
         savedAt: 0,
@@ -8712,19 +8762,7 @@ ${insideObjects('.eb-paper.boxed')} {
       frameIsWriting() {
         return ['PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
-      frameLabel() {
-        const kind = this.frame.kind;
-        const names = {
-          FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
-          NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
-          NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
-          TEXTBOX: this.t('Text frame'),
-          SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
-          PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
-          QUOTE: this.t('Quotation'), PRE: this.t('Preformatted text'), COLUMNS: this.t('Column layout'),
-        };
-        return names[kind] || this.t('Frame');
-      },
+      frameLabel() { return this.kindName(this.frame.kind); },
       /** What stands on the shelf beside the paper. */
       paletteItems() {
         return [{ kind: 'textbox', label: this.t('Text frame'), icon: this.icons.frame },
@@ -8888,6 +8926,7 @@ ${insideObjects('.eb-paper.boxed')} {
           css: this.doc.css,
           lang: this.doc.lang,
           name: this.doc.name,
+          fill: this.lastPageGap(),
           body: this.exportBody(),
         });
       },
@@ -9898,6 +9937,104 @@ ${insideObjects('.eb-paper.boxed')} {
        * after a paste, where it says nothing unless it saved something worth
        * mentioning; run from the menu it always says what it did.
        */
+      /**
+       * Everything wrong with the page that a writer cannot see by looking at it,
+       * looked for at once: a thing drawn across the edge of the paper, words
+       * running under something that was told to part them, a frame holding more
+       * than it can show, a photograph heavy enough to make the file slow, and a
+       * page with nothing on it. Each one says which page it is on.
+       */
+      runCheck() {
+        const c = canvas();
+        this.checks = [];
+        this.checkOpen = true;
+        if (!c) { return; }
+        const found = [];
+        const sheets = Array.from(this.$el.querySelectorAll('.eb-sheet')).map((s) => s.getBoundingClientRect());
+        const pageOf = (r) => {
+          const at = sheets.findIndex((s) => r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5);
+          return at < 0 ? 0 : at + 1;
+        };
+        const named = (el) => this.kindName(objectKind(el));
+        // What stands on the paper stands on one sheet.
+        Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) { return; }
+          const on = sheets.filter((s) => r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5);
+          if (on.length !== 1) {
+            found.push({ what: this.t('{name} is drawn across the edge of the paper and would print cut in two.', { name: named(el) }), el, page: pageOf(r) });
+          }
+        });
+        // Words running under something that was told to part them.
+        Array.from(c.querySelectorAll('.eb-anchor > *, figure.eb-img, div.eb-shape')).forEach((el) => {
+          if (['none', 'left', 'right'].indexOf(wrapMode(el)) < 0) { return; }
+          const or = el.getBoundingClientRect();
+          if (!or.width || !or.height) { return; }
+          let under = 0;
+          c.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th').forEach((b) => {
+            if (el.contains(b) || b.contains(el)) { return; }
+            Array.from(b.childNodes).forEach((n) => {
+              if (n.nodeType !== 3 || !String(n.data).trim()) { return; }
+              const range = document.createRange();
+              range.selectNodeContents(n);
+              Array.from(range.getClientRects()).forEach((x) => {
+                if (x.width < 1 || x.height < 1) { return; }
+                if (!(x.right <= or.left + 1 || x.left >= or.right - 1 || x.bottom <= or.top + 1 || x.top >= or.bottom - 1)) { under += 1; }
+              });
+            });
+          });
+          if (under) {
+            found.push({ what: this.t('{n} lines of writing run under {name}, which is set to keep them clear.', { n: under, name: named(el) }), el, page: pageOf(or) });
+          }
+        });
+        // A frame holding more than it can show.
+        Array.from(c.querySelectorAll('.eb-textbox, div.eb-frame')).forEach((el) => {
+          if (isCont(el)) { return; }
+          const want = lengthPx(el.hasAttribute('data-frame-height') ? el.getAttribute('data-frame-height') : el.style.minHeight);
+          if (!want) { return; }
+          const chain = chainOf(chainLead(el));
+          const last = chain[chain.length - 1];
+          const room = fillLimit(last, last.offsetHeight);
+          if (writtenBottom(last) > room + 2) {
+            found.push({ what: this.t('{name} holds more writing than it can show.', { name: named(el) }), el, page: pageOf(el.getBoundingClientRect()) });
+          }
+        });
+        // A photograph heavy enough to make the file slow to open.
+        Array.from(c.querySelectorAll('img')).forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          if (src.length > 1400000) {
+            found.push({ what: this.t('A picture of about {n} MB is in the document. “Make the pictures lighter” will shrink it.', { n: Math.round(src.length / 1048576 * 10) / 10 }), el: img, page: pageOf(img.getBoundingClientRect()) });
+          }
+        });
+        // A page with nothing written on it.
+        sheets.forEach((s, i) => {
+          let ink = 0;
+          c.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, figcaption').forEach((b) => {
+            if (!String(b.textContent || '').trim()) { return; }
+            const r = b.getBoundingClientRect();
+            if (r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5) { ink += 1; }
+          });
+          if (!ink) { found.push({ what: this.t('Page {n} has nothing written on it.', { n: i + 1 }), el: null, page: i + 1 }); }
+        });
+        this.checks = found;
+      },
+      /** Go and look at what the check found. */
+      showCheck(i) {
+        const one = this.checks[i];
+        if (!one) { return; }
+        this.checkOpen = false;
+        if (one.el && one.el.scrollIntoView) {
+          one.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          const el = one.el.nodeName === 'IMG' ? (one.el.closest('figure') || one.el) : one.el;
+          frameEl = el;
+          framePinned = true;
+          frameTaken = true;
+          this.frame.bar = true;
+          this.$nextTick(() => this.syncFrame());
+          return;
+        }
+        this.goToPage(one.page);
+      },
       async lightenPictures(quiet) {
         const c = canvas();
         if (!c || this.lightening) { return; }
@@ -11992,6 +12129,40 @@ ${insideObjects('.eb-paper.boxed')} {
         this.repaginate();
       },
       openRunning() { this.menu = ''; this.runOpen = true; },
+      /**
+       * How much of the last page is left empty, in millimetres. The footer is
+       * stood at the foot of that page with it. Nought when there is nothing to
+       * measure -- no layout, or the writing fills the page as it is.
+       */
+      lastPageGap() {
+        const c = canvas();
+        const wrap = c && c.parentNode;
+        const sh = wrap ? wrap.querySelector('.eb-sheet') : null;
+        if (!c || !sh || !sh.offsetHeight || this.flow) { return 0; }
+        const st = window.getComputedStyle(c);
+        const mt = parseFloat(st.paddingTop) || 0;
+        const mb = parseFloat(st.paddingBottom) || 0;
+        const perPage = sh.offsetHeight - mt - mb;
+        if (perPage < 40) { return 0; }
+        let spacers = 0;
+        c.querySelectorAll('.eb-pagespacer').forEach((el) => { spacers += el.offsetHeight; });
+        const written = c.offsetHeight - mt - mb - spacers;
+        const gap = (Math.max(1, this.pageCount) * perPage - written) * MM;
+        return gap > 0 && gap < perPage * MM ? round1(gap) : 0;
+      },
+      /** What each kind of thing on the page is called. */
+      kindName(kind) {
+        const names = {
+          FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
+          NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
+          NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
+          TEXTBOX: this.t('Text frame'),
+          SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
+          PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
+          QUOTE: this.t('Quotation'), PRE: this.t('Preformatted text'), COLUMNS: this.t('Column layout'),
+        };
+        return names[kind] || this.t('Frame');
+      },
       /** What a slot of the running header says, as the file will have it. */
       runSay(which, slot) {
         const paper = normalisePaper(this.doc.paper);

@@ -54,5 +54,10 @@ First working version.
   writing never runs into. What they say can carry the title of the document, its
   file name and the date and time it was saved, written in braces and filled in as
   the file is written.
+- A check over the document: what is wrong with the page that a writer cannot see
+  by looking at it -- a thing drawn across the edge of the paper, words running
+  under something that was told to part them, a frame holding more than it can
+  show, a photograph heavy enough to make the file slow, a page with nothing on
+  it. Each one says which page it is on and takes you there.
 - A view of the raw HTML of the current document.
 - Light and dark themes, chosen per user, and English and Japanese translations.

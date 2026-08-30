@@ -1074,3 +1074,9 @@
 #editbase-root .eb-runpreview .l, #editbase-root .eb-runpreview .c, #editbase-root .eb-runpreview .r { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
 #editbase-root .eb-runpreview .c { text-align: center; }
 #editbase-root .eb-runpreview .r { text-align: right; }
+
+/* What the check found: one line each, with the page it is on. */
+#editbase-root .eb-checks { list-style: decimal; margin: 4px 0; padding-left: 22px; }
+#editbase-root .eb-checks li { margin: 0 0 8px; display: flex; gap: 10px; align-items: baseline; }
+#editbase-root .eb-checks .what { flex: 1 1 auto; font-size: 13.5px; }
+#editbase-root .eb-checks .eb-btn { flex: 0 0 auto; padding: 2px 10px; font-size: 12.5px; }
