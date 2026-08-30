@@ -570,6 +570,9 @@
 .eb-doc .eb-frame {
   border: .75pt solid #666; padding: .6em .8em; margin: 1.1em 0; break-inside: avoid;
 }
+/* A frame carried on from the page before begins the next page. In the editor
+   paginate puts it there; on paper this is what does it, in any browser. */
+.eb-doc .eb-cont { break-before: page; page-break-before: always; }
 .eb-doc .eb-frame > *:first-child { margin-top: 0; }
 .eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
 /* A run of words made into a frame: a box, but not a box that shows until it is
@@ -686,9 +689,19 @@
 .eb-doc.eb-hn-ja h3::before { content: "(" counter(ebh3) ") "; }
 .eb-doc .eb-toc h1::before, .eb-doc .eb-toc h2::before, .eb-doc .eb-toc h3::before { content: none; }
 
-/* a reading over a word: Japanese typesetting expects it at half size */
-.eb-doc ruby { ruby-position: over; ruby-align: center; }
-.eb-doc ruby rt { font-size: .5em; font-weight: normal; letter-spacing: 0; text-emphasis: none; }
+/* A reading over a word: Japanese typesetting expects it at half size.
+   The line-height is what keeps the reading out of the line above. An inline
+   box raises the line it is on to its own line-height and no further, so this
+   makes only the lines that carry a reading taller, and leaves every other line
+   exactly as the paragraph set it -- and a document already leaded at 2.1 or
+   more does not move at all. Without it the reading, half an em tall, had only
+   the paragraph's half-leading to stand in: at the usual 1.75 that is a quarter
+   of an em short, and the reading sat on the descenders of the line above. */
+.eb-doc ruby { ruby-position: over; ruby-align: center; line-height: 2.1; }
+.eb-doc ruby rt { font-size: .5em; font-weight: normal; letter-spacing: 0; text-emphasis: none; line-height: 1; }
+/* The brackets are for a browser that cannot set a reading over a word: it shows
+   them and the reading reads as 滅多(めった). One that can, hides them. */
+.eb-doc ruby rp { display: none; }
 
 /* notes — gathered at the end of the document and numbered by the file itself.
    A browser cannot put a note at the foot of the page it is cited on: nothing in
@@ -895,7 +908,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
   /**
@@ -1647,10 +1660,19 @@ ${insideObjects('.eb-paper.boxed')} {
   function clearFormatting() {
     const range = getRange();
     if (!range || range.collapsed) { return; }
-    const nodes = textNodesInRange(range);
+    // A reading over a word is not formatting: it is something the writer wrote,
+    // and taking the formatting off a paragraph must not scatter it through the
+    // sentence. Clearing over 滅多(めった) used to leave 滅多めった behind.
+    const inReading = (n) => {
+      for (let up = n.parentNode; up && up !== canvas(); up = up.parentNode) {
+        if (up.nodeName === 'RT' || up.nodeName === 'RP') { return true; }
+      }
+      return false;
+    };
+    const nodes = textNodesInRange(range).filter((n) => !inReading(n));
     nodes.forEach((n) => {
       let parent = n.parentNode;
-      while (parent && parent !== canvas() && !isBlock(parent)) {
+      while (parent && parent !== canvas() && !isBlock(parent) && parent.nodeName !== 'RUBY') {
         const up = parent.parentNode;
         splitOut(n, parent);
         parent = up === canvas() ? null : n.parentNode;
@@ -1723,7 +1745,14 @@ ${insideObjects('.eb-paper.boxed')} {
   /** Is the caret in this thing's own text? */
   function caretInside(el) {
     const r = getRange();
-    return !!(el && r && el.contains && el.contains(r.startContainer));
+    if (!el || !r || !el.contains) { return false; }
+    if (el.contains(r.startContainer)) { return true; }
+    // A frame carried on to the next page is the same frame, so a caret in the
+    // part of it that stands on page two is inside it.
+    if (!isCont(el) && chainable(el)) {
+      return chainOf(el).some((f) => f.contains(r.startContainer));
+    }
+    return false;
   }
   function selectedBlocks(inner) {
     const range = getRange();
@@ -2818,15 +2847,52 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!String(range.toString()).trim()) { return false; }
     const ruby = document.createElement('ruby');
     ruby.appendChild(range.extractContents());
+    // A reading already inside the chosen words would be a reading over a
+    // reading, which no browser draws and no reader could make sense of.
+    Array.from(ruby.querySelectorAll('ruby')).forEach((inner) => {
+      Array.from(inner.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+      while (inner.firstChild) { inner.parentNode.insertBefore(inner.firstChild, inner); }
+      inner.remove();
+    });
+    const rp = (text) => { const el = document.createElement('rp'); el.textContent = text; return el; };
     const rt = document.createElement('rt');
     rt.textContent = String(reading == null ? '' : reading);
+    // The brackets are what a browser that cannot set a reading over a word shows
+    // instead: 滅多(めった) rather than 滅多めった run together as one word. Any
+    // browser that can, hides them -- so the file reads properly in both.
+    ruby.appendChild(rp('('));
     ruby.appendChild(rt);
+    ruby.appendChild(rp(')'));
     range.insertNode(ruby);
     const after = document.createRange();
     after.setStartAfter(ruby);
     after.collapse(true);
     selectRange(after);
     return true;
+  }
+  /** The word a reading stands over, with the reading and its brackets left out. */
+  function rubyBase(ruby) {
+    if (!ruby) { return ''; }
+    let text = '';
+    Array.from(ruby.childNodes).forEach((n) => {
+      if (n.nodeType === 1 && (n.nodeName === 'RT' || n.nodeName === 'RP')) { return; }
+      text += n.textContent || '';
+    });
+    return text;
+  }
+  /**
+   * What is written, as against what is shown. A reading over a word is an
+   * annotation: it is not part of the sentence, and counting 滅多(めった) as six
+   * characters told the writer their page was longer than it is. The brackets
+   * that stand in for the reading where a browser cannot draw one are not text
+   * either.
+   */
+  function writingIn(root) {
+    if (!root) { return ''; }
+    if (!root.querySelector || !root.querySelector('rt, rp')) { return root.textContent || ''; }
+    const copy = root.cloneNode(true);
+    Array.from(copy.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+    return copy.textContent || '';
   }
   function rubyAt(node) {
     let n = node && node.nodeType === 3 ? node.parentNode : node;
@@ -3361,6 +3427,10 @@ ${insideObjects('.eb-paper.boxed')} {
   const frameAll = () => [frameEl].concat(frameMore).filter((el) => el && el.parentNode);
   function deleteObject(el) {
     if (!el) { return; }
+    // A frame carried over two pages is one frame: deleting it deletes all of it,
+    // not the first page of it with the rest left standing on the next.
+    const lead = chainLead(el);
+    if (chainable(lead)) { chainOf(lead).slice(1).forEach((c) => c.remove()); }
     const host = objectFree(el) ? el.parentNode : el;
     const near = host.nextElementSibling || host.previousElementSibling;
     host.remove();
@@ -3720,7 +3790,11 @@ ${insideObjects('.eb-paper.boxed')} {
       wrap: (flt === 'left' || flt === 'right') ? flt : '',
       z: Number(s.zIndex) || '',
       x: mmOf(s.left), y: mmOf(s.top),
-      width: mmOf(s.width), height: mmOf(s.minHeight) === '' ? mmOf(s.height) : mmOf(s.minHeight),
+      width: mmOf(s.width),
+      // A frame that carries its writing on to the next page is as deep as the
+      // writer made it, not as deep as the part of it standing on this page.
+      height: el.hasAttribute('data-frame-height') ? mmOf(el.getAttribute('data-frame-height'))
+        : (mmOf(s.minHeight) === '' ? mmOf(s.height) : mmOf(s.minHeight)),
       mt: mmOf(s.marginTop), mb: mmOf(s.marginBottom),
       ml: mmOf(s.marginLeft), mr: mmOf(s.marginRight),
       pad: mmOf(s.paddingTop),
@@ -3773,6 +3847,7 @@ ${insideObjects('.eb-paper.boxed')} {
     if (w) { s.width = w + 'mm'; s.maxWidth = 'none'; }
     const h = num(v.height);
     if (h) { if (el.nodeName === 'HR') { s.height = h + 'mm'; } else { s.minHeight = h + 'mm'; } }
+    declareFrameHeight(el);
     const mt = num(v.mt); const mb = num(v.mb); const ml = num(v.ml); const mr = num(v.mr);
     if (mt != null) { s.marginTop = mt + 'mm'; }
     if (mb != null) { s.marginBottom = mb + 'mm'; }
@@ -3983,11 +4058,31 @@ ${insideObjects('.eb-paper.boxed')} {
         const height = tate ? child.offsetWidth : child.offsetHeight;
         while (top >= pageTop + usable) { pageTop += usable + extra; }
         const boundary = pageTop + usable;
-        const forced = pendingBreak;
+        // A frame carrying on from the page before always starts a fresh page:
+        // that is what makes it the same frame, continued, rather than a second
+        // box that happens to follow.
+        const forced = pendingBreak || child.classList.contains('eb-cont');
         pendingBreak = false;
-        if (forced || (height <= usable && top < boundary && top + height > boundary + 0.5)) {
-          const wanted = boundary + extra;
-          const spacer = makeSpacer(Math.max(0, boundary - top) + extra, tate);
+        // Where the block has to end up, or 0 for where it already is.
+        //  - It begins in the dead band between two sheets, because whatever is
+        //    above it ends exactly at the fold: it drops to the top of the text
+        //    on the page it is already counted as being on. A forced break here
+        //    would have cost a whole blank page, and did.
+        //  - It is forced, and stands somewhere in the middle of a page: it goes
+        //    to the top of the next one.
+        //  - It would be cut in half by the fold: the same.
+        //  - A frame that carries its writing on to the next page stays where the
+        //    writer put it, however much is typed into it: what runs past the
+        //    fold is cut off and carried over, not the whole frame moved. Without
+        //    this, one line typed into a full frame sent the frame to the next
+        //    sheet and left the page it came from empty.
+        const carries = child.hasAttribute('data-frame-height');
+        let wanted = 0;
+        if (top < pageTop - 0.5) { wanted = pageTop; }
+        else if (forced && top > pageTop + 0.5) { wanted = boundary + extra; }
+        else if (!forced && !carries && height <= usable && top < boundary && top + height > boundary + 0.5) { wanted = boundary + extra; }
+        if (wanted) {
+          const spacer = makeSpacer(wanted - top, tate);
           c.insertBefore(spacer, child);
           // Putting an element between two blocks stops their margins collapsing, so
           // the block lands a little lower than the arithmetic says. Measure where it
@@ -3998,7 +4093,7 @@ ${insideObjects('.eb-paper.boxed')} {
             const prop = tate ? 'width' : 'height';
             spacer.style[prop] = Math.max(0, parseFloat(spacer.style[prop]) - drift) + 'px';
           }
-          pageTop = wanted;
+          if (wanted > pageTop) { pageTop = wanted; }
         } else {
           while (height > usable && top + height > pageTop + usable) {
             pageTop += usable + extra;
@@ -4010,6 +4105,509 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     // A hair over a page needs another sheet; a hair under must not add one.
     return Math.max(1, Math.ceil(((tate ? c.offsetWidth : c.offsetHeight) + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
+  }
+
+
+  // ---- a frame that carries on to the next page ---------------------------------
+  /**
+   * A frame taller than the page it stands on used to run straight through the
+   * fold: its border stopped in mid-air, a line of the writing was cut in half by
+   * the edge of the paper, and the rest of it stood in the margin. What a word
+   * processor does instead is carry the frame on -- the part that fits ends at the
+   * foot of the page, and a fresh frame of the same shape opens inside the next
+   * page and takes the writing that is left.
+   *
+   * The carried-on frame is an ordinary element of the document -- same tag, same
+   * class, same width -- wearing eb-cont, which does two things and no more: it
+   * starts a new page (in the editor through paginate, on paper through the
+   * stylesheet), and it tells this code that the frame before it is the same
+   * frame. So the saved file is still plain HTML, and printing it from any browser
+   * puts the same words on the same pages.
+   *
+   * The chain is joined back into one frame and laid out again from scratch
+   * whenever it stops fitting, rather than lines being pushed and pulled one at a
+   * time. A given amount of writing then has exactly one arrangement, and there is
+   * no state left over to go stale.
+   */
+  // Not p.eb-textbox: a text frame set to a heading is an h1, and is still the
+  // same frame in the same place.
+  const CHAIN_SEL = '.eb-textbox, div.eb-frame';
+  function isCont(el) {
+    return !!(el && el.nodeType === 1 && el.classList && el.classList.contains('eb-cont'));
+  }
+  /** Whether a block is one that can carry its writing on to the next page. */
+  function chainable(el) {
+    if (!el || el.nodeType !== 1 || !el.matches || !el.matches(CHAIN_SEL)) { return false; }
+    // Placed by hand or floated, a frame is not in the column at all: it has no
+    // page of its own to overflow, and a second one would be nowhere in
+    // particular. Those keep the behaviour they had.
+    if (objectFree(el)) { return false; }
+    const float = window.getComputedStyle(el).float;
+    return !float || float === 'none';
+  }
+  /** The lead frame and everything carrying it on, in order. */
+  function chainOf(lead) {
+    const out = [lead];
+    let n = lead.nextElementSibling;
+    while (n) {
+      if (n.classList && n.classList.contains('eb-pagespacer')) { n = n.nextElementSibling; continue; }
+      if (!isCont(n)) { break; }
+      out.push(n);
+      n = n.nextElementSibling;
+    }
+    return out;
+  }
+  /** The frame a carried-on frame belongs to; any other block is its own. */
+  function chainLead(el) {
+    let n = el;
+    while (isCont(n)) {
+      let back = n.previousElementSibling;
+      while (back && back.classList && back.classList.contains('eb-pagespacer')) { back = back.previousElementSibling; }
+      if (!back) { break; }
+      n = back;
+    }
+    return n;
+  }
+
+  /** How the paper is laid out down the column, in the units offsetTop is in. */
+  function pageGeometry() {
+    const c = canvas();
+    if (!c) { return null; }
+    // 縦書き runs the writing down the page and the pages right to left. The same
+    // arithmetic applies along the other axis, but none of the measuring below has
+    // been turned round yet, so a frame in vertical writing is left as it was.
+    if (c.classList && c.classList.contains('eb-tategaki')) { return null; }
+    const wrap = c.parentNode;
+    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
+    if (!sheet || !sheet.offsetHeight || !c.offsetHeight) { return null; }
+    const style = window.getComputedStyle(c);
+    const mt = parseFloat(style.paddingTop) || 0;
+    const mb = parseFloat(style.paddingBottom) || 0;
+    const usable = sheet.offsetHeight - mt - mb;
+    if (usable < 40) { return null; }
+    return { mt: mt, usable: usable, extra: mt + mb + PAGE_GAP };
+  }
+  /**
+   * How much of its page is left below the top of this frame -- rounded down to
+   * the whole pixel below, and one further. A frame filled to the last half
+   * pixel of its page measures a hair over it, and the page count then moves the
+   * whole frame to the next sheet and leaves the page it came from empty.
+   */
+  function roomFor(frame, geom) {
+    const top = frame.offsetTop - geom.mt;
+    const step = geom.usable + geom.extra;
+    const page = Math.max(0, Math.floor((top + 0.5) / step));
+    return fitRoom((page * step + geom.usable) - top);
+  }
+  function fitRoom(room) { return Math.max(0, Math.floor(room) - 1); }
+  /** The deepest the writing inside a frame may reach, from the frame's own top. */
+  function fillLimit(frame, room) {
+    const st = window.getComputedStyle(frame);
+    return room - (parseFloat(st.paddingBottom) || 0) - (parseFloat(st.borderBottomWidth) || 0);
+  }
+  /** Where a block inside a frame stands, from the frame's own top, at 100%. */
+  function insideFrame(frame, el) {
+    const box = frame.getBoundingClientRect();
+    const scale = box.height / (frame.offsetHeight || 1) || 1;
+    const top = (el.getBoundingClientRect().top - box.top) / scale;
+    return { top: top, foot: top + el.offsetHeight };
+  }
+  /** The foot of the last thing written in a frame, from the frame's own top. */
+  function writtenBottom(frame) {
+    // 文字枠 is a paragraph: what is written in it is lines, not blocks, and its
+    // own height is whatever the writer set it to rather than what it holds.
+    if (frame.matches(TEXT_BLOCKS)) {
+      const r = document.createRange();
+      r.selectNodeContents(frame);
+      return rangeBottom(frame, r);
+    }
+    let bottom = 0;
+    Array.from(frame.children).forEach((el) => {
+      const foot = insideFrame(frame, el).foot;
+      if (foot > bottom) { bottom = foot; }
+    });
+    return bottom;
+  }
+  /** How far down an element the lines of a range reach, at 100%. */
+  function rangeBottom(el, range) {
+    const box = el.getBoundingClientRect();
+    const scale = box.height / (el.offsetHeight || 1) || 1;
+    let bottom = 0;
+    Array.from(range.getClientRects()).forEach((rect) => {
+      if (rect.height && rect.bottom - box.top > bottom) { bottom = rect.bottom - box.top; }
+    });
+    return bottom / scale;
+  }
+  function lineOf(frame) {
+    const st = window.getComputedStyle(frame);
+    const h = parseFloat(st.lineHeight);
+    return h > 0 ? h : (parseFloat(st.fontSize) || 14) * 1.6;
+  }
+  /** A length as the document writes it, in screen units. */
+  function lengthPx(value) {
+    const v = String(value == null ? '' : value).trim();
+    const n = parseFloat(v);
+    if (!n) { return 0; }
+    if (v.indexOf('mm') >= 0) { return n / MM; }
+    if (v.indexOf('cm') >= 0) { return n * 10 / MM; }
+    if (v.indexOf('pt') >= 0) { return n * (96 / 72); }
+    return n;
+  }
+
+  /**
+   * Whether the chain is laid out as it should be: nothing sticking out of the
+   * foot of a frame, and no frame left with a line's worth of room going spare
+   * while the frame after it holds writing that would fit in it.
+   */
+  function chainSettled(chain, geom) {
+    const lead = chain[0];
+    if (chain.length === 1) {
+      // A frame that fits on a page is not this code's business: the page count
+      // moves it whole to the next sheet, which is what a frame should do.
+      if (lead.offsetHeight <= geom.usable + 0.5) { return true; }
+      // Standing so near the foot of the page that not even a line of it would
+      // fit, there is nothing to carry over: cutting here would leave a stub of a
+      // frame a millimetre deep. It is left to run on until the writing above it
+      // moves and it has room to be cut.
+      return roomFor(lead, geom) < 2 * lineOf(lead);
+    }
+    for (let i = 0; i < chain.length; i += 1) {
+      const frame = chain[i];
+      if (i > 0 && !sameShape(lead, frame)) { return false; }
+      const limit = fillLimit(frame, i === 0 ? roomFor(lead, geom) : fitRoom(geom.usable));
+      const bottom = writtenBottom(frame);
+      if (bottom > limit + 1) { return false; }
+      if (i < chain.length - 1 && limit - bottom >= lineOf(frame)) { return false; }
+    }
+    return true;
+  }
+  /**
+   * Whether a carried-on frame still looks like the frame it carries on from.
+   * Anything the writer changes about the frame -- its width, its border, the kind
+   * of box it is -- makes this false, and the chain is then laid out again from
+   * the frame itself, which is how the change reaches the rest of it.
+   */
+  function sameShape(lead, cont) {
+    const mine = Array.from(cont.classList).filter((k) => k !== 'eb-cont').sort().join(' ');
+    if (mine !== Array.from(lead.classList).sort().join(' ')) { return false; }
+    const drop = (el) => {
+      const copy = el.cloneNode(false);
+      ['min-height', 'height'].forEach((k) => copy.style.removeProperty(k));
+      return copy.getAttribute('style') || '';
+    };
+    return drop(lead) === drop(cont);
+  }
+
+  /** Every text node a caret can sit in, in order; a reading is not one of them. */
+  function caretStops(root) {
+    const out = [];
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        for (let up = n.parentNode; up && up !== root; up = up.parentNode) {
+          if (up.nodeName === 'RT' || up.nodeName === 'RP') { return NodeFilter.FILTER_REJECT; }
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n = walk.nextNode();
+    while (n) { out.push(n); n = walk.nextNode(); }
+    return out;
+  }
+  /** Where the caret is, counted in characters from the start of the chain. */
+  function chainCaret(chain) {
+    const r = getRange();
+    if (!r) { return null; }
+    let before = 0;
+    for (let i = 0; i < chain.length; i += 1) {
+      const stops = caretStops(chain[i]);
+      if (chain[i].contains(r.startContainer)) {
+        let at = before;
+        for (let k = 0; k < stops.length; k += 1) {
+          if (stops[k] === r.startContainer) { return at + r.startOffset; }
+          at += stops[k].length;
+        }
+        return at;
+      }
+      before += stops.reduce((sum, n) => sum + n.length, 0);
+    }
+    return null;
+  }
+  /** Put it back at the same character, wherever that character has ended up. */
+  function placeChainCaret(chain, at) {
+    if (at == null) { return; }
+    let left = at;
+    for (let i = 0; i < chain.length; i += 1) {
+      const stops = caretStops(chain[i]);
+      for (let k = 0; k < stops.length; k += 1) {
+        if (left <= stops[k].length) {
+          const r = document.createRange();
+          r.setStart(stops[k], left);
+          r.collapse(true);
+          selectRange(r);
+          return;
+        }
+        left -= stops[k].length;
+      }
+    }
+    const last = chain[chain.length - 1];
+    if (last) { placeCaretIn(last); }
+  }
+
+  /** Put the whole chain back into one frame, exactly as it was written. */
+  function joinChain(chain) {
+    const lead = chain[0];
+    for (let i = 1; i < chain.length; i += 1) {
+      const frame = chain[i];
+      // 文字枠 is a paragraph, so its two halves are put back simply by moving
+      // what the second one holds on to the end of the first.
+      if (lead.getAttribute('data-split') === 'on') {
+        const br = lead.lastElementChild;
+        if (br && br.nodeName === 'BR' && !String(lead.textContent || '').length) { br.remove(); }
+      }
+      while (frame.firstChild) {
+        const node = frame.firstChild;
+        const last = lead.lastElementChild;
+        // A block that was cut in the middle is put back as the one block the
+        // writer wrote, not left as two paragraphs.
+        if (node.nodeType === 1 && last && last.getAttribute && last.getAttribute('data-split') === 'on'
+          && last.nodeName === node.nodeName) {
+          last.removeAttribute('data-split');
+          const stray = last.lastElementChild;
+          if (stray && stray.nodeName === 'BR' && last.childNodes.length === 1) { stray.remove(); }
+          while (node.firstChild) { last.appendChild(node.firstChild); }
+          frame.removeChild(node);
+          continue;
+        }
+        lead.appendChild(node);
+      }
+      const back = frame.previousElementSibling;
+      if (back && back.classList && back.classList.contains('eb-pagespacer')) { back.remove(); }
+      frame.remove();
+    }
+    lead.removeAttribute('data-split');
+    Array.from(lead.querySelectorAll('[data-split]')).forEach((el) => el.removeAttribute('data-split'));
+    if (lead.hasAttribute('data-frame-height')) {
+      const was = lead.getAttribute('data-frame-height');
+      lead.removeAttribute('data-frame-height');
+      if (was) { lead.style.minHeight = was; } else { lead.style.removeProperty('min-height'); }
+      if (!lead.getAttribute('style')) { lead.removeAttribute('style'); }
+    }
+  }
+
+  /** The place in the markup that a character count inside a block points at. */
+  function pointAt(stops, chars) {
+    let left = chars;
+    for (let i = 0; i < stops.length; i += 1) {
+      if (left <= stops[i].length) { return { node: stops[i], offset: left }; }
+      left -= stops[i].length;
+    }
+    return null;
+  }
+  /**
+   * The character at which a block stops fitting in the room it is given, or -1
+   * if the whole of it fits. Measured on the real lines the browser has drawn,
+   * so a reading, a picture in the line or a bigger word all count for what they
+   * actually take.
+   */
+  function cutOffsetIn(block, limit) {
+    const stops = caretStops(block);
+    const total = stops.reduce((sum, n) => sum + n.length, 0);
+    if (!total) { return -1; }
+    const fits = (chars) => {
+      const spot = pointAt(stops, chars);
+      if (!spot) { return false; }
+      const r = document.createRange();
+      r.setStart(stops[0], 0);
+      r.setEnd(spot.node, spot.offset);
+      return rangeBottom(block, r) <= limit + 0.5;
+    };
+    if (fits(total)) { return -1; }
+    let lo = 0;
+    let hi = total;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fits(mid)) { lo = mid; } else { hi = mid - 1; }
+    }
+    return lo;
+  }
+  /**
+   * Cut a block in two at a character, the second half wearing the same tag,
+   * class and style as the first. The cut never lands inside a reading, and in
+   * writing that has spaces in it, it is walked back to one so that a word is not
+   * left with its head on one page and its tail on the next.
+   */
+  function splitBlockAt(block, chars) {
+    const stops = caretStops(block);
+    const text = stops.map((n) => n.textContent).join('');
+    let where = chars;
+    if (/[A-Za-z0-9]/.test(text.charAt(where - 1) || '') && /[A-Za-z0-9]/.test(text.charAt(where) || '')) {
+      const space = text.lastIndexOf(' ', where);
+      if (space > 0 && where - space < 40) { where = space + 1; }
+    }
+    const spot = pointAt(stops, where);
+    if (!spot) { return null; }
+    const tail = document.createRange();
+    tail.setStart(spot.node, spot.offset);
+    // Never between a word and the reading written over it.
+    for (let up = spot.node.parentNode; up && up !== block; up = up.parentNode) {
+      if (up.nodeName === 'RUBY') { tail.setStartBefore(up); break; }
+    }
+    tail.setEnd(block, block.childNodes.length);
+    if (tail.collapsed) { return null; }
+    const rest = block.cloneNode(false);
+    rest.removeAttribute('id');
+    rest.appendChild(tail.extractContents());
+    if (!String(rest.textContent || '').length && !rest.querySelector('img, figure, table, br')) { return null; }
+    block.setAttribute('data-split', 'on');
+    if (!block.firstChild) { block.appendChild(document.createElement('br')); }
+    return rest;
+  }
+
+  /**
+   * A height the writer set by hand is the height they mean the whole frame to
+   * have, however many pages it takes. Without this the frame was laid out again
+   * from the height it had before the change, and the change was undone a tenth
+   * of a second after it was made.
+   */
+  function declareFrameHeight(el) {
+    if (el && el.nodeType === 1 && el.hasAttribute && el.hasAttribute('data-frame-height')) {
+      el.setAttribute('data-frame-height', el.style.minHeight || '');
+    }
+  }
+
+  /**
+   * Move everything a text frame holds from a character onwards into the frame
+   * that carries it on. The same cut as splitBlockAt makes, but into a frame that
+   * is already there rather than a new block of the same kind.
+   */
+  function moveTailInto(frame, chars, next) {
+    const stops = caretStops(frame);
+    const spot = pointAt(stops, chars);
+    if (!spot) { return false; }
+    const tail = document.createRange();
+    tail.setStart(spot.node, spot.offset);
+    for (let up = spot.node.parentNode; up && up !== frame; up = up.parentNode) {
+      if (up.nodeName === 'RUBY') { tail.setStartBefore(up); break; }
+    }
+    tail.setEnd(frame, frame.childNodes.length);
+    if (tail.collapsed) { return false; }
+    next.appendChild(tail.extractContents());
+    frame.setAttribute('data-split', 'on');
+    if (!frame.firstChild) { frame.appendChild(document.createElement('br')); }
+    return true;
+  }
+
+  /** A fresh frame of the same shape, to carry the writing on with. */
+  function continuationOf(frame) {
+    const next = frame.cloneNode(false);
+    next.removeAttribute('id');
+    next.removeAttribute('data-frame-height');
+    next.removeAttribute('data-split');
+    next.classList.add('eb-cont');
+    next.style.removeProperty('min-height');
+    next.style.removeProperty('height');
+    frame.parentNode.insertBefore(next, frame.nextSibling);
+    return next;
+  }
+
+  /**
+   * Lay one frame's writing out over as many pages as it needs. The frame it is
+   * given holds all of it; whatever will not fit goes into a frame straight after
+   * it, and so on until the last of it is placed.
+   */
+  function splitChain(lead, geom) {
+    let want = lengthPx(lead.hasAttribute('data-frame-height')
+      ? lead.getAttribute('data-frame-height') : lead.style.minHeight);
+    let frame = lead;
+    let room = roomFor(lead, geom);
+    for (let guard = 0; guard < 60; guard += 1) {
+      const limit = fillLimit(frame, room);
+      // 文字枠 holds lines, not blocks: it is cut at the line the page ends on.
+      if (frame.matches(TEXT_BLOCKS)) {
+        const cut = cutOffsetIn(frame, limit);
+        if (cut < 0 || (cut === 0 && frame === lead)) {
+          if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+          return;
+        }
+        if (frame === lead && !lead.hasAttribute('data-frame-height')) {
+          lead.setAttribute('data-frame-height', lead.style.minHeight || '');
+        }
+        frame.style.minHeight = round1(room * MM) + 'mm';
+        want -= room;
+        const next = continuationOf(frame);
+        if (!moveTailInto(frame, cut, next)) { next.remove(); return; }
+        frame = next;
+        room = fitRoom(geom.usable);
+        continue;
+      }
+      const kids = Array.from(frame.children);
+      let carry = null;
+      for (let i = 0; i < kids.length && !carry; i += 1) {
+        const el = kids[i];
+        const at = insideFrame(frame, el);
+        if (at.foot <= limit + 0.5) { continue; }
+        // The first thing that runs past the foot of the page. Standing wholly
+        // below the fold, it goes over whole; straddling it, and being writing
+        // rather than a picture or a table, it is cut at the line.
+        if (at.top < limit - 2 && el.matches(TEXT_BLOCKS)) {
+          const cut = cutOffsetIn(el, limit - at.top);
+          if (cut > 0) {
+            const rest = splitBlockAt(el, cut);
+            if (rest) { carry = [rest].concat(kids.slice(i + 1)); break; }
+          }
+        }
+        carry = kids.slice(i);
+      }
+      if (!carry) {
+        // The last frame of the chain keeps whatever is left of the height the
+        // writer gave it, so a box drawn three pages deep is still three pages
+        // deep once it has been carried over.
+        if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+        return;
+      }
+      if (frame === lead && !lead.hasAttribute('data-frame-height')) {
+        lead.setAttribute('data-frame-height', lead.style.minHeight || '');
+      }
+      frame.style.minHeight = round1(room * MM) + 'mm';
+      want -= room;
+      const next = continuationOf(frame);
+      carry.forEach((el) => next.appendChild(el));
+      frame = next;
+      room = fitRoom(geom.usable);
+    }
+  }
+
+  /**
+   * Look over the page for one frame that is no longer laid out as it should be,
+   * and lay it out again. One at a time: joining and splitting a frame moves
+   * everything below it, so the page has to be counted afresh before the next
+   * frame can be measured. Returns whether anything was moved.
+   */
+  function reflowFrames() {
+    const c = canvas();
+    const geom = c ? pageGeometry() : null;
+    if (!geom) { return false; }
+    const kids = Array.from(c.children);
+    for (let i = 0; i < kids.length; i += 1) {
+      const el = kids[i];
+      if (isCont(el) || !chainable(el)) { continue; }
+      const chain = chainOf(el);
+      if (chainSettled(chain, geom)) { continue; }
+      const at = chainCaret(chain);
+      // What is held is the frame itself, and the frames carrying it on are
+      // about to be made again from scratch. Hold the first of them instead.
+      if (frameEl && chain.indexOf(frameEl) > 0) { frameEl = el; }
+      joinChain(chain);
+      // Where the folds are, now that the frame is one frame again. Without this
+      // the room was measured against the folds of the layout before the join --
+      // the frame was cut at the wrong line, and the next turn cut it again
+      // somewhere else, round and round.
+      paginate();
+      splitChain(el, geom);
+      if (at != null) { placeChainCaret(chainOf(el), at); }
+      return true;
+    }
+    return false;
   }
 
   // ---- housekeeping -------------------------------------------------------------
@@ -4032,7 +4630,7 @@ ${insideObjects('.eb-paper.boxed')} {
   const DOC_CLASSES = new Set([
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
-    'eb-frame', 'eb-textbox', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
+    'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'l', 'c', 'r',
@@ -12163,7 +12761,7 @@ return function render(_ctx, _cache) {
         previewOpen: false, preview: [], pageNow: 1,
         dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
         placing: '', placeBox: null, railWatch: null, railWatched: null, railPending: false,
-        _pageThen: null, _barTimer: null, lightening: false,
+        _pageThen: null, _barTimer: null, lightening: false, composing: false,
         wordsOpen: false, wordsSample: '',
         wordsFmt: { family: '', size: '', colour: '#000000', fill: '', bold: false, italic: false,
           underline: false, strike: false, spacing: '', raise: '',
@@ -12722,7 +13320,7 @@ return function render(_ctx, _cache) {
       },
       recount() {
         const c = canvas();
-        this.counts = c ? c.textContent.replace(/\s/g, '').length : 0;
+        this.counts = c ? writingIn(c).replace(/\s/g, '').length : 0;
         this.repaginate();
       },
       /**
@@ -12753,7 +13351,16 @@ return function render(_ctx, _cache) {
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
           const was = this.pageCount;
-          const pages = paginate();
+          let pages = paginate();
+          // A frame too tall for its page carries its writing on into a fresh
+          // frame on the next one. Moving the writing moves everything below it,
+          // so the pages are counted again and the next frame looked at then --
+          // one frame per turn, until nothing is left to move.
+          // Never in the middle of typing a Japanese word: rewriting the markup
+          // under a half-finished conversion throws the conversion away.
+          if (!this.composing) {
+            for (let pass = 0; pass < 8 && reflowFrames(); pass += 1) { pages = paginate(); }
+          }
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
             // came from, so it is redrawn here as well as by whoever asked -- but
@@ -13579,7 +14186,7 @@ return function render(_ctx, _cache) {
         // where it was, and the box let itself go before it could be dragged.
         if (!frameTaken && framePinned && frameEl && !/^(HR|FIGURE|IMG)$/.test(frameEl.nodeName)) {
           const at = getRange();
-          if (at && inCanvas(at.startContainer) && !frameEl.contains(at.startContainer)) { framePinned = false; }
+          if (at && inCanvas(at.startContainer) && !caretInside(frameEl)) { framePinned = false; }
         }
         if (!framePinned) {
           const range = getRange();
@@ -13587,6 +14194,9 @@ return function render(_ctx, _cache) {
             ? (objectAt(range.startContainer) || textBlockAt(range.startContainer)) : null;
           if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
         }
+        // A frame carried on to the next page is not a second object: what is
+        // held, resized, aligned, given properties or deleted is the frame.
+        if (isCont(frameEl)) { frameEl = chainLead(frameEl); }
         const el = frameEl;
         if (!el) { this.frame.on = false; this.syncText(); this.markLayerBar(); return; }
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
@@ -13897,6 +14507,7 @@ return function render(_ctx, _cache) {
         // A picture keeps its proportions: its height follows its width.
         if (d.mode !== 'e' && d.mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
           if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; } else { s.minHeight = round1(h) + 'mm'; }
+          declareFrameHeight(frameEl);
         }
         if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; this.keepOnPaper(frameEl); }
         this.syncFrame();
@@ -14041,6 +14652,7 @@ return function render(_ctx, _cache) {
           o.style.maxWidth = 'none';
           if (o.nodeName !== 'FIGURE' && !(o.classList && (o.classList.contains('eb-sh-line') || o.classList.contains('eb-sh-arrow')))) {
             o.style.minHeight = h + 'mm';
+            declareFrameHeight(o);
           }
           this.keepOnPaper(o);
         });
@@ -14928,7 +15540,8 @@ return function render(_ctx, _cache) {
             && !el.classList.contains('eb-anchor')        // a peg, not a thing
             && !el.classList.contains('eb-pagespacer')    // the fold, not a thing
             && !el.classList.contains('eb-header')        // a region, not an object
-            && !el.classList.contains('eb-footer'));
+            && !el.classList.contains('eb-footer')
+            && !el.classList.contains('eb-cont'));        // the same frame, carried on
         const groups = new Map();
         placed.forEach((el, i) => {
           const level = Number(el.style.zIndex) || 0;
@@ -15467,7 +16080,7 @@ return function render(_ctx, _cache) {
         const existing = r ? rubyAt(r.startContainer) : null;
         if (existing) {
           const rt = existing.querySelector('rt');
-          this.rubyWord = String(existing.textContent || '').replace(String(rt ? rt.textContent : ''), '');
+          this.rubyWord = rubyBase(existing);
           this.rubyText = rt ? rt.textContent : '';
           ctxRange = r.cloneRange();
         } else {
@@ -16207,7 +16820,8 @@ return function render(_ctx, _cache) {
 
       const c = canvasEl;
       c.addEventListener('beforeinput', (e) => this.onBeforeInput(e));
-      c.addEventListener('compositionstart', () => { if (this.review) { ensureIns(); } });
+      c.addEventListener('compositionstart', () => { this.composing = true; if (this.review) { ensureIns(); } });
+      c.addEventListener('compositionend', () => { this.composing = false; this.$nextTick(() => this.repaginate()); });
       c.addEventListener('input', () => {
         // Splitting a paragraph inside a mark leaves the empty half behind, and
         // typing does not go through a command, so it is swept up here.

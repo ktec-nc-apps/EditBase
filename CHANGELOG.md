@@ -27,5 +27,12 @@ First working version.
 - Printing and PDF export through the browser, from an isolated copy of the file
   itself, so what prints is exactly what is stored.
 - Autosave, document duplication, renaming, deletion and download.
+- Readings over words (ruby), at half size, with room kept for them so they never
+  sit on the line above, and brackets in the file for browsers that cannot draw
+  them — 滅多(めった).
+- A frame too tall for the page it stands on carries its writing on into a frame
+  of the same shape inside the next page, cut at the line rather than at the edge
+  of the paper. The carried-on frame is ordinary markup, so the saved file prints
+  the same way in any browser.
 - A view of the raw HTML of the current document.
 - Light and dark themes, chosen per user, and English and Japanese translations.
