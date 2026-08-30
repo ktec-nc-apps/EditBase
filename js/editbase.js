@@ -774,6 +774,13 @@
 
   /** The stylesheet the editor canvas needs on top of DOC_CSS (never exported). */
   const EDITOR_CSS = `
+/* The editor draws a gap between one sheet and the next; a printed file has no
+   such thing. A thing placed by hand is measured from the line of text it was
+   put on, so an offset that crosses a fold is one distance on paper and a longer
+   one on screen. The file keeps the paper's answer -- what it says is what
+   prints -- and the editor adds the gaps it drew back on here. The mark is the
+   editor's own and is taken out again when the file is written. */
+.eb-paper.eb-doc .eb-anchor > * { margin-top: var(--eb-shift, 0px); }
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -894,6 +901,104 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return out.join('\n');
   }
+  /**
+   * The writer's own stylesheet. It goes into the file as it was typed, so anyone
+   * opening the file gets the same page -- which is why the few things that would
+   * reach outside the file, or out of the stylesheet altogether, are taken out:
+   * another sheet fetched over the network (@import), the old script-in-a-style
+   * tricks, and the one sequence that would end the style element early and spill
+   * the rest of the rules into the page as text.
+   */
+  const CSS_MAX = 20000;
+  function cleanCss(text) {
+    return String(text == null ? '' : text)
+      .slice(0, CSS_MAX)
+      .replace(/<\//g, '<\\/')
+      .replace(/@(import|charset)[^;{}]*;?/gi, '')
+      .replace(/expression\s*\(/gi, 'x-expression(')
+      .replace(/javascript\s*:/gi, 'x-javascript:')
+      .replace(/behaviou?r\s*:/gi, 'x-behaviour:');
+  }
+  /**
+   * Walk a stylesheet and hand every selector to a function, leaving everything
+   * else -- the declarations, the comments, the at-rules -- exactly as written.
+   * What an at-rule holds is walked as well when it holds rules; @font-face and
+   * its kind hold declarations and are left alone.
+   */
+  function mapSelectors(css, fn) {
+    const text = String(css == null ? '' : css);
+    // A selector list is split on its own commas, not on the ones inside :is()
+    // or :not(), or the two halves of one selector would be scoped separately.
+    const parts = (list) => {
+      const out = [];
+      let depth = 0;
+      let from = 0;
+      for (let i = 0; i < list.length; i += 1) {
+        const ch = list.charAt(i);
+        if (ch === '(' || ch === '[') { depth += 1; }
+        else if (ch === ')' || ch === ']') { depth -= 1; }
+        else if (ch === ',' && depth <= 0) { out.push(list.slice(from, i)); from = i + 1; }
+      }
+      out.push(list.slice(from));
+      return out;
+    };
+    const walk = (block) => {
+      let out = '';
+      let at = 0;
+      while (at < block.length) {
+        const open = block.indexOf('{', at);
+        if (open < 0) { out += block.slice(at); break; }
+        const head = block.slice(at, open);
+        let depth = 1;
+        let i = open + 1;
+        while (i < block.length && depth > 0) {
+          if (block.charAt(i) === '{') { depth += 1; }
+          else if (block.charAt(i) === '}') { depth -= 1; }
+          i += 1;
+        }
+        const inner = block.slice(open + 1, depth === 0 ? i - 1 : i);
+        // Whatever stands in front of the selector -- blank lines, a comment --
+        // is the writer's and is kept in front of it.
+        const lead = (head.match(/^(?:\s|\/\*[\s\S]*?\*\/)*/) || [''])[0];
+        const name = head.slice(lead.length).trim();
+        if (name.charAt(0) === '@') {
+          out += lead + name + ' {'
+            + (/^@(media|supports|layer|container|scope|document)\b/i.test(name) ? walk(inner) : inner) + '}';
+        } else {
+          const sel = parts(name).map(fn).map((x) => String(x || '').trim()).filter(Boolean).join(', ');
+          out += lead + (sel || name) + ' {' + inner + '}';
+        }
+        at = i;
+      }
+      return out;
+    };
+    return walk(text);
+  }
+  /**
+   * The writer's rules, written so that they win. The app's own stylesheet names
+   * the same elements with the document's class in front of them, so a bare h2
+   * would lose to it however late it came; every selector is given the same reach
+   * and, being written after, is the one that holds. The editor adds the app's id
+   * as well, because in the editor the page is a corner of somebody else's.
+   */
+  function scopeCss(css, prefix) {
+    return mapSelectors(css, (sel) => {
+      let x = sel.trim();
+      if (!x) { return ''; }
+      // The sheet itself, however the writer named it.
+      x = x.replace(/^(?:html|body|:root)\b/, '.eb-doc');
+      if (!/^\.eb-doc\b/.test(x)) { x = '.eb-doc ' + x; }
+      return (prefix || '') + x;
+    });
+  }
+  /** And back to what the writer typed, when the file is opened again. */
+  function unscopeCss(css) {
+    return mapSelectors(css, (sel) => {
+      const x = sel.trim();
+      if (x === '.eb-doc') { return 'body'; }
+      return x.replace(/^\.eb-doc\s+/, '');
+    });
+  }
   /** The families those styles name, so the file asks for them too. */
   function stylesFamilies(styles) {
     return STYLE_TARGETS.map((t) => styles[t.key] && styles[t.key].family).filter(Boolean);
@@ -908,7 +1013,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
   /**
@@ -1062,6 +1167,7 @@ ${insideObjects('.eb-paper.boxed')} {
     const styles = normaliseStyles(doc.styles);
     const lang = doc.lang || (document.documentElement.lang || 'ja');
     const body = stripEditorArtefacts(doc.body || '');
+    const own = cleanCss(doc.css).trim();
     const fonts = resolveFonts(paper, lang);
     const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)).concat(stylesFamilies(styles)));
     const s = sheet(paper);
@@ -1118,6 +1224,10 @@ ${insideObjects('.eb-paper.boxed')} {
       + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
+      // The writer's own rules stand in a sheet of their own, after everything
+      // else, so they win -- and so that a person opening the file can see at a
+      // glance which of the rules in it are theirs.
+      + (own ? '<style id="eb-css">\n' + scopeCss(own, '') + '\n</style>\n' : '')
       + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
       // The writing comes first and nothing else does. The running header, the
       // footer and the page's paint are all placed by CSS and could sit anywhere,
@@ -1155,6 +1265,10 @@ ${insideObjects('.eb-paper.boxed')} {
         try { return JSON.parse((styleMeta && styleMeta.getAttribute('content')) || '{}'); } catch (e) { return {}; }
       }())),
       body: body.innerHTML.trim(),
+      css: unscopeCss(cleanCss((function () {
+        const own = dom.getElementById('eb-css');
+        return own ? own.textContent : '';
+      }()))).trim(),
       foreign: !(gen && /^EditBase\b/.test(gen.getAttribute('content') || '')),
     };
   }
@@ -3430,7 +3544,7 @@ ${insideObjects('.eb-paper.boxed')} {
     // A frame carried over two pages is one frame: deleting it deletes all of it,
     // not the first page of it with the rest left standing on the next.
     const lead = chainLead(el);
-    if (chainable(lead)) { chainOf(lead).slice(1).forEach((c) => c.remove()); }
+    if (chainable(lead)) { chainOf(lead).slice(1).forEach((c) => chainHost(c).remove()); }
     const host = objectFree(el) ? el.parentNode : el;
     const near = host.nextElementSibling || host.previousElementSibling;
     host.remove();
@@ -4138,21 +4252,33 @@ ${insideObjects('.eb-paper.boxed')} {
   /** Whether a block is one that can carry its writing on to the next page. */
   function chainable(el) {
     if (!el || el.nodeType !== 1 || !el.matches || !el.matches(CHAIN_SEL)) { return false; }
-    // Placed by hand or floated, a frame is not in the column at all: it has no
-    // page of its own to overflow, and a second one would be nowhere in
-    // particular. Those keep the behaviour they had.
-    if (objectFree(el)) { return false; }
+    // Floated, a frame is not in the column at all: it has no page of its own to
+    // overflow, and a second one would be nowhere in particular.
     const float = window.getComputedStyle(el).float;
-    return !float || float === 'none';
+    if (float && float !== 'none') { return false; }
+    // Placed by hand it has a page all the same -- the sheet it is drawn on --
+    // and it is carried on into the next one by a frame of its own, hung off an
+    // anchor of its own at the same place in the text.
+    return !objectFree(el) || !!(el.parentNode && el.parentNode.nodeName === 'DIV');
+  }
+  /** What stands in the column: the anchor a placed frame hangs off, or the frame. */
+  function chainHost(el) {
+    return objectFree(el) ? el.parentNode : el;
+  }
+  /** The frame a block in the column carries: what hangs off an anchor, or itself. */
+  function hungOn(el) {
+    if (!el || el.nodeType !== 1 || !el.classList) { return null; }
+    return el.classList.contains('eb-anchor') ? el.firstElementChild : el;
   }
   /** The lead frame and everything carrying it on, in order. */
   function chainOf(lead) {
     const out = [lead];
-    let n = lead.nextElementSibling;
+    let n = chainHost(lead).nextElementSibling;
     while (n) {
       if (n.classList && n.classList.contains('eb-pagespacer')) { n = n.nextElementSibling; continue; }
-      if (!isCont(n)) { break; }
-      out.push(n);
+      const frame = hungOn(n);
+      if (!isCont(frame)) { break; }
+      out.push(frame);
       n = n.nextElementSibling;
     }
     return out;
@@ -4161,10 +4287,11 @@ ${insideObjects('.eb-paper.boxed')} {
   function chainLead(el) {
     let n = el;
     while (isCont(n)) {
-      let back = n.previousElementSibling;
+      let back = chainHost(n).previousElementSibling;
       while (back && back.classList && back.classList.contains('eb-pagespacer')) { back = back.previousElementSibling; }
-      if (!back) { break; }
-      n = back;
+      const frame = hungOn(back);
+      if (!frame || !frame.matches || !frame.matches(CHAIN_SEL)) { break; }
+      n = frame;
     }
     return n;
   }
@@ -4185,7 +4312,121 @@ ${insideObjects('.eb-paper.boxed')} {
     const mb = parseFloat(style.paddingBottom) || 0;
     const usable = sheet.offsetHeight - mt - mb;
     if (usable < 40) { return null; }
-    return { mt: mt, usable: usable, extra: mt + mb + PAGE_GAP };
+    return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP };
+  }
+  /**
+   * How far down the paper something is drawn, in the units offsetTop is in. A
+   * frame placed by hand hangs off an anchor, so its own offsetTop is measured
+   * from that anchor and not from the page: the only honest answer is where it
+   * is drawn, taken back to 100%.
+   */
+  function topOnPaper(el) {
+    const c = canvas();
+    if (!c || !el || !el.getBoundingClientRect) { return 0; }
+    const box = c.getBoundingClientRect();
+    const scale = box.height / (c.offsetHeight || 1) || 1;
+    return (el.getBoundingClientRect().top - box.top) / scale;
+  }
+  /** Where a frame stands, measured from the top of the writing on its page. */
+  function frameTop(el, geom) {
+    return (objectFree(el) ? topOnPaper(el) : el.offsetTop) - geom.mt;
+  }
+  /**
+   * A thing placed by hand stands on one sheet, and is drawn where it will print.
+   *
+   * Two things have to come out right at once. It must not lie across the gap
+   * between two sheets: printed, it would come out cut in two, because a printer
+   * slices whatever crosses the edge of the paper rather than moving it. And what
+   * the file says must be what the screen shows: the offset in the file is
+   * measured from the anchor, down a column of writing with no gaps in it, while
+   * the editor's column has a fold's worth of gap at every page. So the file is
+   * given the paper's answer, and the editor adds its own gaps back on as a
+   * margin that goes out with the rest of the furniture when the file is written.
+   *
+   * Where the writer put it is kept and tried first every time, so it goes back
+   * there of its own accord as soon as the page has room for it again. Without
+   * that, every turn of the layout would push it a little further down the paper.
+   */
+  function settleFree(el, geom) {
+    if (!el || !geom || !objectFree(el) || !el.parentNode) { return false; }
+    const before = (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '');
+    if (el.hasAttribute('data-free-top')) {
+      const own = el.getAttribute('data-free-top');
+      if (own) { el.style.top = own; } else { el.style.removeProperty('top'); }
+      el.removeAttribute('data-free-top');
+    }
+    const step = geom.usable + geom.extra;
+    // The anchor is a peg of no height standing in the writing: where it is on
+    // screen, and where the same place falls in a column with no folds in it.
+    const anchorTop = topOnPaper(el.parentNode) - geom.mt;
+    const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
+    const paperTop = anchorTop - ka * geom.extra;
+    let top = paperTop + lengthPx(el.style.top);
+    let page = Math.max(0, Math.floor((top + 0.5) / geom.usable));
+    const height = el.offsetHeight;
+    // It fits on a sheet but is drawn across the edge of one: it goes on to the
+    // next page whole. Taller than the writing area, no sheet can hold it and
+    // there is nothing to be done -- unless it is a frame, which is cut at the
+    // foot of its page instead. Standing so near that foot that not even a line
+    // of it would fit, there is nothing to cut off: it goes over whole as well,
+    // and is cut on the page it lands on.
+    const overPaper = top + height > page * geom.usable + geom.usable + geom.mb + 0.5;
+    const room = page * geom.usable + geom.usable - top;
+    const move = height && (height <= geom.usable
+      ? overPaper
+      : (chainable(el) && room < 2 * lineOf(el)));
+    if (move) {
+      const own = el.style.top || '';
+      page += 1;
+      top = page * geom.usable;
+      el.style.top = round1((top - paperTop) * MM) + 'mm';
+      el.setAttribute('data-free-top', own);
+    }
+    foldShift(el, (page - ka) * geom.extra);
+    return (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '') !== before;
+  }
+  /**
+   * The writer has just put it somewhere by hand, so where it is drawn is what
+   * they mean. The file measures from the anchor down a column with no folds in
+   * it, so the offset is worked back out from the page it was put on -- and the
+   * gaps the editor draws are put back as the mark, so that the thing does not
+   * move an inch when the two are made to agree.
+   *
+   * The top of it belongs in the writing area of its page: the margins of a page
+   * are not in the column at all, so an offset that pointed into one would print
+   * on the page after it. Dropped in a margin, it is taken to the writing.
+   */
+  function placeFreeAsDrawn(el, geom) {
+    if (!el || !geom || !objectFree(el) || !el.parentNode) { return; }
+    const step = geom.usable + geom.extra;
+    const anchorTop = topOnPaper(el.parentNode) - geom.mt;
+    const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
+    const paperTop = anchorTop - ka * geom.extra;
+    const drawn = topOnPaper(el) - geom.mt;
+    let page = Math.max(0, Math.floor((drawn + geom.mt) / step));
+    let off = drawn - page * step;
+    // The first page's top margin is the one margin a thing can begin in: it is
+    // what the column has above its first line, and it prints there.
+    if (off >= geom.usable - 1) { page += 1; off = 0; }
+    else if (off < 0 && page > 0) { off = 0; }
+    el.style.top = round1((page * geom.usable + off - paperTop) * MM) + 'mm';
+    foldShift(el, (page - ka) * geom.extra);
+  }
+  /** The gaps the editor drew above this thing, added back on for the screen. */
+  function foldShift(el, px) {
+    if (Math.abs(px) > 0.5) { el.style.setProperty('--eb-shift', round1(px) + 'px'); }
+    else { el.style.removeProperty('--eb-shift'); }
+  }
+  /** Every freely placed thing put back on to a sheet. Returns whether any moved. */
+  function settleFreeObjects() {
+    const c = canvas();
+    const geom = c ? pageGeometry() : null;
+    if (!geom) { return false; }
+    let moved = false;
+    Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
+      if (settleFree(el, geom)) { moved = true; }
+    });
+    return moved;
   }
   /**
    * How much of its page is left below the top of this frame -- rounded down to
@@ -4194,7 +4435,7 @@ ${insideObjects('.eb-paper.boxed')} {
    * whole frame to the next sheet and leaves the page it came from empty.
    */
   function roomFor(frame, geom) {
-    const top = frame.offsetTop - geom.mt;
+    const top = frameTop(frame, geom);
     const step = geom.usable + geom.extra;
     const page = Math.max(0, Math.floor((top + 0.5) / step));
     return fitRoom((page * step + geom.usable) - top);
@@ -4262,6 +4503,14 @@ ${insideObjects('.eb-paper.boxed')} {
   function chainSettled(chain, geom) {
     const lead = chain[0];
     if (chain.length === 1) {
+      // Placed by hand, a frame is not moved to the next sheet by the page count:
+      // it stands where it was put. So whatever will not fit below it on its own
+      // page is what has to be carried over.
+      if (objectFree(lead)) {
+        const room = roomFor(lead, geom);
+        if (lead.offsetHeight <= room + 1 && writtenBottom(lead) <= fillLimit(lead, room) + 1) { return true; }
+        return room < 2 * lineOf(lead);
+      }
       // A frame that fits on a page is not this code's business: the page count
       // moves it whole to the next sheet, which is what a frame should do.
       if (lead.offsetHeight <= geom.usable + 0.5) { return true; }
@@ -4292,7 +4541,9 @@ ${insideObjects('.eb-paper.boxed')} {
     if (mine !== Array.from(lead.classList).sort().join(' ')) { return false; }
     const drop = (el) => {
       const copy = el.cloneNode(false);
-      ['min-height', 'height'].forEach((k) => copy.style.removeProperty(k));
+      // A frame carried on stands lower down the paper, on a page of its own, and
+      // holds a different amount: none of that makes it a different frame.
+      ['min-height', 'height', 'top', '--eb-shift'].forEach((k) => copy.style.removeProperty(k));
       return copy.getAttribute('style') || '';
     };
     return drop(lead) === drop(cont);
@@ -4380,9 +4631,10 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         lead.appendChild(node);
       }
-      const back = frame.previousElementSibling;
+      const host = chainHost(frame);
+      const back = host.previousElementSibling;
       if (back && back.classList && back.classList.contains('eb-pagespacer')) { back.remove(); }
-      frame.remove();
+      host.remove();
     }
     lead.removeAttribute('data-split');
     Array.from(lead.querySelectorAll('[data-split]')).forEach((el) => el.removeAttribute('data-split'));
@@ -4498,14 +4750,34 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** A fresh frame of the same shape, to carry the writing on with. */
-  function continuationOf(frame) {
+  function continuationOf(frame, geom) {
     const next = frame.cloneNode(false);
     next.removeAttribute('id');
     next.removeAttribute('data-frame-height');
     next.removeAttribute('data-split');
+    next.removeAttribute('data-free-top');
     next.classList.add('eb-cont');
     next.style.removeProperty('min-height');
     next.style.removeProperty('height');
+    if (objectFree(frame) && geom) {
+      // An anchor of its own, beside the one the frame itself hangs off -- an
+      // anchor is a peg of no height, so a second one beside the first moves
+      // nothing -- and its own offset down the paper, which is what puts it
+      // inside the next sheet. break-before means nothing to a placed frame:
+      // where it is drawn is where it prints, so that is what is set.
+      const anchor = document.createElement('div');
+      anchor.className = 'eb-anchor';
+      anchor.appendChild(next);
+      const host = frame.parentNode;
+      host.parentNode.insertBefore(anchor, host.nextSibling);
+      const step = geom.usable + geom.extra;
+      const page = Math.max(0, Math.floor((frameTop(frame, geom) + 0.5) / step));
+      const anchorTop = topOnPaper(anchor) - geom.mt;
+      const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
+      next.style.top = round1(((page + 1) * geom.usable - (anchorTop - ka * geom.extra)) * MM) + 'mm';
+      foldShift(next, (page + 1 - ka) * geom.extra);
+      return next;
+    }
     frame.parentNode.insertBefore(next, frame.nextSibling);
     return next;
   }
@@ -4534,7 +4806,7 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         frame.style.minHeight = round1(room * MM) + 'mm';
         want -= room;
-        const next = continuationOf(frame);
+        const next = continuationOf(frame, geom);
         if (!moveTailInto(frame, cut, next)) { next.remove(); return; }
         frame = next;
         room = fitRoom(geom.usable);
@@ -4570,7 +4842,7 @@ ${insideObjects('.eb-paper.boxed')} {
       }
       frame.style.minHeight = round1(room * MM) + 'mm';
       want -= room;
-      const next = continuationOf(frame);
+      const next = continuationOf(frame, geom);
       carry.forEach((el) => next.appendChild(el));
       frame = next;
       room = fitRoom(geom.usable);
@@ -4589,8 +4861,8 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!geom) { return false; }
     const kids = Array.from(c.children);
     for (let i = 0; i < kids.length; i += 1) {
-      const el = kids[i];
-      if (isCont(el) || !chainable(el)) { continue; }
+      const el = hungOn(kids[i]);
+      if (!el || isCont(el) || !chainable(el)) { continue; }
       const chain = chainOf(el);
       if (chainSettled(chain, geom)) { continue; }
       const at = chainCaret(chain);
@@ -6091,7 +6363,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <option value="BLOCKQUOTE">{{ t('Quotation') }}</option>
         <option value="PRE">{{ t('Preformatted') }}</option>
       </select>
-      <button class="eb-tb" @mousedown.prevent @click="openStyles()" :title="t('Change this style everywhere…')"><span v-html="icons.props"></span></button>
+      <button class="eb-tb text style-btn" @mousedown.prevent @click="openStyles()" :title="t('Change this style everywhere…')"><span v-html="icons.props"></span><span class="lbl">{{ t('Styles') }}</span></button>
       <span class="eb-pop wide-ctl">
         <button class="eb-tb text font-btn" :class="{ on: menu === 'font' }" @mousedown.prevent @click="toggleMenu('font')" :title="t('Typeface of the text')">
           <span class="fname" :style="{ fontFamily: fontPreviewStack(fmt.family) }">{{ fmt.family || fontsInUse.body }}</span>
@@ -6147,6 +6419,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
             <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
             <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
+            <button class="eb-btn wide" @click="openStyles(); menuOpen = false">🅰 {{ t('Styles of this document') }}</button>
             <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
             <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
             <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
@@ -7078,6 +7351,21 @@ ${insideObjects('.eb-paper.boxed')} {
         <label class="opt"><input type="checkbox" v-model="styleNow.bold" @change="touchStyles"> {{ t('Bold') }}</label>
         <label class="opt"><input type="checkbox" v-model="styleNow.italic" @change="touchStyles"> {{ t('Italic') }}</label>
         <p class="eb-tip">{{ t('This changes every paragraph of that kind at once, now and later, because it is written as a rule in the file rather than on each paragraph. Anything you have set on one paragraph by hand still wins over it.') }}</p>
+        <!-- Everything the boxes above cannot say. It is the document's own
+             stylesheet: it goes into the file as it is typed here. -->
+        <h4 class="eb-sect">
+          <button class="eb-btn ghost" @click="cssOpen = !cssOpen">{{ cssOpen ? '▾' : '▸' }} {{ t('Write the styles as CSS') }}</button>
+          <span class="eb-cssnote" v-if="cssOpen">{{ cssNote }}</span>
+        </h4>
+        <div class="eb-cssbox" v-if="cssOpen">
+          <textarea class="eb-cssarea" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off"
+            v-model="doc.css" @input="touchCss" :placeholder="cssHint"></textarea>
+          <p class="eb-tip">{{ t('These rules go into the file itself, after the ones above, so they are the ones that win. Name the parts of the document as they are written: h1 to h6 for the headings, p for the body, ul, ol and li for lists, blockquote, table, th, td, figcaption. The page changes as you type.') }}</p>
+          <div class="btn-pair">
+            <button class="eb-btn ghost" @click="cssExample">{{ t('Put an example in') }}</button>
+            <button class="eb-btn ghost" @click="doc.css = ''; touchCss()">{{ t('Clear the CSS') }}</button>
+          </div>
+        </div>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="clearStyle">{{ t('Reset this style') }}</button>
@@ -7431,6 +7719,9 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="ci" @click="breakBeforePage(ctx.page)">{{ t('Start this page on a sheet of its own') }}</button>
       <button class="ci" @click="duplicatePage(ctx.page)">{{ t('Duplicate this page') }}</button>
       <div class="sep"></div>
+      <button class="ci" @click="addPage(ctx.page, false)">{{ t('Add a page above') }}</button>
+      <button class="ci" @click="addPage(ctx.page, true)">{{ t('Add a page below') }}</button>
+      <div class="sep"></div>
       <button class="ci" @click="paperOpen = true; closeCtx()">{{ t('Paper setup') }}</button>
       <div class="sep"></div>
       <button class="ci danger" @click="deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
@@ -7460,6 +7751,8 @@ ${insideObjects('.eb-paper.boxed')} {
         <button class="ci" @click="ctxDo('block','H4')">{{ t('Heading 4') }}</button>
         <button class="ci" @click="ctxDo('block','BLOCKQUOTE')">{{ t('Quotation') }}</button>
         <button class="ci" @click="ctxDo('block','PRE')">{{ t('Preformatted') }}</button>
+        <div class="sep"></div>
+        <button class="ci" @click="closeCtx(); openStyles()">{{ t('Change this style everywhere…') }}</button>
       </div>
     </div>
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -7852,8 +8145,8 @@ ${insideObjects('.eb-paper.boxed')} {
         fontList: [],
         fontScripts: [],
         docs: [],
-        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), lang: 'ja', foreign: false },
-        stylesOpen: false, styleKey: 'h2',
+        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), css: '', lang: 'ja', foreign: false },
+        stylesOpen: false, styleKey: 'h2', cssOpen: false, cssRules: 0, cssBad: false,
         dirty: false,
         saving: false,
         savedAt: 0,
@@ -8103,6 +8396,13 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       tategaki() { return !!this.doc.paper.vertical; },
       cellFill() { return this.fmt.cellFill || ''; },
+      /** What the browser made of the writer's own stylesheet, in a few words. */
+      cssNote() {
+        if (this.cssBad) { return this.t('None of it could be read as CSS.'); }
+        if (!this.cssRules) { return ''; }
+        return this.t('{n} rules in use', { n: this.cssRules });
+      },
+      cssHint() { return 'h2 { color: #1f3a5f; }'; },
       styleTargets() {
         const names = {
           p: this.t('Body text'), h1: this.t('Heading 1'), h2: this.t('Heading 2'),
@@ -8286,7 +8586,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const parsed = parseHtml(d.content);
           this.doc = {
             id: d.id, name: d.name, title: parsed.title || d.title,
-            paper: parsed.paper, styles: parsed.styles, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
+            paper: parsed.paper, styles: parsed.styles, css: parsed.css, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
           // What the file itself carries decides whether the two switches are on:
           // the page's own header and footer are part of the document, not a
@@ -8332,6 +8632,11 @@ ${insideObjects('.eb-paper.boxed')} {
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+        // The gaps between the sheets are the editor's, not the document's.
+        clone.querySelectorAll('.eb-anchor > *').forEach((el) => {
+          el.style.removeProperty('--eb-shift');
+          if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+        });
         fillEmbeds(clone);
         // An empty paragraph holds its line in the editor, where contenteditable
         // gives it one; on a plain page it collapses to nothing and everything
@@ -8346,6 +8651,7 @@ ${insideObjects('.eb-paper.boxed')} {
           title: this.doc.title || this.t('Untitled document'),
           paper: this.doc.paper,
           styles: this.doc.styles,
+          css: this.doc.css,
           lang: this.doc.lang,
           body: this.exportBody(),
         });
@@ -8472,7 +8778,14 @@ ${insideObjects('.eb-paper.boxed')} {
           // Never in the middle of typing a Japanese word: rewriting the markup
           // under a half-finished conversion throws the conversion away.
           if (!this.composing) {
-            for (let pass = 0; pass < 8 && reflowFrames(); pass += 1) { pages = paginate(); }
+            for (let pass = 0; pass < 8; pass += 1) {
+              // The placed things first: a frame's page is decided by where it
+              // is drawn, so it has to be standing on the right sheet before
+              // there is any sense in measuring what fits inside it.
+              const moved = settleFreeObjects();
+              if (!reflowFrames() && !moved) { break; }
+              pages = paginate();
+            }
           }
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
@@ -8706,8 +9019,52 @@ ${insideObjects('.eb-paper.boxed')} {
           document.head.appendChild(el);
         }
         el.textContent = css;
+        this.applyDocCss();
         this.applyDocFonts();
         this.$nextTick(() => this.repaginate());
+      },
+      /** The writer's own stylesheet, in a sheet after that one so it wins. */
+      applyDocCss() {
+        let el = document.getElementById('eb-doc-css');
+        if (!el) {
+          el = document.createElement('style');
+          el.id = 'eb-doc-css';
+          document.head.appendChild(el);
+        }
+        el.textContent = scopeCss(cleanCss(this.doc.css), '#editbase-root ');
+        // How many rules the browser made of it. A writer typing CSS has no other
+        // way of telling whether what they wrote was understood: a rule it cannot
+        // read is dropped without a word.
+        let made = 0;
+        try { made = el.sheet ? el.sheet.cssRules.length : 0; } catch (e) { made = 0; }
+        this.cssRules = made;
+        this.cssBad = !made && !!String(this.doc.css || '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      },
+      /**
+       * Something to start from, and something to read: the parts a writer asks
+       * about most -- the headings and the lists -- named the way the file names
+       * them, so what to change is plain from the example itself.
+       */
+      cssExample() {
+        this.doc.css = [
+          'h1, h2, h3 { color: #1f3a5f; }',
+          'h2 { border-bottom: 1pt solid #1f3a5f; padding-bottom: 2pt; }',
+          'h3 { border-left: 3pt solid #1f3a5f; padding-left: 3mm; }',
+          '',
+          'ul { list-style-type: square; }',
+          'ol > li::marker { color: #1f3a5f; font-weight: 700; }',
+          'li { margin-bottom: 3pt; }',
+          '',
+          'blockquote { border-left: 3pt solid #cfd6e0; padding-left: 6mm; color: #444; }',
+        ].join('\n');
+        this.touchCss();
+      },
+      /** The stylesheet was typed into: show it, remember it, lay the page out again. */
+      touchCss() {
+        this.applyDocCss();
+        this.touch();
+        clearTimeout(this._cssTimer);
+        this._cssTimer = setTimeout(() => this.repaginate(), 300);
       },
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
@@ -9662,6 +10019,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frameDragEndGuides();
         if (!d || !frameEl) { return; }
         if (!d.moved) { return; }
+        if (d.free) { frameAll().forEach((o) => this.settlePlaced(o)); }
         if (d.mode === 'move' && !d.free && d.ref) {
           window.__eb_lastDrop = { refIndex: Array.prototype.indexOf.call(canvas().children, d.ref),
             ref: d.ref.nodeName, after: d.after, by: 'the box' };
@@ -9891,6 +10249,7 @@ ${insideObjects('.eb-paper.boxed')} {
         el.style.left = round1((parseFloat(el.style.left) || 0) + dxMm) + 'mm';
         el.style.top = round1((parseFloat(el.style.top) || 0) + dyMm) + 'mm';
         this.keepOnPaper(el);
+        this.settlePlaced(el);
         this.settleFrame();
         return true;
       },
@@ -9923,6 +10282,22 @@ ${insideObjects('.eb-paper.boxed')} {
         if (now.top < paper.top) { dy = paper.top - now.top; }
         else if (now.bottom > paper.bottom) { dy = Math.min(0, paper.bottom - now.bottom); }
         if (dy) { el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm'; }
+      },
+      /**
+       * A thing just put down by hand -- dropped, nudged, resized, set free. Where
+       * it is drawn is what the writer meant, so that is written down as the file
+       * will have it; then it is made to stand on one sheet, going on to the next
+       * page if it would hang off the bottom of this one. Not during the drag:
+       * moving the ground under a hand that is still moving makes the thing fight
+       * the mouse.
+       */
+      settlePlaced(el) {
+        if (!el || !objectFree(el)) { return; }
+        const geom = pageGeometry();
+        if (!geom) { return; }
+        el.removeAttribute('data-free-top');
+        placeFreeAsDrawn(el, geom);
+        settleFree(el, geom);
       },
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
@@ -10911,6 +11286,7 @@ ${insideObjects('.eb-paper.boxed')} {
         el.style.left = round1((parseFloat(el.style.left) || 0) + dx * MM / z) + 'mm';
         el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm';
         this.keepOnPaper(el);
+        this.settlePlaced(el);
       },
       freeInPlace(el) {
         if (!el || objectFree(el)) { return; }
@@ -10924,6 +11300,7 @@ ${insideObjects('.eb-paper.boxed')} {
         el.style.left = round1((was.left - now.left) * MM / z) + 'mm';
         el.style.top = round1((was.top - now.top) * MM / z) + 'mm';
         this.keepOnPaper(el);
+        this.settlePlaced(el);
       },
       objectCtx(e) {
         const under = frameEl || document.elementFromPoint(e.clientX, e.clientY);
@@ -11076,6 +11453,33 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         this.touch();
         this.settleFrame();
+      },
+      /**
+       * A blank sheet put in before this page or after it. A page is not a thing
+       * in the document but a place the writing fell, so what is added is an
+       * empty line with a fold on either side of it: the line has a sheet to
+       * itself, and whatever came after it starts on the sheet after that.
+       */
+      addPage(n, below) {
+        const c = canvas();
+        const blocks = this.blocksOfPage(n);
+        if (!c || !blocks.length) { return; }
+        this.closeCtx();
+        history.push(true);
+        const ref = below ? blocks[blocks.length - 1].nextSibling : blocks[0];
+        const fold = () => {
+          const d = document.createElement('div');
+          d.className = 'eb-pagebreak';
+          d.setAttribute('data-label', this.t('Page break'));
+          return d;
+        };
+        const line = document.createElement('p');
+        line.appendChild(document.createElement('br'));
+        [fold(), line, fold()].forEach((el) => { c.insertBefore(el, ref); });
+        placeCaretIn(line);
+        this.touch();
+        this.settleFrame();
+        this.$nextTick(() => this.goToPage(below ? n + 1 : n));
       },
       /** A fold put in front of the page, so it starts on a sheet of its own. */
       breakBeforePage(n) {
@@ -11745,6 +12149,7 @@ ${insideObjects('.eb-paper.boxed')} {
               o.style.left = round1((parseFloat(o.style.left) || 0) + dx) + 'mm';
               o.style.top = round1((parseFloat(o.style.top) || 0) + dy) + 'mm';
               this.keepOnPaper(o);
+              this.settlePlaced(o);
             });
             this.settleFrame();
             return undefined;
@@ -11873,12 +12278,13 @@ ${insideObjects('.eb-paper.boxed')} {
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
-      history.readState = () => JSON.stringify({ paper: this.doc.paper, styles: this.doc.styles });
+      history.readState = () => JSON.stringify({ paper: this.doc.paper, styles: this.doc.styles, css: this.doc.css });
       history.applyState = (raw) => {
         let v = null;
         try { v = JSON.parse(raw); } catch (e) { return; }
         this.doc.paper = normalisePaper(v.paper);
         this.doc.styles = normaliseStyles(v.styles);
+        this.doc.css = cleanCss(v.css || '');
         this.applyDocStyles();
       };
       const style = document.createElement('style');

@@ -289,6 +289,13 @@ OC.L10N.register(
     "Save automatically while typing": "入力中に自動保存する",
     "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.": "これがFilesに保存される内容そのものです。1つのファイルにスタイルまで含まれており、開くのに他には何も要りません。",
     "Styles of this document": "文書のスタイル",
+    "Styles": "スタイル",
+    "Write the styles as CSS": "CSSで書く",
+    "These rules go into the file itself, after the ones above, so they are the ones that win. Name the parts of the document as they are written: h1 to h6 for the headings, p for the body, ul, ol and li for lists, blockquote, table, th, td, figcaption. The page changes as you type.": "ここに書いた指定はファイルにそのまま入り、上の設定より後ろに置かれるため、こちらが優先されます。文書の各部はファイルに書かれているとおりの名前で指定します。見出しは h1〜h6、本文は p、箇条書きは ul・ol・li、引用は blockquote、表は table・th・td、図の説明は figcaption です。入力すると同時にページに反映されます。",
+    "Put an example in": "例を入れる",
+    "Clear the CSS": "CSSを消す",
+    "{n} rules in use": "{n} 個のルールが有効",
+    "None of it could be read as CSS.": "CSSとして読み取れませんでした。",
     "Which style": "対象のスタイル",
     "As the document says": "文書の書体に従う",
     "Size (pt)": "大きさ（pt）",
@@ -644,6 +651,8 @@ OC.L10N.register(
     "Go to this page": "このページへ移動",
     "Start this page on a sheet of its own": "このページの前で改ページ",
     "Duplicate this page": "このページを複製",
+    "Add a page above": "上にページを追加",
+    "Add a page below": "下にページを追加",
     "Delete everything on this page": "このページの内容を削除"
 },
 "nplurals=1; plural=0;");
