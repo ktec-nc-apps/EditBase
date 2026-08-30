@@ -6617,14 +6617,9 @@ ${insideObjects('.eb-paper.boxed')} {
               <div class="eb-menu-sep"></div>
             </template>
             <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
-            <button class="eb-btn wide" @click="duplicate">⧉ {{ t('Duplicate') }}</button>
-            <button class="eb-btn wide" @click="paperOpen = true; menuOpen = false">🖹 {{ t('Paper setup') }}</button>
-            <button class="eb-btn wide" @click="openStyles(); menuOpen = false">🅰 {{ t('Styles of this document') }}</button>
             <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
             <button class="eb-btn wide" @click="runCheck(); menuOpen = false">🔍 {{ t('Check the document') }}</button>
             <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
-            <button class="eb-btn wide" @click="showSource">&lt;/&gt; {{ t('View the HTML') }}</button>
-            <button class="eb-btn wide danger" @click="removeDoc">🗑 {{ t('Delete') }}</button>
           </div>
         </div>
       </div>
@@ -6852,9 +6847,6 @@ ${insideObjects('.eb-paper.boxed')} {
       </span>
       <button class="eb-tb" :class="{ on: !!brush }" @mousedown.prevent @click="useBrush" :title="brush ? t('Put this format on the selection') : t('Copy the format at the cursor')"><span v-html="icons.brush"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
       <span class="sep"></span>
       <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
@@ -7986,8 +7978,6 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="ci" @click="addPage(ctx.page, false)">{{ t('Add a page above') }}</button>
       <button class="ci" @click="addPage(ctx.page, true)">{{ t('Add a page below') }}</button>
       <div class="sep"></div>
-      <button class="ci" @click="paperOpen = true; closeCtx()">{{ t('Paper setup') }}</button>
-      <div class="sep"></div>
       <button class="ci danger" @click="deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
     </template>
     <template v-else>
@@ -8015,8 +8005,6 @@ ${insideObjects('.eb-paper.boxed')} {
         <button class="ci" @click="ctxDo('block','H4')">{{ t('Heading 4') }}</button>
         <button class="ci" @click="ctxDo('block','BLOCKQUOTE')">{{ t('Quotation') }}</button>
         <button class="ci" @click="ctxDo('block','PRE')">{{ t('Preformatted') }}</button>
-        <div class="sep"></div>
-        <button class="ci" @click="closeCtx(); openStyles()">{{ t('Change this style everywhere…') }}</button>
       </div>
     </div>
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -8955,10 +8943,6 @@ ${insideObjects('.eb-paper.boxed')} {
           await this.loadDocs();
         } catch (e) { this.notify(this.t('Could not rename: {msg}', { msg: e.message })); }
       },
-      duplicate() {
-        this.menuOpen = false;
-        return this.duplicateDoc(this.doc.id);
-      },
       /** A copy of a document, whether it is the one open or another in the list. */
       async duplicateDoc(id) {
         this.closeCtx();
@@ -8971,10 +8955,6 @@ ${insideObjects('.eb-paper.boxed')} {
           await this.loadDocs();
           await this.openDoc(copy.id);
         } catch (e) { this.notify(this.t('Could not duplicate: {msg}', { msg: e.message })); }
-      },
-      removeDoc() {
-        this.menuOpen = false;
-        return this.deleteDoc({ id: this.doc.id, name: this.doc.name, title: this.doc.title });
       },
       async deleteDoc(d) {
         this.closeCtx();

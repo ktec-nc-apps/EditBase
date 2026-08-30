@@ -3,9 +3,9 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] — 2026-08-23
+## [0.1.0] — unreleased
 
-First working version.
+The first version. Everything below is new, because there was nothing before it.
 
 ### Added
 - Documents are ordinary `.html` files in the user's own Nextcloud Files, saved
@@ -60,4 +60,17 @@ First working version.
   show, a photograph heavy enough to make the file slow, a page with nothing on
   it. Each one says which page it is on and takes you there.
 - A view of the raw HTML of the current document.
+- A layer bar and a page bar down the right. Every row of the layer bar can be
+  dragged: two things standing on the paper change places in the pile, and anything
+  else moves through the document.
 - Light and dark themes, chosen per user, and English and Japanese translations.
+
+### Known limits
+
+- A page number cannot be printed from the file itself: a browser has no count of
+  printed pages to give a document, and the margins of a printed page cannot be
+  reached from the page. The print dialogue's own headers and footers add them.
+- Vertical writing does not yet have the newest page fitting: frames that carry
+  their writing on to the next page, and keeping a thing placed by hand on one
+  sheet, are written for horizontal text so far.
+- Printing has been checked in Chromium only.

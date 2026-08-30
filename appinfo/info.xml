@@ -6,28 +6,36 @@
 	<summary lang="ja">成果物がそのままHTMLになるワードプロセッサ ― 印刷を前提としたCSS組版・MathML対応・独自フォーマットなし</summary>
 	<description><![CDATA[EditBase is a word processor whose documents are ordinary web pages. Every document is saved to your Nextcloud Files as a single self-contained .html file with its stylesheet inside it, so it opens in any browser, on any device, for as long as browsers exist — no import, no export, no proprietary format in between.
 
-Because the document is HTML and CSS, printing is typesetting: paper size, orientation and margins are set in millimetres, page breaks are explicit, and your browser's own "Save as PDF" produces the finished result.
+Because the document is HTML and CSS, printing is typesetting: paper size, orientation and margins are set in millimetres, page breaks are explicit, and your browser's own "Save as PDF" produces the finished result. The editor lays the pages out itself and draws them as sheets of paper, so what is on the screen is what comes off the printer.
 
 Features:
 - Documents are plain HTML files in your own Files, editable and shareable like any other file
-- Paper setup in millimetres — A4, A3, B5, Letter and Legal, portrait or landscape
-- On-screen page guides that show where each printed page will end
-- Headings, lists, tables, quotes, callout boxes, rounded rules and horizontal rules
-- Highlighting, text colour and inline styles applied as clean HTML, never as editor cruft
+- Paper setup in millimetres — A3, A4, A5, B4, B5, Letter and Legal, portrait or landscape — with page guides, a ruler and a grid
+- A running header and footer on every printed page, carrying the title, the file name or the date
+- Headings, lists, tables, quotations, callout boxes, footnotes, a table of contents, columns and vertical writing
+- Readings over words (ruby), emphasis dots, highlighting and text colour, applied as clean HTML rather than editor cruft
+- Pictures, shapes, rules and embedded pages, placed by hand anywhere on the page, with the words kept clear of them
+- Frames that carry their writing on into the next page, cut at the line rather than at the edge of the paper
 - Mathematics written as native MathML — no images, no external renderer
-- Undo history kept by the editor itself]]></description>
+- Styles for each kind of block, and the document's own stylesheet for anything they cannot say
+- A check over the document that finds what is wrong with the page before it is printed
+- Find and replace, recorded changes, mail merge, and an undo history kept by the editor itself]]></description>
 	<description lang="ja"><![CDATA[EditBaseは、文書そのものがWebページであるワードプロセッサです。すべての文書は、スタイルシートを内包した1枚の独立した .html ファイルとして、あなたのNextcloud Filesに保存されます。どの端末のどのブラウザでも、ブラウザが存在する限り開けます ― 取り込みも書き出しも、その間に挟まる独自フォーマットもありません。
 
-文書がHTMLとCSSであるということは、印刷がそのまま組版であるということです。用紙サイズ・向き・余白はミリメートルで指定し、改ページは明示的に置き、仕上がりはブラウザ自身の「PDFに保存」で得られます。
+文書がHTMLとCSSであるということは、印刷がそのまま組版であるということです。用紙サイズ・向き・余白はミリメートルで指定し、改ページは明示的に置き、仕上がりはブラウザ自身の「PDFに保存」で得られます。エディタ自身がページを組んで紙として描くので、画面で見えているものがそのまま印刷されます。
 
 主な機能:
 - 文書は自分のFilesの中の素のHTMLファイル ― 他のファイルと同じように編集・共有できます
-- ミリメートル単位の用紙設定 ― A4・A3・B5・Letter・Legal、縦置き／横置き
-- 印刷したときのページの区切りを画面上に表示するページガイド
-- 見出し・箇条書き・表・引用・囲み記事・角丸罫線・水平線
-- ハイライト・文字色などの装飾を、エディタ特有のゴミではなく整ったHTMLとして適用
+- ミリメートル単位の用紙設定 ― A3・A4・A5・B4・B5・Letter・Legal、縦置き／横置き。ページガイド・ルーラー・グリッド付き
+- すべての印刷ページに入るヘッダーとフッター。タイトル・ファイル名・日付を差し込めます
+- 見出し・箇条書き・表・引用・囲み記事・脚注・目次・段組み・縦書き
+- ルビ・圏点・ハイライト・文字色を、エディタ特有のゴミではなく整ったHTMLとして適用
+- 画像・図形・罫線・埋め込みページを、ページ上の好きな場所に配置。本文は重ならないよう避けます
+- ページに入りきらない枠は、用紙の端ではなく行の切れ目で分けて、次ページの枠に文章を続けます
 - 数式はネイティブのMathMLで記述 ― 画像も外部レンダラーも使いません
-- エディタ自身が保持する取り消し履歴]]></description>
+- 種類ごとのスタイル設定と、それでは書けないものを直接書くための文書専用スタイルシート
+- 印刷する前にページの不具合を見つける「文書の点検」
+- 検索と置換、変更履歴、差し込み印刷、エディタ自身が保持する取り消し履歴]]></description>
 	<version>0.1.0</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
