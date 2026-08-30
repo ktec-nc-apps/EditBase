@@ -1037,3 +1037,17 @@
   border: 1.5px dashed var(--primary); background: rgba(37, 99, 235, .10);
 }
 #editbase-root .eb-menu-item.on, #editbase-root .eb-rail .eb-tb.on { background: var(--primary); color: #fff; }
+
+/* The document's own stylesheet, typed into the styles dialogue. Monospaced,
+   because it is code, and tall enough to see a handful of rules at once. */
+#editbase-root .eb-cssarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 150px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono", monospace;
+  font-size: 13px; line-height: 1.5; tab-size: 2;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--surface); color: var(--text);
+}
+#editbase-root .eb-cssarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+#editbase-root .eb-cssbox .btn-pair { display: flex; gap: 8px; margin-top: 8px; }
+#editbase-root .eb-cssnote { font-size: 12px; color: var(--muted); font-weight: normal; margin-left: 8px; }
+#editbase-root .eb-sect .eb-btn.ghost { padding: 2px 8px; }

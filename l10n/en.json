@@ -288,6 +288,13 @@
         "Save automatically while typing": "Save automatically while typing",
         "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.": "This is exactly what is stored in Files — one file, styles included, nothing else needed to open it.",
         "Styles of this document": "Styles of this document",
+        "Styles": "Styles",
+        "Write the styles as CSS": "Write the styles as CSS",
+        "These rules go into the file itself, after the ones above, so they are the ones that win. Name the parts of the document as they are written: h1 to h6 for the headings, p for the body, ul, ol and li for lists, blockquote, table, th, td, figcaption. The page changes as you type.": "These rules go into the file itself, after the ones above, so they are the ones that win. Name the parts of the document as they are written: h1 to h6 for the headings, p for the body, ul, ol and li for lists, blockquote, table, th, td, figcaption. The page changes as you type.",
+        "Put an example in": "Put an example in",
+        "Clear the CSS": "Clear the CSS",
+        "{n} rules in use": "{n} rules in use",
+        "None of it could be read as CSS.": "None of it could be read as CSS.",
         "Which style": "Which style",
         "As the document says": "As the document says",
         "Size (pt)": "Size (pt)",
@@ -643,6 +650,8 @@
         "Go to this page": "Go to this page",
         "Start this page on a sheet of its own": "Start this page on a sheet of its own",
         "Duplicate this page": "Duplicate this page",
+        "Add a page above": "Add a page above",
+        "Add a page below": "Add a page below",
         "Delete everything on this page": "Delete everything on this page"
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"

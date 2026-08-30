@@ -34,5 +34,16 @@ First working version.
   of the same shape inside the next page, cut at the line rather than at the edge
   of the paper. The carried-on frame is ordinary markup, so the saved file prints
   the same way in any browser.
+- A frame placed by hand carries its writing on the same way, into a frame of its
+  own inside the next page; and anything placed by hand keeps to one sheet, moving
+  down to the next page rather than being printed cut in two by the edge of the
+  paper. Where the writer put it is remembered, so it goes back as soon as the page
+  has room for it again.
+- A blank page can be put in above or below any page, from the right button in the
+  page bar.
+- The document's own stylesheet, written by hand: a CSS box in the styles dialogue
+  for anything the boxes above it cannot say — the look of headings, lists,
+  quotations and the rest. It goes into the file itself, so the page prints that
+  way anywhere, and the editor shows it as it is typed.
 - A view of the raw HTML of the current document.
 - Light and dark themes, chosen per user, and English and Japanese translations.
