@@ -45,5 +45,8 @@ First working version.
   for anything the boxes above it cannot say — the look of headings, lists,
   quotations and the rest. It goes into the file itself, so the page prints that
   way anywhere, and the editor shows it as it is typed.
+- The right button on a document in the list opens it, copies it, throws it away,
+  or tells what it is: the file's name and where it is, its size, when it was last
+  saved, the paper it is set on, and how much is written in it.
 - A view of the raw HTML of the current document.
 - Light and dark themes, chosen per user, and English and Japanese translations.

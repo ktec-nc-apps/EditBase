@@ -6333,7 +6333,8 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
     <div class="eb-doclist">
       <p class="hint" v-if="!docs.length">{{ t('No documents yet. Everything you write here is saved to {folder} in your Files as a plain .html file.', { folder: settings.folder }) }}</p>
-      <button v-for="d in docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id }" @click="openDoc(d.id)">
+      <button v-for="d in docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id }"
+        @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
         <span class="t">{{ d.title }}</span>
         <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}</span>
       </button>
@@ -7374,6 +7375,29 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
+  <!-- What a document is: told from the file, not from the screen. -->
+  <div v-if="props.open" class="eb-modal-back" @click="props.open = false">
+    <div class="eb-modal" style="width:min(460px,100%)" @click.stop>
+      <h3>{{ props.title || props.name }}</h3>
+      <div class="body">
+        <p class="eb-tip" v-if="props.error">{{ props.error }}</p>
+        <dl class="eb-props">
+          <dt>{{ t('File name') }}</dt><dd>{{ props.name }}</dd>
+          <dt>{{ t('Where it is') }}</dt><dd>{{ settings.folder }}</dd>
+          <dt>{{ t('Size') }}</dt><dd>{{ size(props.size) }}</dd>
+          <dt>{{ t('Last saved') }}</dt><dd>{{ when(props.mtime) }}</dd>
+          <dt>{{ t('Paper') }}</dt><dd>{{ props.busy ? '…' : props.paper }}</dd>
+          <dt>{{ t('Characters') }}</dt><dd>{{ props.busy ? '…' : props.chars }}</dd>
+          <dt>{{ t('Pictures') }}</dt><dd>{{ props.busy ? '…' : props.pictures }}</dd>
+          <dt>{{ t('Tables') }}</dt><dd>{{ props.busy ? '…' : props.tables }}</dd>
+        </dl>
+      </div>
+      <div class="foot">
+        <button class="eb-btn primary" @click="props.open = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- cropping a picture: a shape for the frame and a place to look at -->
   <div v-if="cropOpen" class="eb-modal-back" @click="cropOpen = false">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
@@ -7710,9 +7734,20 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
   <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
+    <!-- The right button on a document in the list down the left. -->
+    <template v-if="ctx.doc">
+      <div class="hd">{{ ctx.doc.title }}</div>
+      <button class="ci" @click="closeCtx(); openDoc(ctx.doc.id)">{{ t('Open') }}</button>
+      <div class="sep"></div>
+      <button class="ci" @click="duplicateDoc(ctx.doc.id)">{{ t('Duplicate') }}</button>
+      <button class="ci" @click="openDocProps(ctx.doc)">{{ t('Properties…') }}</button>
+      <div class="sep"></div>
+      <button class="ci danger" @click="deleteDoc(ctx.doc)">{{ t('Delete') }}</button>
+    </template>
+
     <!-- The right button on a sheet in the page bar. A page is not a thing in the
          document but a place the writing fell, so these act on what stands on it. -->
-    <template v-if="ctx.page">
+    <template v-else-if="ctx.page">
       <div class="hd">{{ t('Page {n}', { n: ctx.page }) }}</div>
       <button class="ci" @click="goToPage(ctx.page); closeCtx()">{{ t('Go to this page') }}</button>
       <div class="sep"></div>
@@ -8181,7 +8216,8 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0 },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0, doc: null },
+        props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
         ruler: true,
@@ -8681,30 +8717,80 @@ ${insideObjects('.eb-paper.boxed')} {
           await this.loadDocs();
         } catch (e) { this.notify(this.t('Could not rename: {msg}', { msg: e.message })); }
       },
-      async duplicate() {
+      duplicate() {
         this.menuOpen = false;
-        if (!this.doc.id) { return; }
-        await this.save();
+        return this.duplicateDoc(this.doc.id);
+      },
+      /** A copy of a document, whether it is the one open or another in the list. */
+      async duplicateDoc(id) {
+        this.closeCtx();
+        if (!id) { return; }
+        // Only what is on the screen can be out of date; another file is already
+        // whatever it is on disk.
+        if (id === this.doc.id) { await this.save(); }
         try {
-          const copy = await api('documents/' + this.doc.id + '/duplicate', { method: 'POST' });
+          const copy = await api('documents/' + id + '/duplicate', { method: 'POST' });
           await this.loadDocs();
           await this.openDoc(copy.id);
         } catch (e) { this.notify(this.t('Could not duplicate: {msg}', { msg: e.message })); }
       },
-      async removeDoc() {
+      removeDoc() {
         this.menuOpen = false;
-        if (!this.doc.id) { return; }
-        if (!window.confirm(this.t('Move "{name}" to the trash?', { name: this.doc.name }))) { return; }
+        return this.deleteDoc({ id: this.doc.id, name: this.doc.name, title: this.doc.title });
+      },
+      async deleteDoc(d) {
+        this.closeCtx();
+        if (!d || !d.id) { return; }
+        if (!window.confirm(this.t('Move "{name}" to the trash?', { name: d.name || d.title }))) { return; }
         try {
-          await api('documents/' + this.doc.id, { method: 'DELETE' });
-          const id = this.doc.id;
-          this.doc = { id: 0, name: '', title: '', paper: normalisePaper(this.defaultPaper), lang: this.docLang(), foreign: false };
-          canvas().innerHTML = '';
-          this.dirty = false;
+          await api('documents/' + d.id, { method: 'DELETE' });
           await this.loadDocs();
-          const next = this.docs[0];
-          if (next && next.id !== id) { await this.openDoc(next.id); }
+          // Deleting the one being written closes it and opens whatever is left,
+          // so the writer is not left looking at a document that is not there.
+          if (d.id === this.doc.id) {
+            this.doc = { id: 0, name: '', title: '', paper: normalisePaper(this.defaultPaper), styles: normaliseStyles(null), css: '', lang: this.docLang(), foreign: false };
+            canvas().innerHTML = '';
+            this.dirty = false;
+            this.applyDocStyles();
+            const next = this.docs[0];
+            if (next && next.id !== d.id) { await this.openDoc(next.id); }
+          }
         } catch (e) { this.notify(this.t('Could not delete: {msg}', { msg: e.message })); }
+      },
+      /**
+       * What a document is, told from the file rather than from the screen: its
+       * name, where it is, what paper it is set on and how much is written in it.
+       * The one being written is saved first, or the answer would be the answer to
+       * the last save rather than to the question.
+       */
+      async openDocProps(d) {
+        this.closeCtx();
+        if (!d) { return; }
+        this.props = { open: true, busy: true, id: d.id, name: d.name || '', title: d.title || '',
+          size: d.size || 0, mtime: d.mtime || 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' };
+        try {
+          if (d.id === this.doc.id && this.dirty) { await this.save(); }
+          const got = await api('documents/' + d.id);
+          const parsed = parseHtml(got.content);
+          const box = document.createElement('div');
+          box.innerHTML = parsed.body || '';
+          // A reading over a word is not writing, and is not counted as any.
+          Array.from(box.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+          const paper = normalisePaper(parsed.paper);
+          const s2 = sheet(paper);
+          this.props.title = parsed.title || d.title || '';
+          this.props.size = got.size || d.size || 0;
+          this.props.mtime = got.mtime || d.mtime || 0;
+          this.props.chars = String(box.textContent || '').replace(/\s/g, '').length;
+          this.props.pictures = box.querySelectorAll('img').length;
+          this.props.tables = box.querySelectorAll('table').length;
+          this.props.paper = paper.size + ' ' + (paper.orientation === 'landscape' ? this.t('Landscape') : this.t('Portrait'))
+            + ' · ' + s2.w + ' × ' + s2.h + ' mm'
+            + (paper.vertical ? ' · ' + this.t('Down (vertical)') : '');
+        } catch (e) {
+          this.props.error = e && e.message ? e.message : String(e);
+        }
+        this.props.busy = false;
       },
       download() {
         this.menuOpen = false;
@@ -11315,6 +11401,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!c || !inCanvas(e.target)) { return; }
         e.preventDefault();
         this.ctx.page = 0;
+        this.ctx.doc = null;
         const point = caretFromPoint(e.clientX, e.clientY);
         const sel = getRange();
         let inside = false;
@@ -11390,6 +11477,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.syncFrame();
         const img = el.matches && el.matches('figure.eb-img') ? el.querySelector('img') : null;
         this.ctx.page = 0;
+        this.ctx.doc = null;
         this.ctx.table = !!(el.nodeName === 'TABLE');
         this.ctx.image = !!img;
         this.ctx.captionPlace = img ? captionPlace(img) : '';
@@ -11405,10 +11493,25 @@ ${insideObjects('.eb-paper.boxed')} {
        * page. A page is not a thing in the document -- it is where the writing
        * happened to fall -- so these act on the blocks standing on it.
        */
+      /** The right button on a document in the list: what can be done to the file. */
+      docCtx(e, d) {
+        this.ctx.doc = d;
+        this.ctx.page = 0;
+        this.ctx.table = false;
+        this.ctx.image = false;
+        this.ctx.captionPlace = '';
+        this.ctx.frame = false;
+        this.ctx.text = false;
+        this.ctx.link = false;
+        this.ctx.list = false;
+        this.ctx.selection = false;
+        this.placeCtx(e.clientX, e.clientY);
+      },
       pageCtx(e, n) {
         // Not goToPage: scrolling there would shut the menu on the way. Going to
         // the page is the first item in it, for anyone who wants that.
         this.ctx.page = n;
+        this.ctx.doc = null;
         this.ctx.table = false;
         this.ctx.image = false;
         this.ctx.captionPlace = '';
