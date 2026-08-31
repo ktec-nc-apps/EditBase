@@ -7718,7 +7718,7 @@ ${insideObjects('.eb-paper.boxed')} {
   <!-- Who else on this server may read or write in this document. -->
   <div v-if="share.open" class="eb-modal-back" @click="share.open = false">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
-      <h3>{{ t('Share “{name}”', { name: share.title }) }}</h3>
+      <h3>{{ share.category ? t('Share the category “{name}”', { name: share.title }) : t('Share “{name}”', { name: share.title }) }}</h3>
       <div class="body">
         <div class="eb-field">
           <label>{{ t('Give it to someone on this server') }}</label>
@@ -7740,6 +7740,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <button class="eb-btn ghost danger" @click="dropShare(p.id)">{{ t('Stop sharing') }}</button>
           </li>
         </ol>
+        <p class="eb-tip" v-if="share.category">{{ t('A category is a folder, so everything filed in it is shared, and so is everything filed in it afterwards. Somebody who may write in it can add documents to it as well.') }}</p>
         <p class="eb-tip">{{ t('This is Nextcloud’s own sharing: the same share shows in Files, and it can be taken back from either place. A document shared with you appears under “Shared with me” in the list.') }}</p>
       </div>
       <div class="foot">
@@ -8139,6 +8140,8 @@ ${insideObjects('.eb-paper.boxed')} {
     <!-- The right button on a category in the list down the left. -->
     <template v-if="ctx.cat !== null">
       <div class="hd">{{ ctx.cat.label }}</div>
+      <button class="ci" v-if="ctx.cat.key && ctx.cat.key !== '~shared'" @click="shareCategory(ctx.cat)">{{ t('Share…') }}</button>
+      <div class="sep" v-if="ctx.cat.key && ctx.cat.key !== '~shared'"></div>
       <div class="eb-swatches">
         <button v-for="c in catColourChoices" :key="c.value || 'none'" class="sw" :class="{ on: (ctx.cat.colour || '') === c.value }"
           :style="c.value ? { background: c.value } : {}" :title="c.label" @click="setCatColour(ctx.cat.key, c.value)"></button>
@@ -8599,7 +8602,7 @@ ${insideObjects('.eb-paper.boxed')} {
         stylesOpen: false, styleKey: 'h2', cssOpen: false, cssRules: 0, cssBad: false,
         runAt: ['header', 'c'],
         checkOpen: false, checks: [],
-        share: { open: false, id: 0, title: '', term: '', found: [], list: [] },
+        share: { open: false, id: 0, title: '', term: '', found: [], list: [], category: false },
         // Who else has this document open, and what is being written in it here
         // that must not be overwritten by their copy.
         people: [], heldBack: 0, mine: new Set(),
@@ -8969,13 +8972,30 @@ ${insideObjects('.eb-paper.boxed')} {
       docGroups() {
         const groups = new Map();
         const put = (key, label, d) => {
-          if (!groups.has(key)) { groups.set(key, { key, label, docs: [], colour: this.catColours[key] || '' }); }
-          if (d) { groups.get(key).docs.push(d); }
+          if (!groups.has(key)) {
+            groups.set(key, { key, label, docs: [], colour: this.catColours[key] || '', folderId: 0, theirs: key.charAt(0) === '~' });
+          }
+          const g = groups.get(key);
+          if (d) {
+            g.docs.push(d);
+            // A category somebody else shared is not inside this user's own save
+            // folder, so it is known by the folder the documents in it are in.
+            if (!g.folderId && d.shared && d.folderId) { g.folderId = d.folderId; }
+          }
         };
         put('', this.t('Not in a category'), null);
         this.folders.forEach((f) => put(f, f, null));
         this.docs.forEach((d) => {
-          if (d.shared) { put('~shared', this.t('Shared with me'), d); return; }
+          if (d.shared) {
+            // A whole category shared by somebody else stays a category, under
+            // their name; a single document shared on its own has none.
+            const key = d.folder ? '~shared/' + d.folder : '~shared';
+            const label = d.folder
+              ? this.t('{folder} — from {who}', { folder: d.folder, who: d.owner })
+              : this.t('Shared with me');
+            put(key, label, d);
+            return;
+          }
           put(d.folder || '', d.folder || this.t('Not in a category'), d);
         });
         const out = Array.from(groups.values());
@@ -9162,8 +9182,13 @@ ${insideObjects('.eb-paper.boxed')} {
         const paper = normalisePaper(this.defaultPaper);
         const body = '<p><br></p>';
         try {
-          const where = this.openCat && this.openCat !== '~shared' ? this.openCat : '';
-          const created = await api('documents', { method: 'POST', body: { name: title, folder: where, content: buildHtml({ title, paper, body, lang: this.docLang() }) } });
+          const drawer = this.docGroups.find((g) => g.key === this.openCat);
+          const theirs = drawer && drawer.theirs ? drawer.folderId : 0;
+          const where = drawer && !drawer.theirs ? drawer.key : '';
+          const created = await api('documents', {
+            method: 'POST',
+            body: { name: title, folder: where, folderId: theirs, content: buildHtml({ title, paper, body, lang: this.docLang() }) },
+          });
           await this.loadDocs();
           await this.openDoc(created.id);
           this.notify(this.t('Created {name}', { name: created.name }));
@@ -10437,11 +10462,25 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         this.checks = found;
       },
+      /**
+       * Share a whole category. A category is a folder, so this is the same share
+       * as any other: everything filed in it goes with it, and so does everything
+       * filed in it afterwards.
+       */
+      async shareCategory(g) {
+        this.closeCtx();
+        if (!g || !g.key || g.key === '~shared') { return; }
+        try {
+          const r = await api('folders/id?path=' + encodeURIComponent(g.key));
+          this.share = { open: true, id: r.id, title: g.label, term: '', found: [], list: [], category: true };
+          await this.reloadShares();
+        } catch (e) { this.notify(this.t('Could not share it: {msg}', { msg: e.message })); }
+      },
       /** Who else may read or write in this document. */
       async openShare(d) {
         this.closeCtx();
         if (!d || !d.id) { return; }
-        this.share = { open: true, id: d.id, title: d.title || d.name, term: '', found: [], list: [] };
+        this.share = { open: true, id: d.id, title: d.title || d.name, term: '', found: [], list: [], category: false };
         await this.reloadShares();
       },
       async reloadShares() {

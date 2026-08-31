@@ -41,8 +41,10 @@ sheets of paper, so what is on the screen is what comes out of the printer.
 - **Categories**: a box for each, in a colour of your choosing, opening one at a
   time, with documents carried between them by dragging. A category is an ordinary
   folder inside the save folder, so the same filing is there in Files
-- **Shared with other accounts** on the same server, to read or to write —
-  Nextcloud's own sharing, undone from either place
+- **Shared with other accounts** on the same server, to read or to write — a
+  single document, or a whole category, in which case everything filed in it goes
+  too and the other person can add to it. It is Nextcloud's own sharing, undone
+  from either place
 - **Two people can write in one document at once**: each copy asks how the file
   stands every couple of seconds and folds in what the other has written, block by
   block. What you are typing is never overwritten
@@ -174,8 +176,10 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 - **カテゴリ** ― 色を選べる枠で表示し、開けるのは一度に一つ。ドラッグで文書を
   他のカテゴリへ移せます。カテゴリは保存フォルダの中のふつうのフォルダなので、
   Files でも同じように整理されています
-- **同じサーバーの他のアカウントと共有**（読むだけ／書き込める）。Nextcloud 本体の
-  共有機能そのものなので、どちらからでも解除できます
+- **同じサーバーの他のアカウントと共有**（読むだけ／書き込める）。**文書ごとにも、
+  カテゴリごとにも**共有できます。カテゴリを共有すると中の文書はすべて渡り、相手が
+  そこに文書を追加することもできます。Nextcloud 本体の共有機能そのものなので、
+  どちらからでも解除できます
 - **一つの文書を二人で同時に編集できます。** 各自の画面が数秒ごとにファイルの状態を
   問い合わせ、相手が書いた段落を取り込みます。自分が入力中の段落が上書きされることは
   ありません

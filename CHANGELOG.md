@@ -68,9 +68,11 @@ The first version. Everything below is new, because there was nothing before it.
   opening one at a time, with documents carried between them by dragging a row on
   to another box. A category is an ordinary folder, so the same filing is there in
   Files.
-- Sharing with other accounts on this server, from the right button on a document:
-  Nextcloud's own sharing, to read or to write, taken back from either place. What
-  others have shared arrives under “Shared with me”.
+- Sharing with other accounts on this server, from the right button on a document
+  or on a category: Nextcloud's own sharing, to read or to write, taken back from
+  either place. A shared category hands over everything filed in it, and everything
+  filed in it afterwards; somebody who may write in one can put new documents in it
+  as well. What others have shared arrives under their own name in the list.
 - Writing in one document at the same time as somebody else. Every block of the
   document carries a name of its own; each copy asks the server every couple of
   seconds how the file stands and who else has it open, and folds in whatever the

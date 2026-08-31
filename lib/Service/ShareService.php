@@ -6,6 +6,7 @@ namespace OCA\EditBase\Service;
 
 use OCP\Constants;
 use OCP\Files\File;
+use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
@@ -31,10 +32,14 @@ class ShareService {
 	) {
 	}
 
-	/** The file, resolved inside the asking user's own storage. */
-	private function node(string $userId, int $id): File {
+	/**
+	 * The thing being shared, resolved inside the asking user's own storage. It is
+	 * a document or a category, and a category is a folder: sharing one hands over
+	 * everything filed in it, and everything filed in it later.
+	 */
+	private function node(string $userId, int $id): Node {
 		foreach ($this->rootFolder->getUserFolder($userId)->getById($id) as $node) {
-			if ($node instanceof File) {
+			if ($node instanceof File || $node instanceof Folder) {
 				return $node;
 			}
 		}
@@ -75,12 +80,12 @@ class ShareService {
 		}
 		$node = $this->node($userId, $id);
 		if (!$node->isShareable()) {
-			throw new NotPermittedException('this document may not be shared on');
+			throw new NotPermittedException('this may not be shared on');
 		}
 		// Already shared with them: change what they may do rather than making a second one.
 		foreach ($this->shares->getSharesBy($userId, IShare::TYPE_USER, $node, false, 50) as $existing) {
 			if ($existing->getSharedWith() === $with) {
-				$existing->setPermissions($this->permissions($canEdit));
+				$existing->setPermissions($this->permissions($canEdit, $node instanceof Folder));
 				$this->shares->updateShare($existing);
 				return $this->listShares($userId, $id);
 			}
@@ -90,7 +95,7 @@ class ShareService {
 		$share->setShareType(IShare::TYPE_USER);
 		$share->setSharedWith($with);
 		$share->setSharedBy($userId);
-		$share->setPermissions($this->permissions($canEdit));
+		$share->setPermissions($this->permissions($canEdit, $node instanceof Folder));
 		$this->shares->createShare($share);
 		return $this->listShares($userId, $id);
 	}
@@ -135,10 +140,16 @@ class ShareService {
 		return array_slice($out, 0, 25);
 	}
 
-	private function permissions(bool $canEdit): int {
-		return $canEdit
-			? Constants::PERMISSION_READ | Constants::PERMISSION_UPDATE | Constants::PERMISSION_SHARE
-			: Constants::PERMISSION_READ;
+	/**
+	 * What the other person may do. A category is a folder, and writing in one
+	 * means making and deleting documents in it as well as changing them.
+	 */
+	private function permissions(bool $canEdit, bool $folder = false): int {
+		if (!$canEdit) {
+			return Constants::PERMISSION_READ;
+		}
+		$out = Constants::PERMISSION_READ | Constants::PERMISSION_UPDATE | Constants::PERMISSION_SHARE;
+		return $folder ? $out | Constants::PERMISSION_CREATE | Constants::PERMISSION_DELETE : $out;
 	}
 
 	private function displayName(string $with, int $type): string {

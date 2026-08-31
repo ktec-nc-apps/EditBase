@@ -44,6 +44,7 @@ return [
 		// folders to keep them in, and sharing them with other accounts here
 		['name' => 'api#folders', 'url' => '/api/folders', 'verb' => 'GET'],
 		['name' => 'api#makeFolder', 'url' => '/api/folders', 'verb' => 'POST'],
+		['name' => 'api#folderId', 'url' => '/api/folders/id', 'verb' => 'GET'],
 		['name' => 'api#documentShares', 'url' => '/api/documents/{id}/shares', 'verb' => 'GET'],
 		['name' => 'api#shareDocument', 'url' => '/api/documents/{id}/shares', 'verb' => 'POST'],
 		['name' => 'api#unshareDocument', 'url' => '/api/documents/{id}/shares/remove', 'verb' => 'POST'],
