@@ -117,6 +117,23 @@ class DocumentService {
 		return $path;
 	}
 
+	/**
+	 * The id of a category, so that it can be shared like anything else. The save
+	 * folder itself is not one: sharing that would hand over every document there
+	 * is, which is not what anyone means by sharing a category.
+	 */
+	public function folderId(string $userId, string $path): int {
+		$path = $this->cleanFolder($path);
+		if ($path === '') {
+			throw new \InvalidArgumentException('the whole of your own folder is not a category');
+		}
+		$node = $this->folder($userId)->get($path);
+		if (!($node instanceof Folder)) {
+			throw new \InvalidArgumentException('that is not a category');
+		}
+		return $node->getId();
+	}
+
 	/** Put a document in another folder, or back at the top with an empty path. */
 	public function move(string $userId, int $id, string $path): array {
 		$file = $this->file($userId, $id);
@@ -243,8 +260,27 @@ class DocumentService {
 	}
 
 	/** @return array<string, mixed> */
-	public function create(string $userId, string $name, string $content, string $path = ''): array {
+	public function create(string $userId, string $name, string $content, string $path = '', int $folderId = 0): array {
 		$folder = $this->folder($userId);
+		// A category somebody else shared: it is not inside this user's own save
+		// folder, so it is found by its id rather than by a path from there.
+		if ($folderId > 0) {
+			$where = null;
+			foreach ($this->rootFolder->getUserFolder($userId)->getById($folderId) as $node) {
+				if ($node instanceof Folder) {
+					$where = $node;
+					break;
+				}
+			}
+			if ($where === null) {
+				throw new NotFoundException('that category is not there');
+			}
+			if (!$where->isCreatable()) {
+				throw new \OCP\Files\NotPermittedException('that category is read only');
+			}
+			$file = $where->newFile($this->freeName($where, $name), $content);
+			return $this->describe($file, false, $where->getName());
+		}
 		$path = $this->cleanFolder($path);
 		if ($path !== '') {
 			$this->makeFolder($userId, $path);
@@ -354,6 +390,7 @@ class DocumentService {
 			'title' => $this->stripExt($file->getName()),
 			'path' => $file->getPath(),
 			'folder' => $folder ?? '',
+			'folderId' => $file->getParent()->getId(),
 			'size' => $file->getSize(),
 			'mtime' => $file->getMTime(),
 			'etag' => $file->getEtag(),

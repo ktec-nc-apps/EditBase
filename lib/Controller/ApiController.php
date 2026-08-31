@@ -298,6 +298,15 @@ class ApiController extends Controller {
 		return $this->run(fn () => ['folders' => $this->documents->folders($this->uid())]);
 	}
 
+	/** A category's own id, so it can be shared the way a document is. */
+	#[NoAdminRequired]
+	public function folderId(): JSONResponse {
+		return $this->run(function () {
+			$path = (string)($this->request->getParam('path') ?? '');
+			return ['id' => $this->documents->folderId($this->uid(), $path)];
+		});
+	}
+
 	#[NoAdminRequired]
 	public function makeFolder(): JSONResponse {
 		return $this->run(function () {
@@ -350,7 +359,8 @@ class ApiController extends Controller {
 			$name = (string)($this->request->getParam('name') ?? 'Document');
 			$content = (string)($this->request->getParam('content') ?? '');
 			$folder = (string)($this->request->getParam('folder') ?? '');
-			return $this->documents->create($this->uid(), $name, $content, $folder);
+			$folderId = (int)($this->request->getParam('folderId') ?? 0);
+			return $this->documents->create($this->uid(), $name, $content, $folder, $folderId);
 		});
 	}
 
