@@ -40,6 +40,7 @@ return [
 		['name' => 'api#moveDocument', 'url' => '/api/documents/{id}/move', 'verb' => 'POST'],
 		['name' => 'api#documentState', 'url' => '/api/documents/{id}/state', 'verb' => 'GET'],
 		['name' => 'api#leaveDocument', 'url' => '/api/documents/{id}/leave', 'verb' => 'POST'],
+		['name' => 'api#liveDocument', 'url' => '/api/documents/{id}/live', 'verb' => 'POST'],
 
 		// folders to keep them in, and sharing them with other accounts here
 		['name' => 'api#folders', 'url' => '/api/folders', 'verb' => 'GET'],

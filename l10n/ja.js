@@ -10,6 +10,7 @@ OC.L10N.register(
     "Numbers": "数字・分数",
     "Close": "閉じる",
     "New document": "新しい文書",
+    "Somebody else has this document open. What you type is shown to them as you type it.": "他の人がこの文書を開いています。入力した内容はそのまま相手にも表示されます。",
     "Share the category “{name}”": "カテゴリ「{name}」を共有",
     "A category is a folder, so everything filed in it is shared, and so is everything filed in it afterwards. Somebody who may write in it can add documents to it as well.": "カテゴリはフォルダなので、中の文書はすべて共有されます。あとから入れた文書も同じです。書き込み権限を渡した相手は、そのカテゴリに文書を追加することもできます。",
     "{folder} — from {who}": "{folder}（{who}さんから）",

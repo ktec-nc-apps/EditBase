@@ -4186,6 +4186,8 @@ ${insideObjects('.eb-paper.boxed')} {
   // stack of real sheets, and a spacer is pushed in wherever a block would straddle
   // the join, so what is on screen is what comes out of the printer.
   const PAGE_GAP = 16;
+  /** The colours the other people writing in a document are drawn in. */
+  const MATE_COLOURS = ['#2563eb', '#c2410c', '#0f766e', '#7c3aed', '#b91c1c', '#0369a1'];
 
   /**
    * Where the spacers go, as pure arithmetic over measured boxes — kept separate
@@ -4839,7 +4841,7 @@ ${insideObjects('.eb-paper.boxed')} {
             kept += 1;
           } else {
             here.replaceWith(block.cloneNode(true));
-            ours.set(id, c.querySelector('[data-eb-id="' + id + '"]') || here);
+            ours.set(id, c.querySelector(':scope > [data-eb-id="' + id + '"]') || here);
             taken += 1;
           }
         }
@@ -5203,7 +5205,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'eb-run', 'eb-runfill', 'l', 'c', 'r',
     'eb-header', 'eb-footer',
-    'eb-ins', 'eb-del',
+    'eb-ins', 'eb-del', 'eb-lockedby',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
     'eb-cap-t', 'eb-cap-in', 'eb-cap-none',
@@ -7046,6 +7048,12 @@ ${insideObjects('.eb-paper.boxed')} {
           :style="{ left: placeBox.x + 'px', top: placeBox.y + 'px', width: placeBox.w + 'px', height: placeBox.h + 'px' }"></div>
         <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow, placing: !!placing }]"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
+        <!-- Where the other people writing in this document have their carets.
+             Drawn from what they say they are doing, once a second or so. -->
+        <div class="eb-mate" v-for="m in live.carets" :key="m.id"
+          :style="{ left: m.x + 'px', top: m.y + 'px', height: m.h + 'px', '--mate': m.colour }">
+          <span class="nm">{{ m.name }}</span>
+        </div>
         <div class="eb-fdrop" v-if="frame.drop >= 0" :style="{ top: frame.drop + 'px' }"></div>
         <!-- The line a frame has just snapped to, drawn while it is being dragged
              so the writer can see what it caught on. -->
@@ -8606,6 +8614,10 @@ ${insideObjects('.eb-paper.boxed')} {
         // Who else has this document open, and what is being written in it here
         // that must not be overwritten by their copy.
         people: [], heldBack: 0, mine: new Set(),
+        // Shared mode: while somebody else has the document open, what is typed
+        // here goes to them about a second later without waiting for a save, the
+        // paragraph they are in is held for them, and their caret is drawn.
+        live: { on: false, since: 0, busy: false, carets: [], locks: {} },
         // What was written here lately, kept for a minute after it was saved, so
         // that somebody else writing over the same paragraph can be reported
         // rather than quietly winning.
@@ -9249,8 +9261,20 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The body as it goes into the file: editor-only marks taken back out. */
       exportBody() {
+        // Names first. Pressing Enter splits a paragraph into two elements with
+        // one name between them; if the file is written in that moment, both
+        // copies of the document rename it -- differently -- and from then on
+        // each thinks the other's paragraph is a new one. That is where a
+        // duplicated paragraph came from when two people were writing.
+        nameBlocks(canvas());
         const clone = canvas().cloneNode(true);
         clone.querySelectorAll('[contenteditable]').forEach((el) => el.removeAttribute('contenteditable'));
+        // A paragraph held for whoever is writing in it is this screen's business.
+        clone.querySelectorAll('.eb-lockedby').forEach((el) => {
+          el.classList.remove('eb-lockedby');
+          el.removeAttribute('data-eb-who');
+          if (!el.getAttribute('class')) { el.removeAttribute('class'); }
+        });
         clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
@@ -9337,7 +9361,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!got.taken && !got.kept) { return; }
         let overwritten = 0;
         before.forEach((was, id) => {
-          const el = c.querySelector('[data-eb-id="' + id + '"]');
+          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
           if (!el || el.outerHTML !== was) { overwritten += 1; }
         });
         this.heldBack = got.kept;
@@ -9365,6 +9389,186 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       stopWatching() {
         if (this._openTimer) { window.clearInterval(this._openTimer); this._openTimer = null; }
+        this.setLive(false);
+      },
+      /**
+       * Shared mode goes on the moment somebody else opens the document, and off
+       * again when they leave: a document nobody else has open costs nothing.
+       */
+      setLive(on) {
+        if (on === this.live.on) { return; }
+        this.live.on = on;
+        if (on) {
+          this.live.since = 0;
+          this.snap = new Map();
+          this._liveTimer = window.setInterval(() => this.liveTick(), 800);
+          this.liveTick();
+          this.notify(this.t('Somebody else has this document open. What you type is shown to them as you type it.'));
+        } else {
+          if (this._liveTimer) { window.clearInterval(this._liveTimer); this._liveTimer = null; }
+          this.live.carets = [];
+          this.unlockAll();
+        }
+      },
+      /** One turn of the fast lane: what was typed here, and what they typed. */
+      async liveTick() {
+        if (!this.doc.id || this.live.busy || this.composing) { return; }
+        this.live.busy = true;
+        try {
+          const c = canvas();
+          if (!c) { return; }
+          if (!this.snap) { this.snap = new Map(); }
+          // What has changed here since the last turn.
+          const blocks = [];
+          const now = new Set();
+          let after = '';
+          Array.from(c.children).forEach((el) => {
+            if (!el.getAttribute || (el.classList && el.classList.contains('eb-pagespacer'))) { return; }
+            const id = el.getAttribute('data-eb-id');
+            if (!id) { return; }
+            now.add(id);
+            const html = this.liveHtml(el);
+            if (this.snap.get(id) !== html) { blocks.push({ id: id, html: html, after: after }); }
+            after = id;
+          });
+          this.snap.forEach((was, id) => { if (!now.has(id)) { blocks.push({ id: id, gone: true }); } });
+          const mark = caretMark(c);
+          const answer = await api('documents/' + this.doc.id + '/live', {
+            method: 'POST',
+            body: {
+              since: this.live.since,
+              blocks: blocks,
+              where: { block: mark ? mark.id : '', caret: mark ? mark.at : 0, writing: !!this.dirty },
+            },
+          });
+          // Only once it has gone is it the last thing they have seen from here.
+          blocks.forEach((b) => { if (b.gone) { this.snap.delete(b.id); } else { this.snap.set(b.id, b.html); } });
+          this.live.since = answer.seq || this.live.since;
+          this.people = answer.people || [];
+          this.takeLive(answer.items || []);
+          this.showMates();
+          if (!this.othersHere.length) { this.setLive(false); }
+        } catch (e) { /* the next turn will ask again */ } finally { this.live.busy = false; }
+      },
+      /** A block as it goes down the fast lane: without the marks of this screen. */
+      liveHtml(el) {
+        const copy = el.cloneNode(true);
+        copy.removeAttribute('contenteditable');
+        if (copy.classList) { copy.classList.remove('eb-lockedby'); }
+        copy.removeAttribute('data-eb-who');
+        Array.from(copy.querySelectorAll('span.eb-flow, .eb-pagespacer')).forEach((n) => n.remove());
+        return copy.outerHTML;
+      },
+      /** What the others have typed, put into this copy without moving the caret. */
+      takeLive(items) {
+        const c = canvas();
+        if (!c || !items.length) { return; }
+        const mark = caretMark(c);
+        const mineNow = mark ? mark.id : '';
+        let changed = false;
+        items.forEach((item) => {
+          (item.blocks || []).forEach((b) => {
+            if (!b.id || b.id === mineNow) { return; }
+            const here = c.querySelector(':scope > [data-eb-id="' + b.id + '"]');
+            if (b.gone) {
+              if (here && here.parentNode === c) { here.remove(); changed = true; }
+              return;
+            }
+            const holder = document.createElement('div');
+            holder.innerHTML = sanitiseHtml(b.html);
+            const fresh = holder.firstElementChild;
+            if (!fresh) { return; }
+            if (here && here.parentNode === c) {
+              if (here.outerHTML === fresh.outerHTML) { return; }
+              here.replaceWith(fresh);
+            } else {
+              const prev = b.after ? c.querySelector(':scope > [data-eb-id="' + b.after + '"]') : null;
+              if (prev && prev.parentNode === c) { prev.after(fresh); } else { c.appendChild(fresh); }
+            }
+            this.snap.set(b.id, this.liveHtml(fresh));
+            changed = true;
+          });
+        });
+        if (!changed) { return; }
+        putCaretBack(c, mark);
+        this.recount();
+        this.$nextTick(() => this.reflowWrap());
+      },
+      /**
+       * The paragraph somebody else is writing in is held for them: it cannot be
+       * typed in here, and it is tinted with their name on it. Two people in one
+       * paragraph is the one case this cannot merge, so it is not allowed to
+       * happen rather than being lost afterwards.
+       */
+      showMates() {
+        const c = canvas();
+        const wrap = this.$el ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!c || !wrap) { return; }
+        const box = wrap.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const carets = [];
+        const wanted = {};
+        this.othersHere.forEach((p, i) => {
+          if (!p.block) { return; }
+          const block = c.querySelector(':scope > [data-eb-id="' + p.block + '"]');
+          if (!block) { return; }
+          // Their caret is drawn wherever it is; the paragraph is only held while
+          // they are actually writing in it.
+          if (p.active) { wanted[p.block] = p.name; }
+          const spot = this.spotIn(block, p.caret);
+          if (spot) {
+            carets.push({
+              id: p.id, name: p.name, colour: MATE_COLOURS[i % MATE_COLOURS.length],
+              x: (spot.left - box.left) / z, y: (spot.top - box.top) / z, h: spot.height / z,
+            });
+          }
+        });
+        this.live.carets = carets;
+        // Hold the paragraphs they are in, and let go of the ones they have left.
+        Object.keys(this.live.locks).forEach((id) => {
+          if (wanted[id]) { return; }
+          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
+          if (el) { el.removeAttribute('contenteditable'); el.classList.remove('eb-lockedby'); el.removeAttribute('data-eb-who'); }
+          delete this.live.locks[id];
+        });
+        Object.keys(wanted).forEach((id) => {
+          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
+          if (!el) { return; }
+          el.setAttribute('contenteditable', 'false');
+          el.classList.add('eb-lockedby');
+          el.setAttribute('data-eb-who', wanted[id]);
+          this.live.locks[id] = true;
+        });
+      },
+      unlockAll() {
+        const c = canvas();
+        if (!c) { return; }
+        Array.from(c.querySelectorAll('.eb-lockedby')).forEach((el) => {
+          el.removeAttribute('contenteditable');
+          el.classList.remove('eb-lockedby');
+          el.removeAttribute('data-eb-who');
+        });
+        this.live.locks = {};
+      },
+      /** Where a character of a block is on the screen. */
+      spotIn(block, at) {
+        const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+        let left = Math.max(0, at || 0);
+        let node = walk.nextNode();
+        while (node) {
+          if (left <= node.length) {
+            const r = document.createRange();
+            r.setStart(node, left);
+            r.collapse(true);
+            const rect = r.getBoundingClientRect();
+            if (rect.height) { return rect; }
+            break;
+          }
+          left -= node.length;
+          node = walk.nextNode();
+        }
+        const rect = block.getBoundingClientRect();
+        return rect.height ? { left: rect.left, top: rect.top, height: Math.min(rect.height, 24) } : null;
       },
       /** Tell the server this document has been closed here. */
       letGo(id) {
@@ -9383,7 +9587,10 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!this.doc.id || this.saving) { return; }
         try {
           const state = await api('documents/' + this.doc.id + '/state?writing=' + (this.dirty ? '1' : '0'));
-          this.people = state.people || [];
+          if (!this.live.on) { this.people = state.people || []; }
+          // Somebody else has it open: shared mode, and everything typed here goes
+          // to them as it is typed.
+          this.setLive((this.people || []).filter((p) => !p.me).length > 0);
           if (!state.etag || state.etag === this.doc.etag) { return; }
           // Somebody has written. Their version is read and folded in -- but not
           // in the middle of a Japanese word, and not while a key is still warm:

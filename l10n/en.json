@@ -9,6 +9,7 @@
         "Numbers": "Numbers",
         "Close": "Close",
         "New document": "New document",
+        "Somebody else has this document open. What you type is shown to them as you type it.": "Somebody else has this document open. What you type is shown to them as you type it.",
         "Share the category “{name}”": "Share the category “{name}”",
         "A category is a folder, so everything filed in it is shared, and so is everything filed in it afterwards. Somebody who may write in it can add documents to it as well.": "A category is a folder, so everything filed in it is shared, and so is everything filed in it afterwards. Somebody who may write in it can add documents to it as well.",
         "{folder} — from {who}": "{folder} — from {who}",
