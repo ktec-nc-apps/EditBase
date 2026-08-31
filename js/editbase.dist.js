@@ -8523,10 +8523,10 @@ return function render(_ctx, _cache) {
                       innerHTML: _ctx.icons.boxW
                     }, null, 8 /* PROPS */, _hoisted_105)
                   ], 8 /* PROPS */, _hoisted_104),
-                  (_ctx.frame.extras.length)
+                  (_ctx.frame.more)
                     ? (_openBlock(), _createElementBlock("span", _hoisted_106))
                     : _createCommentVNode("v-if", true),
-                  (_ctx.frame.extras.length)
+                  (_ctx.frame.more)
                     ? (_openBlock(), _createElementBlock("button", {
                         key: 1,
                         class: "eb-tb",
@@ -8538,7 +8538,7 @@ return function render(_ctx, _cache) {
                         }, null, 8 /* PROPS */, _hoisted_108)
                       ], 8 /* PROPS */, _hoisted_107))
                     : _createCommentVNode("v-if", true),
-                  (_ctx.frame.extras.length)
+                  (_ctx.frame.more)
                     ? (_openBlock(), _createElementBlock("button", {
                         key: 2,
                         class: "eb-tb",
@@ -13950,7 +13950,7 @@ return function render(_ctx, _cache) {
         folders: [], openCat: '', naming: false, catNew: '', catColours: {},
         dragDoc: 0, dropCat: null,
         props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], more: 0 },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -16127,8 +16127,19 @@ return function render(_ctx, _cache) {
         }
         // The boxes round the ones held with Shift. They carry no bar and no
         // handles: one of them is in charge and that is the one with the bar.
+        //
+        // A frame carried on to the next page is one frame, so the part of it on
+        // every other page wears a box as well. Without this only the first page
+        // of it was drawn, and the rest of the frame looked like nothing at all.
         frameMore = frameMore.filter((o) => o && o.parentNode && c.contains(o) && o !== el);
-        this.frame.extras = frameMore.map((o) => {
+        const also = frameMore.slice();
+        if (chainable(el)) {
+          chainOf(chainLead(el)).forEach((part) => {
+            if (part !== el && part.parentNode && c.contains(part) && also.indexOf(part) < 0) { also.push(part); }
+          });
+        }
+        this.frame.more = frameMore.length;
+        this.frame.extras = also.map((o) => {
           const q = o.getBoundingClientRect();
           return { x: (q.left - b.left) / z, y: (q.top - b.top) / z, w: q.width / z, h: q.height / z };
         });
