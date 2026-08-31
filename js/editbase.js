@@ -14490,7 +14490,9 @@ ${insideObjects('.eb-paper.boxed')} {
         // Splitting a paragraph inside a mark leaves the empty half behind, and
         // typing does not go through a command, so it is swept up here.
         if (this.review) { tidyMarks(); this.changes = countChanges(); }
-        blankToParagraph(c);
+        // Never in the middle of a Japanese conversion: replacing the block the
+        // caret is in would throw the half-finished word away.
+        if (!this.composing) { blankToParagraph(c); }
         this.touch();
         this.recount();
         this.queueWrap();
