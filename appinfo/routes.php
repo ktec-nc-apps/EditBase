@@ -39,6 +39,9 @@ return [
 		['name' => 'api#duplicateDocument', 'url' => '/api/documents/{id}/duplicate', 'verb' => 'POST'],
 		['name' => 'api#moveDocument', 'url' => '/api/documents/{id}/move', 'verb' => 'POST'],
 		['name' => 'api#documentState', 'url' => '/api/documents/{id}/state', 'verb' => 'GET'],
+		['name' => 'api#documentVersions', 'url' => '/api/documents/{id}/versions', 'verb' => 'GET'],
+		['name' => 'api#readVersion', 'url' => '/api/documents/{id}/versions/{number}', 'verb' => 'GET'],
+		['name' => 'api#restoreVersion', 'url' => '/api/documents/{id}/versions/restore', 'verb' => 'POST'],
 		['name' => 'api#leaveDocument', 'url' => '/api/documents/{id}/leave', 'verb' => 'POST'],
 		['name' => 'api#liveDocument', 'url' => '/api/documents/{id}/live', 'verb' => 'POST'],
 

@@ -59,6 +59,15 @@ The first version. Everything below is new, because there was nothing before it.
   under something that was told to part them, a frame holding more than it can
   show, a photograph heavy enough to make the file slow, a page with nothing on
   it. Each one says which page it is on and takes you there.
+- Versions kept beside the document: the state before each save is written to a
+  file of its own in the same folder, named after the document with its extension
+  replaced by a number -- 報告書.html keeps 報告書.#01, the newest, with the older
+  ones shifting down as far as the writer allows (up to 99, ten by default, nought
+  for none). They are plain HTML like everything else, so a version opens in any
+  browser. A version is taken when the writer saves; the autosave can be made to
+  take one too. They follow the document when it is renamed or moved to another
+  category, and go with it when it is deleted. Putting one back keeps what was
+  there as a version of its own, so that can be undone in turn.
 - A view of the raw HTML of the current document.
 - A layer bar and a page bar down the right. Every row of the layer bar can be
   dragged: two things standing on the paper change places in the pile, and anything

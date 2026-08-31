@@ -1169,3 +1169,11 @@
   padding: 0 6px; border-radius: 4px 4px 0 0; background: var(--primary); color: #fff;
   white-space: nowrap; pointer-events: none;
 }
+
+/* The versions kept beside a document. */
+#editbase-root .eb-versions { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+#editbase-root .eb-versions li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+#editbase-root .eb-versions .no { flex: 0 0 auto; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+#editbase-root .eb-versions .when { flex: 1 1 auto; }
+#editbase-root .eb-versions .sz { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+#editbase-root .eb-versions .eb-btn { flex: 0 0 auto; padding: 2px 10px; font-size: 12.5px; }

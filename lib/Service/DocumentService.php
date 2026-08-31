@@ -32,6 +32,7 @@ class DocumentService {
 		private IConfig $config,
 		private IShareManager $shares,
 		private IUserManager $users,
+		private VersionService $versions,
 	) {
 	}
 
@@ -150,8 +151,13 @@ class DocumentService {
 		if ($file->getParent()->getId() === $target->getId()) {
 			return $this->describe($file, false);
 		}
+		$was = $file->getParent();
+		$wasCalled = $file->getName();
 		$moved = $file->move($target->getPath() . '/' . $this->freeName($target, $this->stripExt($file->getName())));
-		return $this->describe($moved instanceof File ? $moved : $this->file($userId, $id), false, $path);
+		$file = $moved instanceof File ? $moved : $this->file($userId, $id);
+		// The versions go with it, into the same category.
+		$this->versions->follow($was, $wasCalled, $file);
+		return $this->describe($file, false, $path);
 	}
 
 	/**
@@ -304,15 +310,41 @@ class DocumentService {
 	 *
 	 * @return array<string, mixed>
 	 */
-	public function save(string $userId, int $id, string $content, string $etag = ''): array {
+	public function save(string $userId, int $id, string $content, string $etag = '', bool $manual = false): array {
 		$file = $this->file($userId, $id);
 		if ($etag !== '' && $file->getEtag() !== $etag) {
 			$out = $this->describe($file, true);
 			$out['stale'] = true;
 			return $out;
 		}
+		// The version is of what is there now, taken before it is written over --
+		// on every save, or only on the ones the writer asked for, as they choose.
+		$keep = $this->versions->keep($userId);
+		if ($keep > 0 && ($manual || $this->versions->when($userId) === 'auto') && $file->getSize() > 0) {
+			try {
+				$this->versions->take($file, $keep);
+			} catch (\Throwable) {
+				// A version that cannot be taken must not cost the writer their save.
+			}
+		}
 		$file->putContent($content);
 		return $this->describe($file, false);
+	}
+
+	/** The versions kept beside a document, newest first. */
+	public function versions(string $userId, int $id): array {
+		return $this->versions->list($this->file($userId, $id));
+	}
+
+	public function readVersion(string $userId, int $id, int $number): string {
+		return $this->versions->read($this->file($userId, $id), $number);
+	}
+
+	/** @return array<string, mixed> */
+	public function restoreVersion(string $userId, int $id, int $number): array {
+		$file = $this->file($userId, $id);
+		$this->versions->restore($file, $number, $this->versions->keep($userId));
+		return $this->describe($this->file($userId, $id), true);
 	}
 
 	/** What version the file is at now, without reading the whole of it. */
@@ -342,6 +374,7 @@ class DocumentService {
 		$target = $this->normaliseName($name);
 		if ($target !== $file->getName()) {
 			$folder = $file->getParent();
+			$was = $file->getName();
 			// move() returns the node at its new home; the old handle keeps the old path.
 			$moved = $file->move($folder->getPath() . '/' . $this->freeName($folder, $this->stripExt($target)));
 			if ($moved instanceof File) {
@@ -349,12 +382,17 @@ class DocumentService {
 			} else {
 				$file = $this->file($userId, $file->getId());
 			}
+			$this->versions->follow($folder, $was, $file);
 		}
 		return $this->describe($file, false);
 	}
 
 	public function delete(string $userId, int $id): void {
-		$this->file($userId, $id)->delete();
+		$file = $this->file($userId, $id);
+		// The versions of a document are of that document: they go with it, into
+		// the same trash, where they can be fetched back together.
+		$this->versions->drop($file);
+		$file->delete();
 	}
 
 	public function readContent(string $userId, int $id): string {

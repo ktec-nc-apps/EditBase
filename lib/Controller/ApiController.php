@@ -11,6 +11,7 @@ use OCA\EditBase\Service\FileBrowser;
 use OCA\EditBase\Service\ShareService;
 use OCA\EditBase\Service\SessionService;
 use OCA\EditBase\Service\LiveService;
+use OCA\EditBase\Service\VersionService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -34,6 +35,7 @@ class ApiController extends Controller {
 		private ShareService $sharing,
 		private SessionService $sessions,
 		private LiveService $live,
+		private VersionService $versions,
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
@@ -74,6 +76,10 @@ class ApiController extends Controller {
 				'theme' => $this->config->getUserValue($uid, Application::APP_ID, 'theme', 'auto'),
 				'language' => $this->config->getUserValue($uid, Application::APP_ID, 'language', 'auto'),
 				'paper' => $this->config->getUserValue($uid, Application::APP_ID, 'paper', ''),
+				// How many versions of a document are kept beside it, and when one
+				// is taken: every save, or only the ones the writer asks for.
+				'versionKeep' => $this->versions->keep($uid),
+				'versionWhen' => $this->versions->when($uid),
 				// What colour each category is drawn in, as the writer chose.
 				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
 				'languages' => $this->availableLanguages(),
@@ -110,6 +116,14 @@ class ApiController extends Controller {
 			$language = $this->request->getParam('language');
 			if (is_string($language) && $language !== '' && preg_match('/^[a-z]{2}(_[A-Za-z]{2,4})?$|^auto$/', $language)) {
 				$this->config->setUserValue($uid, Application::APP_ID, 'language', $language);
+			}
+			$keep = $this->request->getParam('versionKeep');
+			if ($keep !== null && $keep !== '') {
+				$this->versions->setKeep($uid, (int)$keep);
+			}
+			$when = $this->request->getParam('versionWhen');
+			if (is_string($when) && $when !== '') {
+				$this->versions->setWhen($uid, $when);
 			}
 			$colours = $this->request->getParam('folderColours');
 			if (is_string($colours) && strlen($colours) < 4000) {
@@ -325,6 +339,24 @@ class ApiController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function documentVersions(int $id): JSONResponse {
+		return $this->run(fn () => ['versions' => $this->documents->versions($this->uid(), $id)]);
+	}
+
+	#[NoAdminRequired]
+	public function readVersion(int $id, int $number): JSONResponse {
+		return $this->run(fn () => ['content' => $this->documents->readVersion($this->uid(), $id, $number)]);
+	}
+
+	#[NoAdminRequired]
+	public function restoreVersion(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$number = (int)($this->request->getParam('number') ?? 0);
+			return $this->documents->restoreVersion($this->uid(), $id, $number);
+		});
+	}
+
+	#[NoAdminRequired]
 	public function folders(): JSONResponse {
 		return $this->run(fn () => ['folders' => $this->documents->folders($this->uid())]);
 	}
@@ -403,7 +435,8 @@ class ApiController extends Controller {
 				throw new \InvalidArgumentException('content missing');
 			}
 			$etag = (string)($this->request->getParam('etag') ?? '');
-			return $this->documents->save($this->uid(), $id, $content, $etag);
+			$manual = (bool)($this->request->getParam('manual') ?? false);
+			return $this->documents->save($this->uid(), $id, $content, $etag, $manual);
 		});
 	}
 
