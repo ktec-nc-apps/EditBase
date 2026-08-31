@@ -6749,7 +6749,7 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb menu-btn" @touchend.prevent="sideOpen = !sideOpen" @click="sideOpen = !sideOpen" :title="t('Documents')"><span v-html="icons.menu"></span></button>
       <input class="title-input" v-model="doc.title" :placeholder="t('Untitled document')" @change="applyTitle" :disabled="!doc.id">
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
-      <button class="eb-btn" @click="save" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
+      <button class="eb-btn" @click="save(true)" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
       <button class="eb-btn" @click="printDoc" :disabled="!doc.id">🖨 <span class="lbl">{{ t('Print / PDF') }}</span></button>
       <button class="eb-btn ghost" @click="paperOpen = true" :disabled="!doc.id" :title="t('Paper setup')"><span v-html="icons.paper"></span></button>
       <button class="eb-btn ghost" @click="showSource" :disabled="!doc.id" :title="t('View the HTML')">&lt;/&gt;</button>
@@ -7680,6 +7680,20 @@ ${insideObjects('.eb-paper.boxed')} {
         </div>
         <div class="eb-row">
           <div class="eb-field">
+            <label>{{ t('Versions kept') }}</label>
+            <input type="number" min="0" max="99" step="1" v-model.number="settings.versionKeep">
+          </div>
+          <div class="eb-field">
+            <label>{{ t('A version is kept') }}</label>
+            <select v-model="settings.versionWhen">
+              <option value="manual">{{ t('When you save') }}</option>
+              <option value="auto">{{ t('Every time it is saved, autosave and all') }}</option>
+            </select>
+          </div>
+        </div>
+        <p class="eb-tip">{{ t('The version before each save is kept beside the document, named after it: 報告書.html keeps 報告書.#01, and the older ones shift down to #99. They are plain HTML and open in any browser. Nought keeps none.') }}</p>
+        <div class="eb-row">
+          <div class="eb-field">
             <label>{{ t('Theme') }}</label>
             <select v-model="settings.theme">
               <option value="auto">{{ t('Follow Nextcloud') }}</option>
@@ -7786,6 +7800,28 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="foot">
         <button class="eb-btn ghost" @click="clearStyle">{{ t('Reset this style') }}</button>
         <button class="eb-btn primary" @click="closeStyles">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The versions kept beside a document. -->
+  <div v-if="vers.open" class="eb-modal-back" @click="vers.open = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Versions of “{name}”', { name: vers.title }) }}</h3>
+      <div class="body">
+        <p class="eb-tip" v-if="!vers.list.length">{{ t('None yet. One is kept each time the document is saved, if versions are switched on in the settings.') }}</p>
+        <ol class="eb-versions" v-else>
+          <li v-for="v in vers.list" :key="v.number">
+            <span class="no">#{{ String(v.number).padStart(2, '0') }}</span>
+            <span class="when">{{ when(v.mtime) }}</span>
+            <span class="sz">{{ size(v.size) }}</span>
+            <button class="eb-btn ghost" @click="restoreVersion(v.number)">{{ t('Put this one back') }}</button>
+          </li>
+        </ol>
+        <p class="eb-tip">{{ t('Putting a version back keeps what is there now as #01 first, so it can be undone the same way. The version files sit beside the document in your Files and can be opened there like any other page.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn primary" @click="vers.open = false">{{ t('Done') }}</button>
       </div>
     </div>
   </div>
@@ -8236,6 +8272,7 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="ci" v-for="f in folders" :key="f" @click="moveDoc(ctx.doc, f)">{{ f }}</button>
         </div>
       </div>
+      <button class="ci" @click="openVersions(ctx.doc)">{{ t('Versions…') }}</button>
       <button class="ci" @click="openShare(ctx.doc)">{{ t('Share…') }}</button>
       <button class="ci" @click="openDocProps(ctx.doc)">{{ t('Properties…') }}</button>
       <div class="sep"></div>
@@ -8678,6 +8715,7 @@ ${insideObjects('.eb-paper.boxed')} {
         runAt: ['header', 'c'],
         checkOpen: false, checks: [],
         share: { open: false, id: 0, title: '', term: '', found: [], list: [], category: false },
+        vers: { open: false, id: 0, title: '', list: [] },
         // Who else has this document open, and what is being written in it here
         // that must not be overwritten by their copy.
         people: [], heldBack: 0, mine: new Set(),
@@ -8692,7 +8730,7 @@ ${insideObjects('.eb-paper.boxed')} {
         dirty: false,
         saving: false,
         savedAt: 0,
-        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [] },
+        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual' },
         autosave: true,
         guides: true,
         colour: '#111111',
@@ -9275,7 +9313,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       async openDoc(id) {
         if (this.narrow) { this.sideOpen = false; }
-        if (this.dirty && this.doc.id && this.doc.id !== id) { await this.save(); }
+        if (this.dirty && this.doc.id && this.doc.id !== id) { await this.save(true); }
         try {
           const d = await api('documents/' + id);
           const parsed = parseHtml(d.content);
@@ -9371,7 +9409,12 @@ ${insideObjects('.eb-paper.boxed')} {
           body: this.exportBody(),
         });
       },
-      async save() {
+      /**
+       * @param {boolean} [asked] The writer pressed Save, or closed the document.
+       *   A version is kept of what was there before such a save; the autosave
+       *   keeps one too only if the writer has asked for that in the settings.
+       */
+      async save(asked) {
         if (!this.doc.id || this.saving) { return; }
         this.saving = true;
         try {
@@ -9381,7 +9424,7 @@ ${insideObjects('.eb-paper.boxed')} {
           for (let go = 0; go < 2; go += 1) {
             const saved = await api('documents/' + this.doc.id, {
               method: 'PUT',
-              body: { content: this.currentHtml(), etag: this.doc.etag || '' },
+              body: { content: this.currentHtml(), etag: this.doc.etag || '', manual: !!asked },
             });
             if (saved.stale && saved.content) {
               this.doc.etag = saved.etag;
@@ -9777,7 +9820,7 @@ ${insideObjects('.eb-paper.boxed')} {
       scheduleAutosave() {
         clearTimeout(this._saveTimer);
         if (!this.autosave || !this.doc.id) { return; }
-        this._saveTimer = setTimeout(() => { if (this.dirty) { this.save(); } }, 2500);
+        this._saveTimer = setTimeout(() => { if (this.dirty) { this.save(false); } }, 2500);
       },
       recount() {
         const c = canvas();
@@ -10749,6 +10792,43 @@ ${insideObjects('.eb-paper.boxed')} {
           this.share = { open: true, id: r.id, title: g.label, term: '', found: [], list: [], category: true };
           await this.reloadShares();
         } catch (e) { this.notify(this.t('Could not share it: {msg}', { msg: e.message })); }
+      },
+      /** The versions kept beside a document, and putting one back. */
+      async openVersions(d) {
+        this.closeCtx();
+        if (!d || !d.id) { return; }
+        this.vers = { open: true, id: d.id, title: d.title || d.name, list: [] };
+        await this.reloadVersions();
+      },
+      async reloadVersions() {
+        try {
+          const r = await api('documents/' + this.vers.id + '/versions');
+          this.vers.list = r.versions || [];
+        } catch (e) { this.notify(this.t('Could not read the versions: {msg}', { msg: e.message })); }
+      },
+      async restoreVersion(number) {
+        if (!window.confirm(this.t('Put version #{n} back? What is in the document now is kept as a version of its own.', { n: String(number).padStart(2, '0') }))) { return; }
+        try {
+          const back = await api('documents/' + this.vers.id + '/versions/restore', { method: 'POST', body: { number: number } });
+          await this.reloadVersions();
+          await this.loadDocs();
+          if (this.vers.id === this.doc.id && back.content) {
+            // The document that is open becomes the version that was put back.
+            const parsed = parseHtml(back.content);
+            canvas().innerHTML = parsed.body || '<p><br></p>';
+            this.doc.paper = parsed.paper;
+            this.doc.styles = parsed.styles;
+            this.doc.css = parsed.css;
+            this.doc.etag = back.etag || '';
+            normaliseCanvas(this.t('Page break'), this.t('Caption'));
+            this.applyDocStyles();
+            history.reset();
+            this.dirty = false;
+            this.recount();
+            this.$nextTick(() => this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); }));
+          }
+          this.notify(this.t('Version #{n} is back.', { n: String(number).padStart(2, '0') }));
+        } catch (e) { this.notify(this.t('Could not put it back: {msg}', { msg: e.message })); }
       },
       /** Who else may read or write in this document. */
       async openShare(d) {
@@ -13369,7 +13449,10 @@ ${insideObjects('.eb-paper.boxed')} {
       docLang() { return (document.documentElement.lang || 'ja').slice(0, 5); },
       async saveSettings() {
         try {
-          await api('settings', { method: 'POST', body: { folder: this.settings.folder, theme: this.settings.theme, language: this.settings.language } });
+          await api('settings', { method: 'POST', body: {
+            folder: this.settings.folder, theme: this.settings.theme, language: this.settings.language,
+            versionKeep: this.settings.versionKeep, versionWhen: this.settings.versionWhen,
+          } });
           this.applyTheme(this.settings.theme);
           await this.applyLanguage(this.settings.language);
           await this.loadDocs();
@@ -13540,7 +13623,7 @@ ${insideObjects('.eb-paper.boxed')} {
           if (k === 'b') { e.preventDefault(); return this.inline('bold'); }
           if (k === 'i') { e.preventDefault(); return this.inline('italic'); }
           if (k === 'u') { e.preventDefault(); return this.inline('underline'); }
-          if (k === 's') { e.preventDefault(); return this.save(); }
+          if (k === 's') { e.preventDefault(); return this.save(true); }
           if (k === 'p') { e.preventDefault(); return this.printDoc(); }
           if (k === 'f') { e.preventDefault(); return this.openFind(); }
           if (k === 'k') { e.preventDefault(); return this.openLink(); }
@@ -13573,6 +13656,8 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.theme = s.theme || 'auto';
           this.settings.language = s.language || 'auto';
           this.settings.languages = s.languages || [];
+          this.settings.versionKeep = s.versionKeep == null ? 10 : s.versionKeep;
+          this.settings.versionWhen = s.versionWhen || 'manual';
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
           if (s.folderColours) { try { this.catColours = JSON.parse(s.folderColours) || {}; } catch (e) { this.catColours = {}; } }
           this.build = s.build || '';

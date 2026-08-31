@@ -50,6 +50,9 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   a second — before it is saved — their caret is drawn with their name on it, and
   the paragraph they are writing in is held for them so that the one case that
   cannot be merged cannot happen. A document nobody else has open costs nothing
+- **Versions** kept beside the document — `報告書.html` keeps `報告書.#01` and so on,
+  as many as you allow, in plain HTML. They follow the document when it is renamed
+  or moved
 - Autosave, renaming, download
 
 **Paper and pages**
@@ -186,6 +189,9 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
   入力した文字は**保存を待たず約1秒で相手の画面に現れます**。相手のカーソルは名前つきで
   表示され、相手が入力中の段落はこちらでは編集できないよう確保されます（併合できない
   唯一の場合を、そもそも起こさないためです）。誰も開いていない文書では何も動きません
+- **バージョン** ― 保存の直前の内容を、同じフォルダに `報告書.#01` のような名前で
+  残します（最大99個、中身は素のHTML）。文書の名前を変えたり、別のカテゴリへ移すと、
+  バージョンも一緒についていきます
 - 自動保存・名前の変更・ダウンロード
 
 **用紙とページ**
