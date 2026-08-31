@@ -37,5 +37,16 @@ return [
 		['name' => 'api#deleteDocument', 'url' => '/api/documents/{id}', 'verb' => 'DELETE'],
 		['name' => 'api#renameDocument', 'url' => '/api/documents/{id}/rename', 'verb' => 'POST'],
 		['name' => 'api#duplicateDocument', 'url' => '/api/documents/{id}/duplicate', 'verb' => 'POST'],
+		['name' => 'api#moveDocument', 'url' => '/api/documents/{id}/move', 'verb' => 'POST'],
+		['name' => 'api#documentState', 'url' => '/api/documents/{id}/state', 'verb' => 'GET'],
+		['name' => 'api#leaveDocument', 'url' => '/api/documents/{id}/leave', 'verb' => 'POST'],
+
+		// folders to keep them in, and sharing them with other accounts here
+		['name' => 'api#folders', 'url' => '/api/folders', 'verb' => 'GET'],
+		['name' => 'api#makeFolder', 'url' => '/api/folders', 'verb' => 'POST'],
+		['name' => 'api#documentShares', 'url' => '/api/documents/{id}/shares', 'verb' => 'GET'],
+		['name' => 'api#shareDocument', 'url' => '/api/documents/{id}/shares', 'verb' => 'POST'],
+		['name' => 'api#unshareDocument', 'url' => '/api/documents/{id}/shares/remove', 'verb' => 'POST'],
+		['name' => 'api#findUsers', 'url' => '/api/users', 'verb' => 'GET'],
 	],
 ];

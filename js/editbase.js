@@ -1017,7 +1017,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'data-eb-id', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
   /**
@@ -4803,6 +4803,103 @@ ${insideObjects('.eb-paper.boxed')} {
     if (last) { placeCaretIn(last); }
   }
 
+  /**
+   * Take what somebody else has written into this copy of the document.
+   *
+   * The two copies are compared block by block, by the name each block carries.
+   * A block only this side has changed is kept; a block only the other side has
+   * changed is taken; a block both sides have changed keeps what is here, because
+   * throwing away what the person at this keyboard just typed is the one thing
+   * that must never happen. Blocks the other side has added arrive in their own
+   * place, and blocks the other side has deleted go, unless they are being
+   * written in here.
+   *
+   * Returns how many blocks were taken, and whether any block was kept back.
+   */
+  function takeTheirs(c, theirs, mine) {
+    if (!c || !theirs) { return { taken: 0, kept: 0 }; }
+    const held = mine || new Set();
+    const ours = new Map();
+    Array.from(c.children).forEach((el) => {
+      if (el.classList && el.classList.contains('eb-pagespacer')) { return; }
+      const id = el.getAttribute && el.getAttribute('data-eb-id');
+      if (id) { ours.set(id, el); }
+    });
+    const from = Array.from(theirs.children).filter((el) => el.getAttribute && el.getAttribute('data-eb-id'));
+    let taken = 0;
+    let kept = 0;
+    // What they have: taken as it is, or put in where it stands among ours.
+    let after = null;
+    from.forEach((block) => {
+      const id = block.getAttribute('data-eb-id');
+      const here = ours.get(id);
+      if (here) {
+        if (here.outerHTML !== block.outerHTML) {
+          if (held.has(id)) {
+            kept += 1;
+          } else {
+            here.replaceWith(block.cloneNode(true));
+            ours.set(id, c.querySelector('[data-eb-id="' + id + '"]') || here);
+            taken += 1;
+          }
+        }
+        after = ours.get(id);
+        return;
+      }
+      const fresh = block.cloneNode(true);
+      if (after && after.parentNode === c) { after.after(fresh); } else { c.insertBefore(fresh, c.firstChild); }
+      ours.set(id, fresh);
+      after = fresh;
+      taken += 1;
+    });
+    // What they no longer have goes, unless it is being written in here.
+    const theirIds = new Set(from.map((el) => el.getAttribute('data-eb-id')));
+    Array.from(c.children).forEach((el) => {
+      if (el.classList && el.classList.contains('eb-pagespacer')) { return; }
+      const id = el.getAttribute && el.getAttribute('data-eb-id');
+      if (!id || theirIds.has(id)) { return; }
+      if (held.has(id)) { kept += 1; return; }
+      el.remove();
+      taken += 1;
+    });
+    return { taken, kept };
+  }
+  /** Where the caret is, as a block's name and a count of characters into it. */
+  function caretMark(c) {
+    const r = getRange();
+    if (!c || !r || !c.contains(r.startContainer)) { return null; }
+    let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
+    while (block && block.parentNode !== c) { block = block.parentNode; }
+    if (!block || !block.getAttribute) { return null; }
+    const id = block.getAttribute('data-eb-id');
+    if (!id) { return null; }
+    const before = document.createRange();
+    before.selectNodeContents(block);
+    before.setEnd(r.startContainer, r.startOffset);
+    return { id: id, at: String(before.toString() || '').length };
+  }
+  /** And back to that character, wherever the block has got to. */
+  function putCaretBack(c, mark) {
+    if (!c || !mark) { return; }
+    const block = c.querySelector('[data-eb-id="' + mark.id + '"]');
+    if (!block) { return; }
+    let left = mark.at;
+    const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+    let node = walk.nextNode();
+    while (node) {
+      if (left <= node.length) {
+        const r = document.createRange();
+        r.setStart(node, left);
+        r.collapse(true);
+        selectRange(r);
+        return;
+      }
+      left -= node.length;
+      node = walk.nextNode();
+    }
+    placeCaretIn(block);
+  }
+
   /** Put the whole chain back into one frame, exactly as it was written. */
   function joinChain(chain) {
     const lead = chain[0];
@@ -5285,10 +5382,30 @@ ${insideObjects('.eb-paper.boxed')} {
     });
   }
 
+  /**
+   * A small name on every block of the document, so that two people writing in
+   * it at the same time can say which paragraph they mean. It is a plain
+   * attribute and travels in the file; without it, one person's save would be a
+   * wall of text that could only replace the other's wholesale.
+   */
+  function nameBlocks(c) {
+    if (!c) { return; }
+    const seen = new Set();
+    Array.from(c.children).forEach((el) => {
+      if (!el.classList || el.classList.contains('eb-pagespacer')) { return; }
+      let id = el.getAttribute && el.getAttribute('data-eb-id');
+      if (!id || seen.has(id)) {
+        id = 'b' + Math.random().toString(36).slice(2, 9);
+        if (el.setAttribute) { el.setAttribute('data-eb-id', id); }
+      }
+      seen.add(id);
+    });
+  }
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
     repairNesting();
+    nameBlocks(c);
     keepRegionsInPlace(c);
     paragraphLooseWords(c);
     tidyMarks();
@@ -6529,14 +6646,41 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
     <div class="side-actions">
       <button class="eb-btn primary wide" @click="newDoc">＋ {{ t('New document') }}</button>
+      <button class="eb-btn ghost wide" v-if="!naming" @click="startCategory">＋ {{ t('New category') }}</button>
+      <input v-else ref="catName" class="eb-catname" type="text" maxlength="100" v-model="catNew"
+        :placeholder="t('Name of the category')" @keydown.enter.prevent="makeCategory" @keydown.esc.prevent="naming = false" @blur="makeCategory">
     </div>
     <div class="eb-doclist">
       <p class="hint" v-if="!docs.length">{{ t('No documents yet. Everything you write here is saved to {folder} in your Files as a plain .html file.', { folder: settings.folder }) }}</p>
-      <button v-for="d in docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id }"
-        @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
-        <span class="t">{{ d.title }}</span>
-        <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}</span>
-      </button>
+      <!-- Nothing is filed anywhere yet: a plain list is plainer than one box. -->
+      <template v-if="docGroups.length === 1 && docGroups[0].key === ''">
+        <button v-for="d in docGroups[0].docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id }"
+          :draggable="!d.shared" @dragstart="liftDoc(d, $event)" @dragend="dragDoc = 0"
+          @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
+          <span class="t">{{ d.title }}</span>
+          <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}</span>
+        </button>
+      </template>
+      <!-- Otherwise a box for each category, one open at a time. -->
+      <div v-else class="eb-cat" v-for="g in docGroups" :key="g.key"
+        :class="{ open: openCat === g.key, holds: g.docs.some((d) => d.id === doc.id), over: dropCat === g.key }"
+        :style="g.colour ? { '--cat': g.colour } : {}"
+        @dragover.prevent="overCat(g)" @dragleave="dropCat = dropCat === g.key ? null : dropCat" @drop.prevent="dropOnCat(g)">
+        <button class="cat-head" @click="toggleCat(g.key)" @contextmenu.prevent.stop="catCtx($event, g)">
+          <span class="tw">{{ openCat === g.key ? '▾' : '▸' }}</span>
+          <span class="nm">{{ g.label }}</span>
+          <span class="n">{{ g.docs.length }}</span>
+        </button>
+        <div class="cat-body" v-if="openCat === g.key">
+          <button v-for="d in g.docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id }"
+            :draggable="!d.shared" @dragstart="liftDoc(d, $event)" @dragend="dragDoc = 0"
+            @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
+            <span class="t">{{ d.title }}</span>
+            <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}<span v-if="d.shared"> · {{ d.owner }}</span></span>
+          </button>
+          <p class="hint" v-if="!g.docs.length">{{ t('Nothing in this category yet.') }}</p>
+        </div>
+      </div>
     </div>
     <div class="side-foot">
       <button class="eb-btn ghost wide" @click="settingsOpen = true">⚙ {{ t('Settings') }}</button>
@@ -7016,6 +7160,10 @@ ${insideObjects('.eb-paper.boxed')} {
 
     <div class="eb-status" v-if="doc.id">
       <span class="grow">{{ doc.name }}</span>
+      <span class="eb-with" v-if="othersHere.length" :title="t('Everyone who has this document open')">
+        <span class="dot" :class="{ writing: othersHere.some((p) => p.writing) }"></span>{{ othersHere.map((p) => p.name).join('、') }}
+      </span>
+      <span class="eb-readonly" v-if="doc.id && doc.writable === false">{{ t('Read only') }}</span>
       <span>{{ t('{n} pages', { n: pageCount }) }}</span>
       <span>{{ t('{n} characters', { n: counts }) }}</span>
       <span>{{ paperLabel }}</span>
@@ -7567,6 +7715,39 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
+  <!-- Who else on this server may read or write in this document. -->
+  <div v-if="share.open" class="eb-modal-back" @click="share.open = false">
+    <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
+      <h3>{{ t('Share “{name}”', { name: share.title }) }}</h3>
+      <div class="body">
+        <div class="eb-field">
+          <label>{{ t('Give it to someone on this server') }}</label>
+          <input type="text" v-model="share.term" @input="findShareUsers" :placeholder="t('Name or account')" autocomplete="off">
+        </div>
+        <ol class="eb-people" v-if="share.found.length">
+          <li v-for="u in share.found" :key="u.id">
+            <span class="who"><span class="nm">{{ u.name }}</span><span class="id">{{ u.id }}</span></span>
+            <button class="eb-btn ghost" @click="addShare(u.id, false)">{{ t('May read') }}</button>
+            <button class="eb-btn ghost" @click="addShare(u.id, true)">{{ t('May write') }}</button>
+          </li>
+        </ol>
+        <h4 class="eb-sect">{{ t('Shared with') }}</h4>
+        <p class="eb-tip" v-if="!share.list.length">{{ t('Nobody yet. It is yours alone.') }}</p>
+        <ol class="eb-people" v-else>
+          <li v-for="p in share.list" :key="p.id">
+            <span class="who"><span class="nm">{{ p.name }}</span><span class="id">{{ p.group ? t('Group') : p.with }}</span></span>
+            <label class="opt"><input type="checkbox" :checked="p.canEdit" @change="addShare(p.with, $event.target.checked)"> {{ t('May write') }}</label>
+            <button class="eb-btn ghost danger" @click="dropShare(p.id)">{{ t('Stop sharing') }}</button>
+          </li>
+        </ol>
+        <p class="eb-tip">{{ t('This is Nextcloud’s own sharing: the same share shows in Files, and it can be taken back from either place. A document shared with you appears under “Shared with me” in the list.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn primary" @click="share.open = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- What is wrong with the page that the writer cannot see by looking. -->
   <div v-if="checkOpen" class="eb-modal-back" @click="checkOpen = false">
     <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
@@ -7955,12 +8136,29 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
   <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
+    <!-- The right button on a category in the list down the left. -->
+    <template v-if="ctx.cat !== null">
+      <div class="hd">{{ ctx.cat.label }}</div>
+      <div class="eb-swatches">
+        <button v-for="c in catColourChoices" :key="c.value || 'none'" class="sw" :class="{ on: (ctx.cat.colour || '') === c.value }"
+          :style="c.value ? { background: c.value } : {}" :title="c.label" @click="setCatColour(ctx.cat.key, c.value)"></button>
+      </div>
+    </template>
+
     <!-- The right button on a document in the list down the left. -->
     <template v-if="ctx.doc">
       <div class="hd">{{ ctx.doc.title }}</div>
       <button class="ci" @click="closeCtx(); openDoc(ctx.doc.id)">{{ t('Open') }}</button>
       <div class="sep"></div>
       <button class="ci" @click="duplicateDoc(ctx.doc.id)">{{ t('Duplicate') }}</button>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Move to…') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="moveDoc(ctx.doc, '')">{{ t('No category') }}</button>
+          <button class="ci" v-for="f in folders" :key="f" @click="moveDoc(ctx.doc, f)">{{ f }}</button>
+        </div>
+      </div>
+      <button class="ci" @click="openShare(ctx.doc)">{{ t('Share…') }}</button>
       <button class="ci" @click="openDocProps(ctx.doc)">{{ t('Properties…') }}</button>
       <div class="sep"></div>
       <button class="ci danger" @click="deleteDoc(ctx.doc)">{{ t('Delete') }}</button>
@@ -8397,10 +8595,18 @@ ${insideObjects('.eb-paper.boxed')} {
         fontList: [],
         fontScripts: [],
         docs: [],
-        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), css: '', lang: 'ja', foreign: false },
+        doc: { id: 0, name: '', title: '', paper: normalisePaper(null), styles: normaliseStyles(null), css: '', lang: 'ja', foreign: false, etag: '' },
         stylesOpen: false, styleKey: 'h2', cssOpen: false, cssRules: 0, cssBad: false,
         runAt: ['header', 'c'],
         checkOpen: false, checks: [],
+        share: { open: false, id: 0, title: '', term: '', found: [], list: [] },
+        // Who else has this document open, and what is being written in it here
+        // that must not be overwritten by their copy.
+        people: [], heldBack: 0, mine: new Set(),
+        // What was written here lately, kept for a minute after it was saved, so
+        // that somebody else writing over the same paragraph can be reported
+        // rather than quietly winning.
+        lately: new Map(),
         dirty: false,
         saving: false,
         savedAt: 0,
@@ -8435,7 +8641,11 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0, doc: null },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0, doc: null, cat: null },
+        // The categories the documents are kept in: which one is open (one at a
+        // time, as a drawer), what each is called, and the colour it is drawn in.
+        folders: [], openCat: '', naming: false, catNew: '', catColours: {},
+        dragDoc: 0, dropCat: null,
         props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
         frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [] },
         coarse: false,
@@ -8750,6 +8960,42 @@ ${insideObjects('.eb-paper.boxed')} {
       frameIsWriting() {
         return ['PARA', 'HEADING', 'LIST', 'QUOTE', 'PRE', 'COLUMNS'].indexOf(this.frame.kind) >= 0;
       },
+      /**
+       * The documents, in their categories: the ones filed nowhere first, then the
+       * folders by name, then what other people have shared. A category is a
+       * folder inside the save folder and nothing more, so the same categories are
+       * there in Files, and moving a document in Files moves it here.
+       */
+      docGroups() {
+        const groups = new Map();
+        const put = (key, label, d) => {
+          if (!groups.has(key)) { groups.set(key, { key, label, docs: [], colour: this.catColours[key] || '' }); }
+          if (d) { groups.get(key).docs.push(d); }
+        };
+        put('', this.t('Not in a category'), null);
+        this.folders.forEach((f) => put(f, f, null));
+        this.docs.forEach((d) => {
+          if (d.shared) { put('~shared', this.t('Shared with me'), d); return; }
+          put(d.folder || '', d.folder || this.t('Not in a category'), d);
+        });
+        const out = Array.from(groups.values());
+        // Nothing at the top and nothing shared: those boxes would be empty rooms.
+        return out.filter((g) => g.docs.length || (g.key !== '' && g.key !== '~shared'));
+      },
+      /** Everybody else who has this document open at the moment. */
+      othersHere() { return (this.people || []).filter((p) => !p.me); },
+      catColourChoices() {
+        return [
+          { value: '', label: this.t('None') },
+          { value: '#e8eefc', label: this.t('Blue') },
+          { value: '#e6f6ec', label: this.t('Green') },
+          { value: '#fdf3e0', label: this.t('Yellow') },
+          { value: '#fbe9e9', label: this.t('Red') },
+          { value: '#f0eafc', label: this.t('Purple') },
+          { value: '#e6f5f7', label: this.t('Teal') },
+          { value: '#efefef', label: this.t('Grey') },
+        ];
+      },
       frameLabel() { return this.kindName(this.frame.kind); },
       /** What stands on the shelf beside the paper. */
       paletteItems() {
@@ -8825,14 +9071,99 @@ ${insideObjects('.eb-paper.boxed')} {
         try {
           const r = await api('documents');
           this.docs = r.documents || [];
+          const f = await api('folders');
+          this.folders = f.folders || [];
         } catch (e) { this.notify(this.t('Could not read the document list: {msg}', { msg: e.message })); }
+      },
+      /**
+       * A document dragged from one category to another. It is the same move the
+       * Files app would make -- the file goes into the other folder -- so what the
+       * hand does here is what is on the disk afterwards.
+       */
+      liftDoc(d, e) {
+        this.dragDoc = d.id;
+        this.dropCat = null;
+        if (e && e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', 'editbase-document');
+        }
+      },
+      overCat(g) {
+        if (!this.dragDoc) { return; }
+        this.dropCat = g.key === '~shared' ? null : g.key;
+      },
+      async dropOnCat(g) {
+        const id = this.dragDoc;
+        this.dragDoc = 0;
+        this.dropCat = null;
+        if (!id || !g || g.key === '~shared') { return; }
+        const d = this.docs.find((x) => x.id === id);
+        if (!d || d.shared || (d.folder || '') === g.key) { return; }
+        await this.moveDoc(d, g.key);
+      },
+      /** One category open at a time, the way a drawer is. */
+      toggleCat(key) {
+        this.openCat = this.openCat === key ? '' : key;
+        window.localStorage.setItem('eb-cat', this.openCat);
+      },
+      catCtx(e, g) {
+        this.ctx.cat = g;
+        this.ctx.doc = null;
+        this.ctx.page = 0;
+        this.ctx.table = false;
+        this.ctx.image = false;
+        this.ctx.captionPlace = '';
+        this.ctx.frame = false;
+        this.ctx.text = false;
+        this.ctx.link = false;
+        this.ctx.list = false;
+        this.ctx.selection = false;
+        this.placeCtx(e.clientX, e.clientY);
+      },
+      /** The colour a category is drawn in, kept with the writer's own settings. */
+      async setCatColour(key, colour) {
+        this.closeCtx();
+        const next = Object.assign({}, this.catColours);
+        if (colour) { next[key] = colour; } else { delete next[key]; }
+        this.catColours = next;
+        try {
+          await api('settings', { method: 'POST', body: { folderColours: JSON.stringify(next) } });
+        } catch (e) { this.notify(this.t('Could not save the settings: {msg}', { msg: e.message })); }
+      },
+      startCategory() {
+        this.catNew = '';
+        this.naming = true;
+        this.$nextTick(() => { if (this.$refs.catName) { this.$refs.catName.focus(); } });
+      },
+      async makeCategory() {
+        const name = String(this.catNew || '').trim();
+        this.naming = false;
+        this.catNew = '';
+        if (!name) { return; }
+        try {
+          const made = await api('folders', { method: 'POST', body: { path: name } });
+          await this.loadDocs();
+          this.toggleCat(made.folder || name);
+        } catch (e) { this.notify(this.t('Could not make the category: {msg}', { msg: e.message })); }
+      },
+      /** Put a document in another category. In Files it is the same move. */
+      async moveDoc(d, folder) {
+        this.closeCtx();
+        if (!d || !d.id) { return; }
+        try {
+          if (d.id === this.doc.id && this.dirty) { await this.save(); }
+          await api('documents/' + d.id + '/move', { method: 'POST', body: { folder: folder } });
+          await this.loadDocs();
+          this.openCat = folder;
+        } catch (e) { this.notify(this.t('Could not move it: {msg}', { msg: e.message })); }
       },
       async newDoc() {
         const title = this.t('Untitled document');
         const paper = normalisePaper(this.defaultPaper);
         const body = '<p><br></p>';
         try {
-          const created = await api('documents', { method: 'POST', body: { name: title, content: buildHtml({ title, paper, body, lang: this.docLang() }) } });
+          const where = this.openCat && this.openCat !== '~shared' ? this.openCat : '';
+          const created = await api('documents', { method: 'POST', body: { name: title, folder: where, content: buildHtml({ title, paper, body, lang: this.docLang() }) } });
           await this.loadDocs();
           await this.openDoc(created.id);
           this.notify(this.t('Created {name}', { name: created.name }));
@@ -8844,8 +9175,11 @@ ${insideObjects('.eb-paper.boxed')} {
         try {
           const d = await api('documents/' + id);
           const parsed = parseHtml(d.content);
+          if (this.doc.id && this.doc.id !== id) { this.letGo(this.doc.id); }
+          this.mine = new Set();
+          this.people = [];
           this.doc = {
-            id: d.id, name: d.name, title: parsed.title || d.title,
+            id: d.id, name: d.name, title: parsed.title || d.title, etag: d.etag || '',
             paper: parsed.paper, styles: parsed.styles, css: parsed.css, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
           // What the file itself carries decides whether the two switches are on:
@@ -8880,6 +9214,9 @@ ${insideObjects('.eb-paper.boxed')} {
             this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); });
           });
           if (window.innerWidth < 860) { this.sideOpen = false; }
+          // From here on, this copy listens: who else has it open, and whether
+          // they have written anything.
+          this.startWatching();
           if (parsed.foreign) {
             this.notify(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
           }
@@ -8922,15 +9259,116 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!this.doc.id || this.saving) { return; }
         this.saving = true;
         try {
-          const saved = await api('documents/' + this.doc.id, { method: 'PUT', body: { content: this.currentHtml() } });
-          this.dirty = false;
-          this.doc.foreign = false;
-          this.savedAt = Date.now();
-          const row = this.docs.find((d) => d.id === saved.id);
-          if (row) { row.mtime = saved.mtime; row.size = saved.size; }
+          // Twice at most: if somebody else wrote while this was being typed, their
+          // version comes back instead of being overwritten, their paragraphs are
+          // taken into this copy, and the whole is written once more.
+          for (let go = 0; go < 2; go += 1) {
+            const saved = await api('documents/' + this.doc.id, {
+              method: 'PUT',
+              body: { content: this.currentHtml(), etag: this.doc.etag || '' },
+            });
+            if (saved.stale && saved.content) {
+              this.doc.etag = saved.etag;
+              this.takeTheirWork(saved.content);
+              continue;
+            }
+            this.doc.etag = saved.etag || '';
+            this.dirty = false;
+            this.doc.foreign = false;
+            this.savedAt = Date.now();
+            this.mine = new Set();
+            const row = this.docs.find((d) => d.id === saved.id);
+            if (row) { row.mtime = saved.mtime; row.size = saved.size; }
+            break;
+          }
         } catch (e) {
           this.notify(this.t('Could not save: {msg}', { msg: e.message }));
         } finally { this.saving = false; }
+      },
+      /**
+       * Somebody else's version of this document, folded into this one. What is
+       * being written here is kept; the rest is taken as they wrote it.
+       */
+      takeTheirWork(html) {
+        const c = canvas();
+        if (!c || !html) { return; }
+        let parsed = null;
+        try { parsed = parseHtml(html); } catch (e) { return; }
+        const theirs = document.createElement('div');
+        theirs.innerHTML = parsed.body || '';
+        nameBlocks(theirs);
+        const mark = caretMark(c);
+        // Paragraphs this keyboard wrote in lately, so that one of them being
+        // written over by somebody else is said out loud.
+        const fresh = new Set();
+        const now = Date.now();
+        this.lately.forEach((at, id) => { if (now - at < 60000) { fresh.add(id); } else { this.lately.delete(id); } });
+        const before = new Map();
+        Array.from(c.children).forEach((el) => {
+          const id = el.getAttribute && el.getAttribute('data-eb-id');
+          if (id && fresh.has(id)) { before.set(id, el.outerHTML); }
+        });
+        const got = takeTheirs(c, theirs, this.mine);
+        if (!got.taken && !got.kept) { return; }
+        let overwritten = 0;
+        before.forEach((was, id) => {
+          const el = c.querySelector('[data-eb-id="' + id + '"]');
+          if (!el || el.outerHTML !== was) { overwritten += 1; }
+        });
+        this.heldBack = got.kept;
+        normaliseCanvas(this.t('Page break'), this.t('Caption'));
+        putCaretBack(c, mark);
+        this.recount();
+        this.$nextTick(() => { this.refreshLayers(); this.refreshPreview(); });
+        if (overwritten) {
+          this.notify(this.t('Somebody else has written over {n} paragraphs you had just written. Ctrl+Z brings yours back.', { n: overwritten }));
+        } else if (got.taken) {
+          this.notify(got.kept
+            ? this.t('{n} paragraphs were taken from the other person; {k} you are writing in were kept.', { n: got.taken, k: got.kept })
+            : this.t('{n} paragraphs came in from the other person.', { n: got.taken }));
+        }
+      },
+      /**
+       * While a document is open, ask every couple of seconds how it stands and
+       * who else has it open. It is one small answer, and it is the whole of the
+       * co-writing machinery: no service of its own, nothing to install.
+       */
+      startWatching() {
+        this.stopWatching();
+        this._openTimer = window.setInterval(() => this.beat(), 2500);
+        this.beat();
+      },
+      stopWatching() {
+        if (this._openTimer) { window.clearInterval(this._openTimer); this._openTimer = null; }
+      },
+      /** Tell the server this document has been closed here. */
+      letGo(id) {
+        if (!id) { return; }
+        try {
+          const url = OC.generateUrl('/apps/editbase/api/documents/' + id + '/leave');
+          if (navigator.sendBeacon) {
+            // A page being closed has no time for a round trip.
+            navigator.sendBeacon(url + '?requesttoken=' + encodeURIComponent(TOKEN), new Blob([], { type: 'text/plain' }));
+            return;
+          }
+          api('documents/' + id + '/leave', { method: 'POST' }).catch(() => {});
+        } catch (e) { /* nothing to do about it */ }
+      },
+      async beat() {
+        if (!this.doc.id || this.saving) { return; }
+        try {
+          const state = await api('documents/' + this.doc.id + '/state?writing=' + (this.dirty ? '1' : '0'));
+          this.people = state.people || [];
+          if (!state.etag || state.etag === this.doc.etag) { return; }
+          // Somebody has written. Their version is read and folded in -- but not
+          // in the middle of a Japanese word, and not while a key is still warm:
+          // the next turn is a second and a half away and nothing is lost by it.
+          if (this.composing) { return; }
+          if (this.typedAt && Date.now() - this.typedAt < 900) { return; }
+          const got = await api('documents/' + this.doc.id);
+          this.doc.etag = got.etag || state.etag;
+          this.takeTheirWork(got.content);
+        } catch (e) { /* the network will come back; the next beat will ask again */ }
       },
       async applyTitle() {
         if (!this.doc.id) { return; }
@@ -9034,6 +9472,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // ---- editing ----
       touch() {
         this.dirty = true;
+        this.markMine();
         this.scheduleAutosave();
       },
       scheduleAutosave() {
@@ -9997,6 +10436,47 @@ ${insideObjects('.eb-paper.boxed')} {
           if (!ink) { found.push({ what: this.t('Page {n} has nothing written on it.', { n: i + 1 }), el: null, page: i + 1 }); }
         });
         this.checks = found;
+      },
+      /** Who else may read or write in this document. */
+      async openShare(d) {
+        this.closeCtx();
+        if (!d || !d.id) { return; }
+        this.share = { open: true, id: d.id, title: d.title || d.name, term: '', found: [], list: [] };
+        await this.reloadShares();
+      },
+      async reloadShares() {
+        try {
+          const r = await api('documents/' + this.share.id + '/shares');
+          this.share.list = r.shares || [];
+        } catch (e) { this.notify(this.t('Could not read who it is shared with: {msg}', { msg: e.message })); }
+      },
+      findShareUsers() {
+        clearTimeout(this._shareTimer);
+        const term = String(this.share.term || '').trim();
+        if (term.length < 1) { this.share.found = []; return; }
+        this._shareTimer = setTimeout(async () => {
+          try {
+            const r = await api('users?term=' + encodeURIComponent(term));
+            const already = new Set((this.share.list || []).map((p) => p.with));
+            this.share.found = (r.users || []).filter((u) => !already.has(u.id)).slice(0, 8);
+          } catch (e) { this.share.found = []; }
+        }, 250);
+      },
+      async addShare(who, canEdit) {
+        try {
+          const r = await api('documents/' + this.share.id + '/shares', { method: 'POST', body: { with: who, canEdit: !!canEdit } });
+          this.share.list = r.shares || [];
+          this.share.term = '';
+          this.share.found = [];
+          await this.loadDocs();
+        } catch (e) { this.notify(this.t('Could not share it: {msg}', { msg: e.message })); }
+      },
+      async dropShare(id) {
+        try {
+          const r = await api('documents/' + this.share.id + '/shares/remove', { method: 'POST', body: { share: id } });
+          this.share.list = r.shares || [];
+          await this.loadDocs();
+        } catch (e) { this.notify(this.t('Could not stop sharing it: {msg}', { msg: e.message })); }
       },
       /** Go and look at what the check found. */
       showCheck(i) {
@@ -11756,6 +12236,7 @@ ${insideObjects('.eb-paper.boxed')} {
         e.preventDefault();
         this.ctx.page = 0;
         this.ctx.doc = null;
+        this.ctx.cat = null;
         const point = caretFromPoint(e.clientX, e.clientY);
         const sel = getRange();
         let inside = false;
@@ -11832,6 +12313,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const img = el.matches && el.matches('figure.eb-img') ? el.querySelector('img') : null;
         this.ctx.page = 0;
         this.ctx.doc = null;
+        this.ctx.cat = null;
         this.ctx.table = !!(el.nodeName === 'TABLE');
         this.ctx.image = !!img;
         this.ctx.captionPlace = img ? captionPlace(img) : '';
@@ -11850,6 +12332,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** The right button on a document in the list: what can be done to the file. */
       docCtx(e, d) {
         this.ctx.doc = d;
+        this.ctx.cat = null;
         this.ctx.page = 0;
         this.ctx.table = false;
         this.ctx.image = false;
@@ -11866,6 +12349,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // the page is the first item in it, for anyone who wants that.
         this.ctx.page = n;
         this.ctx.doc = null;
+        this.ctx.cat = null;
         this.ctx.table = false;
         this.ctx.image = false;
         this.ctx.captionPlace = '';
@@ -12624,6 +13108,17 @@ ${insideObjects('.eb-paper.boxed')} {
           ensureIns();
         }
       },
+      /** The block the caret is in is being written in here: it is not replaced. */
+      markMine() {
+        const c = canvas();
+        const r = getRange();
+        if (!c || !r || !c.contains(r.startContainer)) { return; }
+        let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
+        while (block && block.parentNode !== c) { block = block.parentNode; }
+        const id = block && block.getAttribute && block.getAttribute('data-eb-id');
+        if (id) { this.mine.add(id); this.lately.set(id, Date.now()); }
+        this.typedAt = Date.now();
+      },
       settleReview() {
         this.touch();
         this.recount();
@@ -12732,6 +13227,7 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.language = s.language || 'auto';
           this.settings.languages = s.languages || [];
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
+          if (s.folderColours) { try { this.catColours = JSON.parse(s.folderColours) || {}; } catch (e) { this.catColours = {}; } }
           this.build = s.build || '';
         } catch (e) { /* the app still works with the defaults */ }
         this.watchForNewBuild();
@@ -12739,6 +13235,9 @@ ${insideObjects('.eb-paper.boxed')} {
         if (this.settings.language && this.settings.language !== 'auto') { await this.applyLanguage(this.settings.language); }
         await this.loadDocs();
         this.loadSources();
+        // The category that was open last time, if it is still a category.
+        const drawer = window.localStorage.getItem('eb-cat') || '';
+        if (drawer && this.docGroups.some((g) => g.key === drawer)) { this.openCat = drawer; }
         const wanted = Number((root && root.dataset.fileid) || 0);
         const last = Number(window.localStorage.getItem('eb-last-doc') || 0);
         const target = wanted || (this.docs.some((d) => d.id === last) ? last : (this.docs[0] && this.docs[0].id));
@@ -12748,6 +13247,9 @@ ${insideObjects('.eb-paper.boxed')} {
     watch: {
       'doc.id'(id) {
         if (id) { window.localStorage.setItem('eb-last-doc', String(id)); }
+        // Open the drawer the document is in, so the writer can see where it lives.
+        const mine = this.docs.find((d) => d.id === id);
+        if (mine) { this.openCat = mine.shared ? '~shared' : (mine.folder || ''); }
         this.$nextTick(() => this.fitRail());
       },
       'doc.paper.fonts': { deep: true, handler() { this.applyDocFonts(); } },
@@ -12998,11 +13500,19 @@ ${insideObjects('.eb-paper.boxed')} {
       document.addEventListener('scroll', () => this.closeCtx(), true);
       document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
       window.addEventListener('beforeunload', (e) => {
+        // Say we have gone, so the other people writing in it stop being told
+        // that somebody is here who is not.
+        this.letGo(this.doc.id);
         if (this.dirty) { e.preventDefault(); e.returnValue = ''; }
       });
       this.boot();
     },
-    beforeUnmount() { clearTimeout(this._saveTimer); clearTimeout(this._toastTimer); },
+    beforeUnmount() {
+      clearTimeout(this._saveTimer);
+      clearTimeout(this._toastTimer);
+      this.stopWatching();
+      this.letGo(this.doc.id);
+    },
   });
 
   /** Nextcloud's dark mode is a theme app, not a media query, so ask the page. */

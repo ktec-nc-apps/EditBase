@@ -10,6 +10,9 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
 use OCP\IConfig;
+use OCP\IUserManager;
+use OCP\Share\IManager as IShareManager;
+use OCP\Share\IShare;
 
 /**
  * Documents are not rows in a table: they are ordinary .html files in the user's
@@ -27,6 +30,8 @@ class DocumentService {
 	public function __construct(
 		private IRootFolder $rootFolder,
 		private IConfig $config,
+		private IShareManager $shares,
+		private IUserManager $users,
 	) {
 	}
 
@@ -61,20 +66,175 @@ class DocumentService {
 	}
 
 	/**
-	 * Every .html file in the save folder, newest first.
+	 * Every document the user can open: the .html files in the save folder and in
+	 * the folders inside it, and the ones other people have shared with them.
+	 * Each one says which folder it is in, so the list can be a list of folders.
 	 *
 	 * @return array<int, array<string, mixed>>
 	 */
 	public function list(string $userId): array {
 		$out = [];
-		foreach ($this->folder($userId)->getDirectoryListing() as $node) {
-			if (!($node instanceof File) || !$this->isHtml($node->getName())) {
+		$seen = [];
+		$this->gather($this->folder($userId), '', $out, $seen);
+		foreach ($this->sharedWithMe($userId) as $item) {
+			if (isset($seen[$item['id']])) {
 				continue;
 			}
-			$out[] = $this->describe($node, false);
+			$seen[$item['id']] = true;
+			$out[] = $item;
 		}
 		usort($out, static fn ($a, $b) => $b['mtime'] <=> $a['mtime']);
 		return $out;
+	}
+
+	/**
+	 * The folders the documents are kept in, in order, including the empty ones --
+	 * a folder made and not yet written in is still a place to put something.
+	 *
+	 * @return array<int, string>
+	 */
+	public function folders(string $userId): array {
+		$out = [];
+		$this->gatherFolders($this->folder($userId), '', $out);
+		sort($out, SORT_NATURAL | SORT_FLAG_CASE);
+		return $out;
+	}
+
+	/** Make a folder to keep documents in, inside the save folder. */
+	public function makeFolder(string $userId, string $path): string {
+		$path = $this->cleanFolder($path);
+		if ($path === '') {
+			throw new \InvalidArgumentException('a folder needs a name');
+		}
+		$folder = $this->folder($userId);
+		$here = $folder;
+		foreach (explode('/', $path) as $part) {
+			$here = $here->nodeExists($part) ? $here->get($part) : $here->newFolder($part);
+			if (!($here instanceof Folder)) {
+				throw new \InvalidArgumentException('there is a file called ' . $part . ' there already');
+			}
+		}
+		return $path;
+	}
+
+	/** Put a document in another folder, or back at the top with an empty path. */
+	public function move(string $userId, int $id, string $path): array {
+		$file = $this->file($userId, $id);
+		$path = $this->cleanFolder($path);
+		$target = $this->folder($userId);
+		if ($path !== '') {
+			$this->makeFolder($userId, $path);
+			$node = $target->get($path);
+			if (!($node instanceof Folder)) {
+				throw new \InvalidArgumentException('that is not a folder');
+			}
+			$target = $node;
+		}
+		if ($file->getParent()->getId() === $target->getId()) {
+			return $this->describe($file, false);
+		}
+		$moved = $file->move($target->getPath() . '/' . $this->freeName($target, $this->stripExt($file->getName())));
+		return $this->describe($moved instanceof File ? $moved : $this->file($userId, $id), false, $path);
+	}
+
+	/**
+	 * Every document under a folder, with the folder it is in written on it. Only
+	 * so deep: a folder inside a folder inside a folder is somebody's file tree,
+	 * not a list of documents, and walking all of it would read the whole account.
+	 *
+	 * @param array<int, array<string, mixed>> $out
+	 * @param array<int, bool> $seen
+	 */
+	private function gather(Folder $folder, string $path, array &$out, array &$seen, int $depth = 0): void {
+		foreach ($folder->getDirectoryListing() as $node) {
+			if ($node instanceof Folder) {
+				if ($depth < 4) {
+					$this->gather($node, $path === '' ? $node->getName() : $path . '/' . $node->getName(), $out, $seen, $depth + 1);
+				}
+				continue;
+			}
+			if (!($node instanceof File) || !$this->isHtml($node->getName()) || isset($seen[$node->getId()])) {
+				continue;
+			}
+			$seen[$node->getId()] = true;
+			$out[] = $this->describe($node, false, $path);
+		}
+	}
+
+	/** @param array<int, string> $out */
+	private function gatherFolders(Folder $folder, string $path, array &$out, int $depth = 0): void {
+		foreach ($folder->getDirectoryListing() as $node) {
+			if (!($node instanceof Folder)) {
+				continue;
+			}
+			$here = $path === '' ? $node->getName() : $path . '/' . $node->getName();
+			$out[] = $here;
+			if ($depth < 4) {
+				$this->gatherFolders($node, $here, $out, $depth + 1);
+			}
+		}
+	}
+
+	/**
+	 * The documents other people on this server have shared with this user, whether
+	 * they shared one document or a whole folder of them. They are listed under the
+	 * name of whoever shared them, because that is how a person looks for them.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function sharedWithMe(string $userId): array {
+		$out = [];
+		$seen = [];
+		foreach ([IShare::TYPE_USER, IShare::TYPE_GROUP] as $type) {
+			foreach ($this->shares->getSharedWith($userId, $type, null, 200) as $share) {
+				try {
+					$node = $share->getNode();
+				} catch (\Throwable) {
+					continue;
+				}
+				$owner = $this->nameOf($share->getShareOwner());
+				if ($node instanceof Folder) {
+					$inside = [];
+					$this->gather($node, $node->getName(), $inside, $seen);
+					foreach ($inside as $item) {
+						$item['owner'] = $owner;
+						$item['shared'] = true;
+						$out[] = $item;
+					}
+					continue;
+				}
+				if (!($node instanceof File) || !$this->isHtml($node->getName()) || isset($seen[$node->getId()])) {
+					continue;
+				}
+				$seen[$node->getId()] = true;
+				$item = $this->describe($node, false, '');
+				$item['owner'] = $owner;
+				$item['shared'] = true;
+				$out[] = $item;
+			}
+		}
+		return $out;
+	}
+
+	private function nameOf(string $uid): string {
+		$user = $this->users->get($uid);
+		return $user === null ? $uid : $user->getDisplayName();
+	}
+
+	/** A folder path a user typed: no climbing out, no empty parts, not too deep. */
+	private function cleanFolder(string $path): string {
+		$parts = [];
+		foreach (explode('/', str_replace('\\', '/', trim($path))) as $part) {
+			$part = trim($part);
+			if ($part === '' || $part === '.' ) {
+				continue;
+			}
+			if ($part === '..' || str_contains($part, "\0")) {
+				throw new \InvalidArgumentException('that is not a folder name');
+			}
+			$parts[] = mb_substr($part, 0, 100);
+		}
+		return implode('/', array_slice($parts, 0, 5));
 	}
 
 	/** @return array<string, mixed> */
@@ -83,17 +243,52 @@ class DocumentService {
 	}
 
 	/** @return array<string, mixed> */
-	public function create(string $userId, string $name, string $content): array {
+	public function create(string $userId, string $name, string $content, string $path = ''): array {
 		$folder = $this->folder($userId);
+		$path = $this->cleanFolder($path);
+		if ($path !== '') {
+			$this->makeFolder($userId, $path);
+			$node = $folder->get($path);
+			if ($node instanceof Folder) {
+				$folder = $node;
+			}
+		}
 		$file = $folder->newFile($this->freeName($folder, $name), $content);
+		return $this->describe($file, false, $path);
+	}
+
+	/**
+	 * Write a document back.
+	 *
+	 * If the writer says which version they started from, and the file has moved
+	 * on since -- somebody else writing in the same document -- nothing is written
+	 * and the version that is there is handed back instead, for the editor to take
+	 * the other person's paragraphs into its own copy and try again. Without that
+	 * check the last save would quietly throw the other person's work away.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function save(string $userId, int $id, string $content, string $etag = ''): array {
+		$file = $this->file($userId, $id);
+		if ($etag !== '' && $file->getEtag() !== $etag) {
+			$out = $this->describe($file, true);
+			$out['stale'] = true;
+			return $out;
+		}
+		$file->putContent($content);
 		return $this->describe($file, false);
 	}
 
-	/** @return array<string, mixed> */
-	public function save(string $userId, int $id, string $content): array {
+	/** What version the file is at now, without reading the whole of it. */
+	public function state(string $userId, int $id): array {
 		$file = $this->file($userId, $id);
-		$file->putContent($content);
-		return $this->describe($file, false);
+		return [
+			'id' => $file->getId(),
+			'etag' => $file->getEtag(),
+			'mtime' => $file->getMTime(),
+			'size' => $file->getSize(),
+			'writable' => $file->isUpdateable(),
+		];
 	}
 
 	/** @return array<string, mixed> */
@@ -151,17 +346,20 @@ class DocumentService {
 	}
 
 	/** @return array<string, mixed> */
-	private function describe(File $file, bool $withContent): array {
+	private function describe(File $file, bool $withContent, ?string $folder = null): array {
 		$content = $withContent ? $file->getContent() : null;
 		$out = [
 			'id' => $file->getId(),
 			'name' => $file->getName(),
 			'title' => $this->stripExt($file->getName()),
 			'path' => $file->getPath(),
+			'folder' => $folder ?? '',
 			'size' => $file->getSize(),
 			'mtime' => $file->getMTime(),
 			'etag' => $file->getEtag(),
 			'writable' => $file->isUpdateable(),
+			'shared' => false,
+			'owner' => '',
 		];
 		if ($withContent) {
 			$out['content'] = $content;

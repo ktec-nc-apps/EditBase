@@ -8,6 +8,8 @@ use OCA\EditBase\AppInfo\Application;
 use OCA\EditBase\Service\DocumentService;
 use OCA\EditBase\Service\Connectors;
 use OCA\EditBase\Service\FileBrowser;
+use OCA\EditBase\Service\ShareService;
+use OCA\EditBase\Service\SessionService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -28,6 +30,8 @@ class ApiController extends Controller {
 		private DocumentService $documents,
 		private FileBrowser $files,
 		private Connectors $connectors,
+		private ShareService $sharing,
+		private SessionService $sessions,
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
@@ -68,6 +72,8 @@ class ApiController extends Controller {
 				'theme' => $this->config->getUserValue($uid, Application::APP_ID, 'theme', 'auto'),
 				'language' => $this->config->getUserValue($uid, Application::APP_ID, 'language', 'auto'),
 				'paper' => $this->config->getUserValue($uid, Application::APP_ID, 'paper', ''),
+				// What colour each category is drawn in, as the writer chose.
+				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
 				'languages' => $this->availableLanguages(),
 				// What the browser has loaded is not always what is on the server:
 				// a page left open goes on running the code it started with. This is
@@ -102,6 +108,10 @@ class ApiController extends Controller {
 			$language = $this->request->getParam('language');
 			if (is_string($language) && $language !== '' && preg_match('/^[a-z]{2}(_[A-Za-z]{2,4})?$|^auto$/', $language)) {
 				$this->config->setUserValue($uid, Application::APP_ID, 'language', $language);
+			}
+			$colours = $this->request->getParam('folderColours');
+			if (is_string($colours) && strlen($colours) < 4000) {
+				$this->config->setUserValue($uid, Application::APP_ID, 'folderColours', $colours);
 			}
 			// The paper setup a new document starts from (JSON, produced by the editor).
 			$paper = $this->request->getParam('paper');
@@ -260,11 +270,87 @@ class ApiController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	/**
+	 * How the document stands, and who else has it open. This is what the editor
+	 * asks every couple of seconds while a document is open: it is one small
+	 * answer, and it is the whole of the co-writing machinery on the server.
+	 */
+	#[NoAdminRequired]
+	public function documentState(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$state = $this->documents->state($this->uid(), $id);
+			$writing = (bool)($this->request->getParam('writing') ?? false);
+			$state['people'] = $this->sessions->beat($id, $this->uid(), $writing);
+			return $state;
+		});
+	}
+
+	#[NoAdminRequired]
+	public function leaveDocument(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$this->sessions->leave($id, $this->uid());
+			return ['ok' => true];
+		});
+	}
+
+	#[NoAdminRequired]
+	public function folders(): JSONResponse {
+		return $this->run(fn () => ['folders' => $this->documents->folders($this->uid())]);
+	}
+
+	#[NoAdminRequired]
+	public function makeFolder(): JSONResponse {
+		return $this->run(function () {
+			$path = (string)($this->request->getParam('path') ?? '');
+			return ['folder' => $this->documents->makeFolder($this->uid(), $path)];
+		});
+	}
+
+	#[NoAdminRequired]
+	public function moveDocument(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$path = (string)($this->request->getParam('folder') ?? '');
+			return $this->documents->move($this->uid(), $id, $path);
+		});
+	}
+
+	#[NoAdminRequired]
+	public function documentShares(int $id): JSONResponse {
+		return $this->run(fn () => ['shares' => $this->sharing->listShares($this->uid(), $id)]);
+	}
+
+	#[NoAdminRequired]
+	public function shareDocument(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$with = (string)($this->request->getParam('with') ?? '');
+			$canEdit = (bool)($this->request->getParam('canEdit') ?? false);
+			return ['shares' => $this->sharing->share($this->uid(), $id, $with, $canEdit)];
+		});
+	}
+
+	#[NoAdminRequired]
+	public function unshareDocument(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$share = (string)($this->request->getParam('share') ?? '');
+			return ['shares' => $this->sharing->unshare($this->uid(), $id, $share)];
+		});
+	}
+
+	#[NoAdminRequired]
+	public function findUsers(): JSONResponse {
+		return $this->run(function () {
+			$term = (string)($this->request->getParam('term') ?? '');
+			return ['users' => $this->sharing->findUsers($this->uid(), $term)];
+		});
+	}
+
+	#[NoAdminRequired]
 	public function createDocument(): JSONResponse {
 		return $this->run(function () {
 			$name = (string)($this->request->getParam('name') ?? 'Document');
 			$content = (string)($this->request->getParam('content') ?? '');
-			return $this->documents->create($this->uid(), $name, $content);
+			$folder = (string)($this->request->getParam('folder') ?? '');
+			return $this->documents->create($this->uid(), $name, $content, $folder);
 		});
 	}
 
@@ -275,7 +361,8 @@ class ApiController extends Controller {
 			if (!is_string($content)) {
 				throw new \InvalidArgumentException('content missing');
 			}
-			return $this->documents->save($this->uid(), $id, $content);
+			$etag = (string)($this->request->getParam('etag') ?? '');
+			return $this->documents->save($this->uid(), $id, $content, $etag);
 		});
 	}
 

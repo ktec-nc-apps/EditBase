@@ -1080,3 +1080,59 @@
 #editbase-root .eb-checks li { margin: 0 0 8px; display: flex; gap: 10px; align-items: baseline; }
 #editbase-root .eb-checks .what { flex: 1 1 auto; font-size: 13.5px; }
 #editbase-root .eb-checks .eb-btn { flex: 0 0 auto; padding: 2px 10px; font-size: 12.5px; }
+
+/* The categories the documents are kept in: a box each, one open at a time, in
+   whatever colour the writer chose for it. */
+#editbase-root .eb-catname {
+  width: 100%; box-sizing: border-box; margin-top: 6px; padding: 8px 10px; font-size: 14px;
+  border: 1px solid var(--primary); border-radius: 9px; background: var(--surface); color: var(--text);
+}
+#editbase-root .eb-cat {
+  --cat: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; overflow: hidden;
+  background: color-mix(in srgb, var(--cat) 55%, var(--surface));
+}
+#editbase-root .eb-cat.open { border-color: color-mix(in srgb, var(--cat) 70%, var(--border)); }
+#editbase-root .eb-cat.holds { box-shadow: inset 3px 0 0 var(--primary); }
+#editbase-root .eb-cat .cat-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+  border: 0; background: color-mix(in srgb, var(--cat) 80%, var(--surface)); color: var(--text);
+  font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer;
+}
+#editbase-root .eb-cat .cat-head:hover { background: color-mix(in srgb, var(--cat) 95%, var(--surface)); }
+#editbase-root .eb-cat .cat-head .tw { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+#editbase-root .eb-cat .cat-head .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#editbase-root .eb-cat .cat-head .n { flex: 0 0 auto; color: var(--muted); font-weight: normal; font-size: 12px; }
+#editbase-root .eb-cat .cat-body { padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 4px; }
+#editbase-root .eb-cat .cat-body .hint { margin: 4px 6px 6px; font-size: 12px; color: var(--muted); }
+/* The colours a category can be drawn in. */
+#editbase-root .eb-swatches { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 8px; }
+#editbase-root .eb-swatches .sw {
+  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer;
+  background: repeating-linear-gradient(45deg, var(--surface) 0 5px, var(--surface-2) 5px 10px);
+}
+#editbase-root .eb-swatches .sw.on { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* Who a document is shared with, and who it could be. */
+#editbase-root .eb-people { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#editbase-root .eb-people li { display: flex; align-items: center; gap: 10px; }
+#editbase-root .eb-people .who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+#editbase-root .eb-people .nm { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#editbase-root .eb-people .id { font-size: 11.5px; color: var(--muted); }
+#editbase-root .eb-people .eb-btn { flex: 0 0 auto; padding: 3px 10px; font-size: 12.5px; }
+#editbase-root .eb-people .opt { flex: 0 0 auto; font-size: 12.5px; margin: 0; }
+
+/* Who else has this document open, along the foot of the window. */
+#editbase-root .eb-with { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+#editbase-root .eb-with .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+}
+#editbase-root .eb-with .dot.writing { background: var(--primary); animation: eb-beat 1.6s ease-in-out infinite; }
+@keyframes eb-beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+#editbase-root .eb-readonly {
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px;
+}
+/* A document being carried from one category to another. */
+#editbase-root .eb-docitem.lifted { opacity: .45; }
+#editbase-root .eb-cat.over { outline: 2px dashed var(--primary); outline-offset: -2px; }
+#editbase-root .eb-cat.over .cat-head { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
