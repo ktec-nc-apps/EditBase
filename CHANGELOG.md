@@ -63,6 +63,21 @@ The first version. Everything below is new, because there was nothing before it.
 - A layer bar and a page bar down the right. Every row of the layer bar can be
   dragged: two things standing on the paper change places in the pile, and anything
   else moves through the document.
+- Categories down the left: a document can be filed in a folder inside the save
+  folder, and the list shows one box per category — coloured as the writer likes,
+  opening one at a time, with documents carried between them by dragging a row on
+  to another box. A category is an ordinary folder, so the same filing is there in
+  Files.
+- Sharing with other accounts on this server, from the right button on a document:
+  Nextcloud's own sharing, to read or to write, taken back from either place. What
+  others have shared arrives under “Shared with me”.
+- Writing in one document at the same time as somebody else. Every block of the
+  document carries a name of its own; each copy asks the server every couple of
+  seconds how the file stands and who else has it open, and folds in whatever the
+  other person has written, block by block. What is being typed at this keyboard is
+  never overwritten, a save that would land on top of somebody else's is merged
+  instead of winning, and being written over is said out loud. No service of its
+  own and nothing to install: it is one small request on a timer.
 - Light and dark themes, chosen per user, and English and Japanese translations.
 
 ### Known limits
@@ -74,3 +89,7 @@ The first version. Everything below is new, because there was nothing before it.
   their writing on to the next page, and keeping a thing placed by hand on one
   sheet, are written for horizontal text so far.
 - Printing has been checked in Chromium only.
+- Two people writing in the same paragraph at the same time is settled by the
+  paragraph, not by the letter: the one who saves last keeps that paragraph, and
+  the other is told that it happened and can undo it. Different paragraphs merge
+  cleanly.

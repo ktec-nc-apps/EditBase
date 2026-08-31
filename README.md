@@ -35,8 +35,17 @@ sheets of paper, so what is on the screen is what comes out of the printer.
 
 - Plain HTML files in your Files — shared, searched and versioned by Nextcloud
   like anything else
-- The right button on a document opens it, copies it, throws it away, or says what
-  it is: its file name, size, paper, and how much is written in it
+- The right button on a document opens it, copies it, shares it, moves it, throws
+  it away, or says what it is: its file name, size, paper, and how much is written
+  in it
+- **Categories**: a box for each, in a colour of your choosing, opening one at a
+  time, with documents carried between them by dragging. A category is an ordinary
+  folder inside the save folder, so the same filing is there in Files
+- **Shared with other accounts** on the same server, to read or to write —
+  Nextcloud's own sharing, undone from either place
+- **Two people can write in one document at once**: each copy asks how the file
+  stands every couple of seconds and folds in what the other has written, block by
+  block. What you are typing is never overwritten
 - Autosave, renaming, download
 
 **Paper and pages**
@@ -115,6 +124,11 @@ pile of inline styles:
 - **Vertical writing is behind.** The newest page-fitting work — frames that carry
   their writing on, and keeping placed things on one sheet — is written for
   horizontal text so far.
+- **Writing together is settled by the paragraph, not by the letter.** Two people
+  in different paragraphs merge cleanly and see each other's work within a couple
+  of seconds. Two people in the *same* paragraph: the one who saves last keeps it,
+  and the other is told so and can undo. There is no character-by-character
+  merging.
 - Printing has been checked in Chromium. The files open anywhere; how other
   browsers break them into pages has not been measured yet.
 
@@ -155,8 +169,16 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 **文書**
 
 - 自分の Files の中の素の HTML ファイル ― 共有・検索・版管理は他のファイルと同じ
-- 文書を右クリックすると、開く・複製・削除・プロパティ（ファイル名、大きさ、
-  用紙、文字数など）
+- 文書を右クリックすると、開く・複製・共有・移動・削除・プロパティ（ファイル名、
+  大きさ、用紙、文字数など）
+- **カテゴリ** ― 色を選べる枠で表示し、開けるのは一度に一つ。ドラッグで文書を
+  他のカテゴリへ移せます。カテゴリは保存フォルダの中のふつうのフォルダなので、
+  Files でも同じように整理されています
+- **同じサーバーの他のアカウントと共有**（読むだけ／書き込める）。Nextcloud 本体の
+  共有機能そのものなので、どちらからでも解除できます
+- **一つの文書を二人で同時に編集できます。** 各自の画面が数秒ごとにファイルの状態を
+  問い合わせ、相手が書いた段落を取り込みます。自分が入力中の段落が上書きされることは
+  ありません
 - 自動保存・名前の変更・ダウンロード
 
 **用紙とページ**
@@ -227,6 +249,9 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
   印刷ダイアログの「ヘッダーとフッター」を有効にすると、ブラウザが付けます。
 - **縦書きは遅れています。** 新しいページ調整（枠が次ページへ続く、自由配置物を
   1枚の紙に収める）は、いまのところ横書き向けに書かれています。
+- **同時編集は段落単位です。** 別々の段落なら数秒で互いに反映されます。同じ段落を
+  二人が同時に書いた場合は、後から保存した側が残り、もう一方には「書き換えられた」と
+  通知します（Ctrl+Z で戻せます）。一文字単位の併合は行いません。
 - 印刷の確認は Chromium で行っています。ファイル自体はどこでも開けますが、他の
   ブラウザがどうページを割るかはまだ測っていません。
 
