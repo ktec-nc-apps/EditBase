@@ -3881,6 +3881,54 @@ ${insideObjects('.eb-paper.boxed')} {
    * taller moves the object -- which changes the spacer that made it taller. Two
    * or three passes settle it; if they do not, the last one stands.
    */
+  /**
+   * One float, shaped like everything that stands over this block on this side.
+   *
+   * A float is the only thing in a browser that writing flows around, and a block
+   * can hold as many as it likes -- but they queue up beside and below one
+   * another, which is no use when each is meant to sit at a different height. So
+   * there is one float per side, as tall as the lowest thing over the block, and
+   * its shape-outside is a staircase: as wide as the room needed at each height,
+   * and nothing where nothing stands.
+   */
+  function wrapShape(bands, side, room, mm) {
+    if (!bands || !bands.length) { return ''; }
+    // Every height at which the shape changes.
+    const edges = [];
+    bands.forEach((b) => { edges.push(b.top); edges.push(b.bottom); });
+    const stops = Array.from(new Set(edges.map((n) => Math.round(n * 100) / 100))).sort((a, b) => a - b);
+    const height = stops[stops.length - 1];
+    if (height <= 0) { return ''; }
+    let width = 0;
+    const steps = [];
+    for (let i = 0; i < stops.length - 1; i += 1) {
+      const from = stops[i];
+      const to = stops[i + 1];
+      let w = 0;
+      bands.forEach((b) => {
+        if (b.top <= from + 0.5 && b.bottom >= to - 0.5 && b.width > w) { w = b.width; }
+      });
+      w = Math.min(w, room);
+      if (w > width) { width = w; }
+      steps.push({ from: from, to: to, w: w });
+    }
+    if (width <= 0) { return ''; }
+    // The outline, in the float's own coordinates. For a float on the left the
+    // steps are down its right-hand edge; on the right, down its left-hand edge.
+    const pt = (x, y) => mm(x) + 'mm ' + mm(y) + 'mm';
+    const points = [];
+    if (side === 'left') {
+      points.push(pt(0, 0));
+      steps.forEach((s) => { points.push(pt(s.w, s.from)); points.push(pt(s.w, s.to)); });
+      points.push(pt(0, height));
+    } else {
+      points.push(pt(width, 0));
+      steps.forEach((s) => { points.push(pt(width - s.w, s.from)); points.push(pt(width - s.w, s.to)); });
+      points.push(pt(width, height));
+    }
+    return 'float:' + side + ';width:' + mm(width) + 'mm;height:' + mm(height) + 'mm;'
+      + 'shape-outside:polygon(' + points.join(',') + ');';
+  }
   function applyWrap(root, zoom) {
     if (!root) { return; }
     const z = zoom || 1;
@@ -3908,8 +3956,18 @@ ${insideObjects('.eb-paper.boxed')} {
       // the words were held off a place it no longer stood in: two lines of a
       // paragraph ran straight through a picture that had been told to part them.
       // So the whole plan is drawn up first and the spacers replaced afterwards.
-      const plan = [];
-      const held = new Map();
+      // What each block has to keep clear, on each side: a list of bands, in the
+      // block's own coordinates. One float per object is not enough -- two floats
+      // on the same side of one paragraph stand side by side, or one below the
+      // other, and the second lands nowhere near the thing it was making room
+      // for. So all the objects over a block are drawn as one float with the
+      // outline of the lot of them, which is what shape-outside is for.
+      const plan = new Map();
+      const need = (b, side, band) => {
+        let rows = plan.get(b);
+        if (!rows) { rows = { left: [], right: [], room: band.room }; plan.set(b, rows); }
+        rows[side].push(band);
+      };
       // Nearest first, so two objects over the same paragraph reserve their room
       // one after the other instead of both measuring from the same edge.
       objects.slice().sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
@@ -3923,29 +3981,24 @@ ${insideObjects('.eb-paper.boxed')} {
           const peg = o.parentNode;
           blocks.forEach((b) => {
             if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
+            // Only what is underneath moves. See stackRank.
+            if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
             // Only the writing from the line the thing hangs on, and only where
             // that writing is in the flow: pushing writing that stands above the
             // line would move the line itself, and the thing hanging from it,
             // down and down the page. Writing that is itself placed by hand is
             // out of the flow and moves nothing, so it is always given its room.
-            // Only what is underneath moves. See stackRank.
-            if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
             if (peg && peg.compareDocumentPosition && !b.closest('.eb-anchor')
               && (peg.compareDocumentPosition(b) & 2)) { return; }
             const cb = contentBox(b);
             if (cb.bottom <= or.top - gapPx || cb.top >= or.bottom + gapPx) { return; }
             if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
-            // One spacer to each box the words are written in: a float goes on
-            // holding the lines below it off, so the paragraphs after this one in
-            // the same box are already taken care of. A frame counts as a box of
-            // its own even though CSS does not make it one -- a float outside it
-            // shortens its lines but cannot move its border, so the writing
-            // inside a frame is given its room inside the frame.
+            // One band to each box the words are written in: the same paragraph
+            // asked twice by the same object would reserve the room twice.
             const rootEl = b.closest(WRAP_HOSTS) || flowRoot(b);
             if (done.has(rootEl)) { return; }
             done.add(rootEl);
             const room = cb.right - cb.left;
-            const side = mode;
             let how = mode;
             // A column too narrow to write in is no wrap at all: LibreOffice's own
             // rule is twenty millimetres (TEXT_MIN, 1134 twips), and below that it
@@ -3956,31 +4009,27 @@ ${insideObjects('.eb-paper.boxed')} {
                 : (cb.right - (or.right + gapPx)) * MM / z;
               if (beside < WRAP_MIN_COLUMN) { how = 'none'; }
             }
-            const floatSide = how === 'none' ? 'left' : (side === 'right' ? 'left' : 'right');
-            const taken = held.get(b) || { left: 0, right: 0 };
-            let w = how === 'none' ? room
-              : (floatSide === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
-            w = Math.min(Math.max(w - taken[floatSide], 0), room);
-            const h = (or.bottom + gapPx) - cb.top;
-            if (w <= 0 || h <= 0) { return; }
-            taken[floatSide] += w;
-            held.set(b, taken);
-            const inset = Math.max(0, (or.top - gapPx) - cb.top);
-            plan.push({
-              block: b,
-              style: 'float:' + floatSide + ';width:' + mm(w) + 'mm;height:' + mm(h) + 'mm;'
-                + (inset > 0.5 ? 'shape-outside:inset(' + mm(inset) + 'mm 0 0 0);' : ''),
-            });
+            const side = how === 'none' ? 'left' : (mode === 'right' ? 'left' : 'right');
+            const width = how === 'none' ? room
+              : (side === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
+            const top = Math.max(0, (or.top - gapPx) - cb.top);
+            const bottom = (or.bottom + gapPx) - cb.top;
+            if (width <= 0 || bottom <= top) { return; }
+            need(b, side, { top: top, bottom: bottom, width: Math.min(width, room), room: room });
           });
         });
       clearWrapSpacers(root);
-      plan.forEach((job) => {
-        const spacer = document.createElement('span');
-        spacer.className = 'eb-flow';
-        spacer.setAttribute('contenteditable', 'false');
-        spacer.setAttribute('aria-hidden', 'true');
-        spacer.setAttribute('style', job.style);
-        job.block.insertBefore(spacer, job.block.firstChild);
+      plan.forEach((rows, b) => {
+        ['left', 'right'].forEach((side) => {
+          const style = wrapShape(rows[side], side, rows.room, mm);
+          if (!style) { return; }
+          const spacer = document.createElement('span');
+          spacer.className = 'eb-flow';
+          spacer.setAttribute('contenteditable', 'false');
+          spacer.setAttribute('aria-hidden', 'true');
+          spacer.setAttribute('style', style);
+          b.insertBefore(spacer, b.firstChild);
+        });
       });
       const after = objects.map((o) => o.getBoundingClientRect().top);
       if (after.every((t, i) => Math.abs(t - before[i]) < 0.5)) { return; }
@@ -4419,7 +4468,10 @@ ${insideObjects('.eb-paper.boxed')} {
     const mb = parseFloat(style.paddingBottom) || 0;
     const usable = sheet.offsetHeight - mt - mb;
     if (usable < 40) { return null; }
-    return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP };
+    // How many sheets there are: a thing cannot be sent past the last one.
+    const step = usable + mt + mb + PAGE_GAP;
+    const pages = Math.max(1, Math.round((c.offsetHeight + PAGE_GAP) / step));
+    return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP, pages: pages };
   }
   /**
    * How far down the paper something is drawn, in the units offsetTop is in. A
@@ -4488,7 +4540,10 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const overPaper = top + height > page * geom.usable + geom.usable + geom.mb + 0.5;
     const room = page * geom.usable + geom.usable - top;
-    const move = height && (height <= geom.usable
+    // Nowhere to send it: there is no page after the last one, and a thing put
+    // there would be drawn on the desk beside the paper rather than on a sheet.
+    const somewhere = page + 1 < (geom.pages || 1);
+    const move = somewhere && height && (height <= geom.usable
       ? overPaper
       : (chainable(el) && room < 2 * lineOf(el)));
     if (move) {
