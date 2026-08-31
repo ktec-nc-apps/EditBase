@@ -148,6 +148,11 @@ The first version. Everything below is new, because there was nothing before it.
   that page. It was drawn below the last sheet while the printer duly made a
   second page.
 
+- Deleting everything in a document leaves a plain paragraph to type on. What
+  was left before was the first block's tag, so a document that began with a
+  heading was wiped to an empty heading and everything typed next came out as a
+  heading too.
+
 ### Known limits
 
 - A page number cannot be printed from the file itself: a browser has no count of

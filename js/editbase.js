@@ -2236,6 +2236,34 @@ ${insideObjects('.eb-paper.boxed')} {
     });
   }
 
+  /**
+   * Everything deleted, and what is left is a paragraph.
+   *
+   * Selecting the whole document and pressing Delete leaves the browser holding
+   * on to the first block's tag -- so a document that began with a heading was
+   * left as an empty heading, and the next thing the writer typed came out as a
+   * heading too. What is wanted after wiping a document is a clean line of body
+   * text, which is what every word processor leaves.
+   *
+   * Only when there is nothing at all left: an empty heading somebody has just
+   * made on purpose, with anything else in the document, is left alone.
+   */
+  function blankToParagraph(c) {
+    if (!c || c.children.length !== 1) { return; }
+    const only = c.firstElementChild;
+    if (!only || only.nodeName === 'P') { return; }
+    if (!/^(H1|H2|H3|H4|H5|H6|BLOCKQUOTE|PRE)$/.test(only.nodeName)) { return; }
+    if (String(c.textContent || '').trim()) { return; }
+    if (only.querySelector('img, table, figure, .eb-anchor')) { return; }
+    const p = document.createElement('p');
+    p.innerHTML = '<br>';
+    c.replaceChild(p, only);
+    const r = document.createRange();
+    r.setStart(p, 0);
+    r.collapse(true);
+    selectRange(r);
+  }
+
   /** Move the paragraph the caret is in past the one above or below it. */
   function moveBlock(dir) {
     const blocks = selectedBlocks().filter((b) => b && b.parentNode);
@@ -14455,6 +14483,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // Splitting a paragraph inside a mark leaves the empty half behind, and
         // typing does not go through a command, so it is swept up here.
         if (this.review) { tidyMarks(); this.changes = countChanges(); }
+        blankToParagraph(c);
         this.touch();
         this.recount();
         this.queueWrap();
