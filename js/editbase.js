@@ -32,6 +32,12 @@
     return subst(text, vars);
   }
 
+  /** Lower case, and hiragana as katakana: the CLDR Japanese emoji names are in
+   *  katakana, so "ねこ" has to find ネコの顔 as readily as "cat" finds it. */
+  function kana(s) {
+    return String(s).toLowerCase().replace(/[\u3041-\u3096]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  }
+
   // ---- server ---------------------------------------------------------------
   async function api(path, opts) {
     const res = await fetch(BASE + 'api/' + path, {
@@ -573,6 +579,11 @@
 /* A frame carried on from the page before begins the next page. In the editor
    paginate puts it there; on paper this is what does it, in any browser. */
 .eb-doc .eb-cont { break-before: page; page-break-before: always; }
+/* A block that begins a page because it was told to keeps its top margin on
+   paper -- the editor does not draw one, because it stands the block against the
+   top margin of the sheet. Two and a half millimetres of disagreement between
+   the screen and the printout, measured. The margin goes. */
+.eb-doc .eb-cont, .eb-doc .eb-pagebreak + * { margin-top: 0; }
 .eb-doc .eb-frame > *:first-child { margin-top: 0; }
 .eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
 /* A run of words made into a frame: a box, but not a box that shows until it is
@@ -784,7 +795,12 @@
    one on screen. The file keeps the paper's answer -- what it says is what
    prints -- and the editor adds the gaps it drew back on here. The mark is the
    editor's own and is taken out again when the file is written. */
-.eb-paper.eb-doc .eb-anchor > * { margin-top: var(--eb-shift, 0px); }
+/* Moved rather than given a margin: a placed object usually wears a margin of
+   its own -- the room it keeps between itself and the writing -- and an inline
+   style beats a rule, so as a margin the gaps were simply ignored on any such
+   object and it was drawn a whole page from where the editor had worked out it
+   stood. translate moves it without touching either its margin or the layout. */
+.eb-paper.eb-doc .eb-anchor > * { translate: 0 var(--eb-shift, 0px); }
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -847,7 +863,21 @@ ${insideObjects('.eb-paper.boxed')} {
     { key: 'cell', sel: '.eb-doc table.eb-table th, .eb-doc table.eb-table td' },
     { key: 'caption', sel: '.eb-doc figcaption' },
   ];
-  const EMPTY_STYLE = { family: '', size: '', colour: '', bold: false, italic: false, align: '', lineHeight: '', before: '', after: '' };
+  /**
+   * What a writer can say about a kind of block without writing a line of CSS.
+   * Everything here is a control in the styles dialogue and a declaration in the
+   * file: the box for the writing, the ink, the space round it, the line it sits
+   * on, and -- for a list -- the mark in front of it.
+   */
+  const EMPTY_STYLE = {
+    family: '', size: '', colour: '', bold: false, italic: false, underline: false,
+    align: '', lineHeight: '', before: '', after: '',
+    fill: '', border: '', borderStyle: 'solid', borderWidth: '', borderColour: '',
+    radius: '', pad: '', indent: '', spacing: '', marker: '', markerColour: '',
+  };
+  const STYLE_SIDES = ['', 'all', 'top', 'bottom', 'left', 'right'];
+  const STYLE_BORDERS = ['solid', 'dashed', 'dotted', 'double'];
+  const STYLE_MARKERS = ['', 'disc', 'circle', 'square', 'decimal', 'decimal-leading-zero', 'lower-alpha', 'upper-alpha', 'katakana', 'cjk-ideographic', 'none'];
 
   function normaliseStyles(raw) {
     const out = {};
@@ -874,11 +904,27 @@ ${insideObjects('.eb-paper.boxed')} {
       to.lineHeight = numOr(src.lineHeight, 1, 4, 100);
       to.before = numOr(src.before, 0, 200, 2);
       to.after = numOr(src.after, 0, 200, 2);
+      to.underline = !!src.underline;
+      if (typeof src.fill === 'string' && /^#[0-9a-f]{6}$/i.test(src.fill)) { to.fill = src.fill; }
+      if (STYLE_SIDES.indexOf(src.border) > 0) { to.border = src.border; }
+      to.borderStyle = STYLE_BORDERS.indexOf(src.borderStyle) >= 0 ? src.borderStyle : 'solid';
+      to.borderWidth = numOr(src.borderWidth, 0.25, 12, 4);
+      if (typeof src.borderColour === 'string' && /^#[0-9a-f]{6}$/i.test(src.borderColour)) { to.borderColour = src.borderColour; }
+      to.radius = numOr(src.radius, 0, 20, 2);
+      to.pad = numOr(src.pad, 0, 40, 2);
+      to.indent = numOr(src.indent, -30, 30, 2);
+      to.spacing = numOr(src.spacing, -0.1, 1, 100);
+      if (STYLE_MARKERS.indexOf(src.marker) > 0) { to.marker = src.marker; }
+      if (typeof src.markerColour === 'string' && /^#[0-9a-f]{6}$/i.test(src.markerColour)) { to.markerColour = src.markerColour; }
     });
     return out;
   }
   function styleHasAnything(v) {
-    return !!(v && (v.family || v.size !== '' || v.colour || v.bold || v.italic || v.align || v.lineHeight !== '' || v.before !== '' || v.after !== ''));
+    if (!v) { return false; }
+    return !!(v.family || v.size !== '' || v.colour || v.bold || v.italic || v.underline
+      || v.align || v.lineHeight !== '' || v.before !== '' || v.after !== ''
+      || v.fill || v.border || v.radius !== '' || v.pad !== '' || v.indent !== ''
+      || v.spacing !== '' || v.marker || v.markerColour);
   }
   function anyStyles(styles) { return STYLE_TARGETS.some((t) => styleHasAnything(styles[t.key])); }
   /** The stylesheet those settings come to. */
@@ -897,11 +943,30 @@ ${insideObjects('.eb-paper.boxed')} {
       if (v.lineHeight !== '') { decls.push('line-height: ' + v.lineHeight); }
       if (v.before !== '') { decls.push('margin-top: ' + v.before + 'pt'); }
       if (v.after !== '') { decls.push('margin-bottom: ' + v.after + 'pt'); }
+      if (v.underline) { decls.push('text-decoration: underline'); }
+      if (v.spacing !== '') { decls.push('letter-spacing: ' + v.spacing + 'em'); }
+      if (v.indent !== '') { decls.push('text-indent: ' + v.indent + 'mm'); }
+      if (v.fill) { decls.push('background-color: ' + v.fill); }
+      if (v.pad !== '') { decls.push('padding: ' + v.pad + 'mm'); }
+      if (v.radius !== '') { decls.push('border-radius: ' + v.radius + 'mm'); }
+      if (v.border) {
+        const rule = (v.borderWidth === '' ? 0.75 : v.borderWidth) + 'pt ' + (v.borderStyle || 'solid')
+          + ' ' + (v.borderColour || v.colour || '#666');
+        const where = { all: 'border', top: 'border-top', bottom: 'border-bottom', left: 'border-left', right: 'border-right' };
+        decls.push((where[v.border] || 'border') + ': ' + rule);
+      }
+      if (v.marker) { decls.push('list-style-type: ' + v.marker); }
       // In the editor the app's own stylesheet already names the headings with the
       // app's id in front of them, so the document's own rules need the same reach
       // or they would lose to it -- and the editor would not show what the file does.
       const sel = prefix ? t.sel.split(',').map((x) => prefix + x.trim()).join(', ') : t.sel;
-      out.push(sel + ' { ' + decls.join('; ') + '; }');
+      if (decls.length) { out.push(sel + ' { ' + decls.join('; ') + '; }'); }
+      // The mark in front of a list item is drawn by the browser, and only a rule
+      // of its own can reach it.
+      if (v.markerColour) {
+        const marks = sel.split(', ').map((x) => x + '::marker').join(', ');
+        out.push(marks + ' { color: ' + v.markerColour + '; }');
+      }
     });
     return out.join('\n');
   }
@@ -3891,43 +3956,153 @@ ${insideObjects('.eb-paper.boxed')} {
    * its shape-outside is a staircase: as wide as the room needed at each height,
    * and nothing where nothing stands.
    */
-  function wrapShape(bands, side, room, mm) {
-    if (!bands || !bands.length) { return ''; }
-    // Every height at which the shape changes.
+  /**
+   * The room two objects take out of one paragraph, as a pair of floats.
+   *
+   * A float is a box, and boxes on the same line have to fit beside each other:
+   * two of them wider than the column together do not sit side by side, the
+   * second drops below the first. That is how a formula standing across the
+   * whole column -- a band as wide as the writing -- threw the band belonging to
+   * a picture on the right three hundred millimetres down the page, where it
+   * held nothing off anything, made the document a sheet longer, and let the
+   * words run straight through the picture.
+   *
+   * So the two sides are cut to fit: the right-hand band keeps the width it
+   * needs, the left-hand one takes what is left, and any height where the two
+   * together want more than the column is simply blocked from edge to edge --
+   * which is what a band as wide as the writing means in the first place.
+   */
+  /**
+   * How far down the last line of writing in a block reaches. Not the block's own
+   * height: a float standing in it makes it taller than its words, and asking the
+   * block would then be asking about the band we are in the middle of drawing.
+   */
+  function writingBottom(b) {
+    let low = 0;
+    const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = walk.nextNode())) {
+      if (!String(n.nodeValue || '').trim()) { continue; }
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      Array.from(r.getClientRects()).forEach((q) => { if (q.height && q.bottom > low) { low = q.bottom; } });
+    }
+    Array.from(b.querySelectorAll('img, svg, math')).forEach((el) => {
+      const q = el.getBoundingClientRect();
+      if (q.height && q.bottom > low) { low = q.bottom; }
+    });
+    return low || b.getBoundingClientRect().bottom;
+  }
+  /** The last block in the document with anything written in it. */
+  function lastWriting(root) {
+    const all = Array.from(root.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, figcaption'));
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      if (String(all[i].textContent || '').trim()) { return all[i]; }
+    }
+    return null;
+  }
+  /**
+   * Bands trimmed to the writing, once everything else has settled.
+   *
+   * A band is a float, and a float taller than the words in its block makes the
+   * block taller -- so a band drawn for an object standing below the last line of
+   * a document added a sheet to the printout with nothing on it. It cannot be cut
+   * short while the layout is being worked out, because the words move as the
+   * bands are laid and a band cut to where the words happen to be would let the
+   * last line stand beside the very object it was drawn for. Cut afterwards, when
+   * nothing is going to move again, it takes the phantom sheet away and leaves
+   * every line where it is.
+   */
+  function trimBands(root, zoom) {
+    if (!root) { return false; }
+    const z = zoom || 1;
+    let cut = false;
+    // Only in the last writing there is. Shortening a band lets everything below
+    // it rise, and what rises can rise into the very object the band was drawn
+    // for -- which is how a paragraph came to sit across a picture again. At the
+    // end of the document there is nothing below to rise.
+    const last = lastWriting(root);
+    Array.from(root.querySelectorAll('span.eb-flow')).forEach((band) => {
+      const b = band.parentNode;
+      if (!b || !b.getBoundingClientRect) { return; }
+      if (!last || !(b === last || last.contains(b))) { return; }
+      const r = band.getBoundingClientRect();
+      if (!r.height) { return; }
+      const low = writingBottom(b);
+      const over = r.bottom - low;
+      if (over <= 1) { return; }
+      const height = Math.max(0, (r.height - over) / z * MM);
+      band.style.height = round1(height) + 'mm';
+      cut = true;
+    });
+    return cut;
+  }
+  function wrapPair(rows, room, mm) {
+    const sides = { left: rows.left || [], right: rows.right || [] };
+    if (!sides.left.length && !sides.right.length) { return {}; }
     const edges = [];
-    bands.forEach((b) => { edges.push(b.top); edges.push(b.bottom); });
+    ['left', 'right'].forEach((k) => sides[k].forEach((b) => { edges.push(b.top); edges.push(b.bottom); }));
     const stops = Array.from(new Set(edges.map((n) => Math.round(n * 100) / 100))).sort((a, b) => a - b);
-    const height = stops[stops.length - 1];
-    if (height <= 0) { return ''; }
-    let width = 0;
-    const steps = [];
-    for (let i = 0; i < stops.length - 1; i += 1) {
-      const from = stops[i];
-      const to = stops[i + 1];
+    if (stops.length < 2) { return {}; }
+    // The room above the first band belongs to the writing, and it has to be said
+    // so. Without a step of no width there, the outline runs diagonally from the
+    // top corner of the float down to the first band, and the words are drawn
+    // into a wedge -- a paragraph narrowing line by line to a point, which is
+    // what the owner's document was doing.
+    if (stops[0] > 0.01) { stops.unshift(0); }
+    const widest = (bands, from, to) => {
       let w = 0;
-      bands.forEach((b) => {
-        if (b.top <= from + 0.5 && b.bottom >= to - 0.5 && b.width > w) { w = b.width; }
+      bands.forEach((b) => { if (b.top <= from + 0.5 && b.bottom >= to - 0.5 && b.width > w) { w = b.width; } });
+      return Math.min(w, room);
+    };
+    const runs = [];
+    for (let i = 0; i < stops.length - 1; i += 1) {
+      const from = stops[i], to = stops[i + 1];
+      runs.push({ from: from, to: to, l: widest(sides.left, from, to), r: widest(sides.right, from, to) });
+    }
+    // What each side is given. A hair is kept back so that the rounding to a
+    // tenth of a millimetre cannot make the pair a whisker too wide to fit.
+    const hair = 0.2 / MM;
+    const wide = { left: 0, right: 0 };
+    runs.forEach((s2) => { wide.left = Math.max(wide.left, s2.l); wide.right = Math.max(wide.right, s2.r); });
+    if (wide.left + wide.right > room - hair) {
+      if (wide.right >= room - hair) { wide.right = room; wide.left = 0; }
+      else { wide.left = Math.max(0, room - wide.right - hair); }
+    }
+    const out = {};
+    ['left', 'right'].forEach((side) => {
+      const width = wide[side];
+      if (width <= 0) { return; }
+      const steps = runs.map((s2) => {
+        // Wanted more than the column holds -- or more than the side it is on was
+        // given, which comes to the same thing: the line is blocked across, and
+        // both bands stand at their full width to do it. Without the second half
+        // of this, a formula set to keep the words above and below it was handed
+        // a band narrower than the column and two lines ran under it.
+        const full = s2.l + s2.r > room + 0.5
+          || s2.l > wide.left + 0.5 || s2.r > wide.right + 0.5;
+        const want = side === 'left' ? s2.l : s2.r;
+        return { from: s2.from, to: s2.to, w: full ? width : Math.min(want, width) };
       });
-      w = Math.min(w, room);
-      if (w > width) { width = w; }
-      steps.push({ from: from, to: to, w: w });
-    }
-    if (width <= 0) { return ''; }
-    // The outline, in the float's own coordinates. For a float on the left the
-    // steps are down its right-hand edge; on the right, down its left-hand edge.
-    const pt = (x, y) => mm(x) + 'mm ' + mm(y) + 'mm';
-    const points = [];
-    if (side === 'left') {
-      points.push(pt(0, 0));
-      steps.forEach((s) => { points.push(pt(s.w, s.from)); points.push(pt(s.w, s.to)); });
-      points.push(pt(0, height));
-    } else {
-      points.push(pt(width, 0));
-      steps.forEach((s) => { points.push(pt(width - s.w, s.from)); points.push(pt(width - s.w, s.to)); });
-      points.push(pt(width, height));
-    }
-    return 'float:' + side + ';width:' + mm(width) + 'mm;height:' + mm(height) + 'mm;'
-      + 'shape-outside:polygon(' + points.join(',') + ');';
+      let height = 0;
+      steps.forEach((s2) => { if (s2.w > 0) { height = Math.max(height, s2.to); } });
+      if (height <= 0) { return; }
+      const pt = (x, y) => mm(x) + 'mm ' + mm(y) + 'mm';
+      const points = [];
+      const within = steps.filter((s2) => s2.from < height - 0.01);
+      if (side === 'left') {
+        points.push(pt(0, 0));
+        within.forEach((s2) => { points.push(pt(s2.w, s2.from)); points.push(pt(s2.w, Math.min(s2.to, height))); });
+        points.push(pt(0, height));
+      } else {
+        points.push(pt(width, 0));
+        within.forEach((s2) => { points.push(pt(width - s2.w, s2.from)); points.push(pt(width - s2.w, Math.min(s2.to, height))); });
+        points.push(pt(width, height));
+      }
+      out[side] = 'float:' + side + ';width:' + mm(width) + 'mm;height:' + mm(height) + 'mm;'
+        + 'shape-outside:polygon(' + points.join(',') + ');';
+    });
+    return out;
   }
   function applyWrap(root, zoom) {
     if (!root) { return; }
@@ -4020,8 +4195,9 @@ ${insideObjects('.eb-paper.boxed')} {
         });
       clearWrapSpacers(root);
       plan.forEach((rows, b) => {
+        const pair = wrapPair(rows, rows.room, mm);
         ['left', 'right'].forEach((side) => {
-          const style = wrapShape(rows[side], side, rows.room, mm);
+          const style = pair[side];
           if (!style) { return; }
           const spacer = document.createElement('span');
           spacer.className = 'eb-flow';
@@ -4508,6 +4684,7 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   function settleFree(el, geom) {
     if (!el || !geom || !objectFree(el) || !el.parentNode) { return false; }
+    const c = canvas();
     const before = (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '');
     if (el.hasAttribute('data-free-top')) {
       const own = el.getAttribute('data-free-top');
@@ -4521,7 +4698,13 @@ ${insideObjects('.eb-paper.boxed')} {
     const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
     const paperTop = anchorTop - ka * geom.extra;
     let top = paperTop + lengthPx(el.style.top);
+    // There are only so many sheets: a thing worked out to be on a page past the
+    // last one would be drawn on the desk beside the paper. It belongs on the
+    // last sheet there is.
+    const last = Math.max(0, (geom.pages || 1) - 1);
+    const carrier = chainable(el);
     let page = Math.max(0, Math.floor((top + 0.5) / geom.usable));
+    if (!carrier) { page = Math.min(last, page); }
     const height = el.offsetHeight;
     // It fits on a sheet but is drawn across the edge of one: it goes on to the
     // next page whole. Taller than the writing area, no sheet can hold it and
@@ -4538,11 +4721,21 @@ ${insideObjects('.eb-paper.boxed')} {
       el.style.top = round1((top - paperTop) * MM) + 'mm';
       if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); }
     }
-    const overPaper = top + height > page * geom.usable + geom.usable + geom.mb + 0.5;
-    const room = page * geom.usable + geom.usable - top;
+    // The foot of the WRITING, not the foot of the paper. A printer cuts a page
+    // at the bottom of its text area and prints whatever hangs below it on the
+    // next page: a seal placed in the bottom margin came out sliced in two, with
+    // its lower centimetre alone on a third sheet. Measured, in Chrome.
+    const foot = page * geom.usable + geom.usable;
+    // A placed thing may carry a margin of its own -- the room it keeps between
+    // itself and the writing -- and that margin moves it down the page as surely
+    // as its offset does. Left out, the sum was a centimetre short and the foot
+    // of a seal still printed on a sheet of its own.
+    const lead = lengthPx(el.style.marginTop);
+    const overPaper = top + lead + height > foot + 0.5;
+    const room = foot - top;
     // Nowhere to send it: there is no page after the last one, and a thing put
     // there would be drawn on the desk beside the paper rather than on a sheet.
-    const somewhere = page + 1 < (geom.pages || 1);
+    const somewhere = carrier || page + 1 <= last;
     const move = somewhere && height && (height <= geom.usable
       ? overPaper
       : (chainable(el) && room < 2 * lineOf(el)));
@@ -4552,6 +4745,35 @@ ${insideObjects('.eb-paper.boxed')} {
       top = page * geom.usable;
       el.style.top = round1((top - paperTop) * MM) + 'mm';
       el.setAttribute('data-free-top', own);
+    } else if (height <= geom.usable && (overPaper || top + 0.5 > foot)) {
+      // There is no page after this one to send it to, so it is brought up until
+      // it is inside the page again. Left where it was, the printer cuts it at
+      // the foot of the writing and prints the rest on a sheet of its own.
+      //
+      // Measured where it is drawn rather than in the column, because there are
+      // two feet to keep above and one of them is not the page's: a thing hanging
+      // off a line inside a frame belongs in that frame, and standing it on the
+      // foot of the page took it clean out of the box the writer put it in. It
+      // goes above whichever of the two is higher, and no further.
+      const drawnTop = topOnPaper(el);
+      const stepPx = geom.usable + geom.extra;
+      const sheetNo = Math.max(0, Math.floor((drawnTop - geom.mt + 0.5) / stepPx));
+      let limit = geom.mt + sheetNo * stepPx + geom.usable;
+      const host = el.parentNode.parentNode;
+      if (host && host !== c && host.getBoundingClientRect) {
+        const inner = topOnPaper(host) + host.offsetHeight;
+        if (inner > 0 && inner < limit) { limit = inner; }
+      }
+      // A millimetre short of the foot, not exactly on it: the offset is written
+      // to a tenth of a millimetre, and a fifth of a millimetre over the line was
+      // enough to make the printer start a sheet for it.
+      const lift = (drawnTop + height) - limit + (1 / MM);
+      if (lift > 0.5) {
+        const own = el.style.top || '';
+        el.style.top = round1((lengthPx(el.style.top) - lift) * MM) + 'mm';
+        top -= lift;
+        if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); }
+      }
     }
     foldShift(el, (page - ka) * geom.extra);
     return (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '') !== before;
@@ -6949,7 +7171,9 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" :class="{ on: fmt.kenten }" @mousedown.prevent @click="inline('kenten')" :title="t('Emphasis dots')"><span class="kt">A</span></button>
       <button class="eb-tb" :class="{ on: fmt.sup }" @mousedown.prevent @click="inline('sup')" :title="t('Superscript')"><span class="sx">x<sup>2</sup></span></button>
       <button class="eb-tb" :class="{ on: fmt.sub }" @mousedown.prevent @click="inline('sub')" :title="t('Subscript')"><span class="sx">x<sub>2</sub></span></button>
-      <button class="eb-tb" :class="{ on: fmt.code }" @mousedown.prevent @click="inline('code')" :title="t('Inline code')"><span class="mono">&lt;/&gt;</span></button>
+      <!-- Not </>: that is the button that shows the document's HTML, and two
+           buttons wearing the same mark is two buttons nobody can tell apart. -->
+      <button class="eb-tb" :class="{ on: fmt.code }" @mousedown.prevent @click="inline('code')" :title="t('Inline code (monospaced)')"><span class="mono">&gt;_</span></button>
       <span class="sep"></span>
       <span class="eb-pop">
         <button class="eb-tb" :class="{ on: menu === 'hl' }" @mousedown.prevent @click="toggleMenu('hl')" :title="t('Highlight')"><span v-html="icons.highlight"></span></button>
@@ -7019,6 +7243,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <div class="eb-menu wide" v-if="menu === 'marks'" @mousedown.prevent>
           <button class="eb-menu-item" @click="openRuby()"><span v-html="icons.ruby"></span>{{ t('Reading over the word…') }}</button>
           <button class="eb-menu-item" @click="openChars(); menu = ''"><span v-html="icons.text"></span>{{ t('Special character…') }}</button>
+          <button class="eb-menu-item" @click="openEmoji(); menu = ''"><span class="eb-emoji-mark">😀</span>{{ t('Emoji…') }}</button>
           <button class="eb-menu-item" @click="openMath(); menu = ''"><span v-html="icons.formula"></span>{{ t('Insert formula (MathML)') }}</button>
           <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
         </div>
@@ -7145,6 +7370,8 @@ ${insideObjects('.eb-paper.boxed')} {
           <!-- What a draughtsman needs while moving something: where it is and how
                big it is, in the units the paper is measured in. -->
           <div class="mm" v-if="frame.dragging">{{ frame.mm }}</div>
+          <div v-if="frame.solid" class="mv" @pointerdown.prevent="frameGrab($event, 'move')"
+            @contextmenu.prevent.stop="objectCtx($event)"></div>
           <div v-for="e in frameEdges" :key="'e' + e" class="ed" :class="e"
             @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="objectCtx($event)"></div>
           <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
@@ -7740,7 +7967,7 @@ ${insideObjects('.eb-paper.boxed')} {
   <!-- the right button, as a word processor uses it -->
   <!-- the styles of the document: one rule per kind of paragraph -->
   <div v-if="stylesOpen" class="eb-modal-back" @click="closeStyles">
-    <div class="eb-modal" @click.stop>
+    <div class="eb-modal wide" @click.stop>
       <h3>{{ t('Styles of this document') }}</h3>
       <div class="body">
         <div class="eb-field">
@@ -7749,6 +7976,21 @@ ${insideObjects('.eb-paper.boxed')} {
             <option v-for="t2 in styleTargets" :key="t2.key" :value="t2.key">{{ t2.label }}</option>
           </select>
         </div>
+
+        <!-- What it will look like, drawn with the very rules that go into the
+             file. Every control below changes this as it is touched, so the
+             writing is designed by looking at it rather than by writing CSS. -->
+        <div class="eb-styleview">
+          <span class="cap">{{ t('How it will look') }}</span>
+          <div class="paper" :style="{ fontFamily: 'var(--eb-font-body)' }">
+            <p class="around">{{ t('The line before it.') }}</p>
+            <ul v-if="styleKey === 'li'" :style="styleSample"><li :style="styleSample">{{ styleWords }}</li></ul>
+            <p v-else :style="styleSample">{{ styleWords }}</p>
+            <p class="around">{{ t('And the line after it.') }}</p>
+          </div>
+        </div>
+
+        <h4 class="eb-sect">{{ t('The letters') }}</h4>
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Typeface') }}</label>
             <select :value="styleNow.family" @change="styleNow.family = $event.target.value; touchStyles()">
@@ -7763,25 +8005,89 @@ ${insideObjects('.eb-paper.boxed')} {
               <button class="eb-btn ghost" @click="styleNow.colour = ''; touchStyles()">{{ t('None') }}</button>
             </div>
           </div>
+          <div class="eb-field"><label>{{ t('Letter spacing') }}</label><input type="range" min="-0.05" max="0.5" step="0.01" :value="styleNow.spacing === '' ? 0 : styleNow.spacing" @input="styleNow.spacing = Number($event.target.value) || ''; touchStyles()"></div>
         </div>
+        <div class="eb-inks">
+          <button class="eb-tb" :class="{ on: styleNow.bold }" @click="styleNow.bold = !styleNow.bold; touchStyles()" :title="t('Bold')"><span class="b">B</span></button>
+          <button class="eb-tb" :class="{ on: styleNow.italic }" @click="styleNow.italic = !styleNow.italic; touchStyles()" :title="t('Italic')"><span class="i">I</span></button>
+          <button class="eb-tb" :class="{ on: styleNow.underline }" @click="styleNow.underline = !styleNow.underline; touchStyles()" :title="t('Underline')"><span class="u">U</span></button>
+          <span class="sep"></span>
+          <button class="eb-tb" v-for="a in styleAligns" :key="a.value" :class="{ on: styleNow.align === a.value }"
+            @click="styleNow.align = styleNow.align === a.value ? '' : a.value; touchStyles()" :title="a.label"><span v-html="a.icon"></span></button>
+        </div>
+
+        <h4 class="eb-sect">{{ t('The lines and the space round them') }}</h4>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Alignment') }}</label>
-            <select v-model="styleNow.align" @change="touchStyles">
-              <option value="">{{ t('Unchanged') }}</option>
-              <option value="left">{{ t('Left') }}</option>
-              <option value="center">{{ t('Centre') }}</option>
-              <option value="right">{{ t('Right') }}</option>
-              <option value="justify">{{ t('Justified') }}</option>
-            </select>
-          </div>
           <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="styleNow.lineHeight" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-30" max="30" step="0.5" v-model="styleNow.indent" @input="touchStyles"></div>
           <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.before" @input="touchStyles"></div>
           <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.after" @input="touchStyles"></div>
         </div>
-        <label class="opt"><input type="checkbox" v-model="styleNow.bold" @change="touchStyles"> {{ t('Bold') }}</label>
-        <label class="opt"><input type="checkbox" v-model="styleNow.italic" @change="touchStyles"> {{ t('Italic') }}</label>
+
+        <h4 class="eb-sect">{{ t('The box it sits in') }}</h4>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Fill') }}</label>
+            <div class="colour-pair">
+              <input type="color" :value="styleNow.fill || '#f2f4f8'" @input="styleNow.fill = $event.target.value; touchStyles()">
+              <button class="eb-btn ghost" @click="styleNow.fill = ''; touchStyles()">{{ t('None') }}</button>
+            </div>
+          </div>
+          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="40" step="0.5" v-model="styleNow.pad" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Rounded (mm)') }}</label><input type="number" min="0" max="20" step="0.5" v-model="styleNow.radius" @input="touchStyles"></div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field"><label>{{ t('Border') }}</label>
+            <div class="eb-inks sides">
+              <button class="eb-tb" v-for="s2 in styleBorderSides" :key="s2.value || 'none'" :class="{ on: (styleNow.border || '') === s2.value }"
+                @click="styleNow.border = s2.value; touchStyles()" :title="s2.label"><span class="bd" :class="'bd-' + (s2.value || 'none')"></span></button>
+            </div>
+          </div>
+          <div class="eb-field"><label>{{ t('Line style') }}</label>
+            <select v-model="styleNow.borderStyle" @change="touchStyles">
+              <option value="solid">{{ t('Solid') }}</option>
+              <option value="dashed">{{ t('Dashed') }}</option>
+              <option value="dotted">{{ t('Dotted') }}</option>
+              <option value="double">{{ t('Double') }}</option>
+            </select>
+          </div>
+          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" max="12" step="0.25" v-model="styleNow.borderWidth" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Line colour') }}</label>
+            <div class="colour-pair">
+              <input type="color" :value="styleNow.borderColour || styleNow.colour || '#666666'" @input="styleNow.borderColour = $event.target.value; touchStyles()">
+              <button class="eb-btn ghost" @click="styleNow.borderColour = ''; touchStyles()">{{ t('None') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <template v-if="styleKey === 'li'">
+          <h4 class="eb-sect">{{ t('The mark in front') }}</h4>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Mark') }}</label>
+              <select v-model="styleNow.marker" @change="touchStyles">
+                <option value="">{{ t('As the list says') }}</option>
+                <option value="disc">●</option>
+                <option value="circle">○</option>
+                <option value="square">■</option>
+                <option value="decimal">1. 2. 3.</option>
+                <option value="decimal-leading-zero">01. 02.</option>
+                <option value="lower-alpha">a. b. c.</option>
+                <option value="upper-alpha">A. B. C.</option>
+                <option value="katakana">ア. イ. ウ.</option>
+                <option value="cjk-ideographic">一. 二. 三.</option>
+                <option value="none">{{ t('No mark') }}</option>
+              </select>
+            </div>
+            <div class="eb-field"><label>{{ t('Mark colour') }}</label>
+              <div class="colour-pair">
+                <input type="color" :value="styleNow.markerColour || styleNow.colour || '#111111'" @input="styleNow.markerColour = $event.target.value; touchStyles()">
+                <button class="eb-btn ghost" @click="styleNow.markerColour = ''; touchStyles()">{{ t('None') }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <p class="eb-tip">{{ t('This changes every paragraph of that kind at once, now and later, because it is written as a rule in the file rather than on each paragraph. Anything you have set on one paragraph by hand still wins over it.') }}</p>
-        <!-- Everything the boxes above cannot say. It is the document's own
+        <!-- Everything the controls above cannot say. It is the document's own
              stylesheet: it goes into the file as it is typed here. -->
         <h4 class="eb-sect">
           <button class="eb-btn ghost" @click="cssOpen = !cssOpen">{{ cssOpen ? '▾' : '▸' }} {{ t('Write the styles as CSS') }}</button>
@@ -8360,6 +8666,7 @@ ${insideObjects('.eb-paper.boxed')} {
 
     <button class="ci" @click="ctxDo('para')">{{ t('Paragraph settings…') }}</button>
     <button class="ci" @click="ctxDo('chars')">{{ t('Special character…') }}</button>
+    <button class="ci" @click="ctxDo('emoji')">{{ t('Emoji…') }}</button>
 
     <template v-if="ctx.table">
       <div class="sep"></div>
@@ -8634,6 +8941,27 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
+  <!-- emoji -->
+  <div v-if="emojiOpen" class="eb-modal-back" @click="emojiOpen = false">
+    <div class="eb-modal" style="width:min(620px,100%)" @click.stop>
+      <h3>{{ t('Emoji…') }}</h3>
+      <div class="body">
+        <input class="eb-emoji-search" type="text" v-model="emojiQuery" :placeholder="t('Search emoji')">
+        <div class="eb-emoji-tabs" v-if="!emojiQuery">
+          <button v-for="g in emoji.groups" :key="g.key" class="eb-emoji-tab" :class="{ on: emojiTab === g.key }"
+            @click="emojiTab = g.key" :title="t(g.key)">{{ g.tab }}</button>
+        </div>
+        <div class="eb-emoji-cat">{{ emojiQuery ? t('{n} found', { n: emojiShown.length }) : t(emojiTab) }}</div>
+        <div v-if="emojiLoading" class="eb-tip">{{ t('Fetching…') }}</div>
+        <div class="eb-emoji-grid">
+          <button v-for="em in emojiShown" :key="em" class="eb-emoji-btn" @click="pickEmoji(em)" :title="emojiName(em)">{{ em }}</button>
+        </div>
+        <p class="eb-tip">{{ t('The emoji goes in at the caret. The dialog stays open so several can be picked.') }}</p>
+      </div>
+      <div class="foot"><button class="eb-btn primary" @click="emojiOpen = false">{{ t('Close') }}</button></div>
+    </div>
+  </div>
+
   <!-- a hyperlink -->
   <div v-if="webOpen" class="eb-modal-back" @click="webOpen = false">
     <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
@@ -8767,7 +9095,7 @@ ${insideObjects('.eb-paper.boxed')} {
         folders: [], openCat: '', naming: false, catNew: '', catColours: {},
         dragDoc: 0, dropCat: null,
         props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], parts: [], more: 0, onPart: false },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, solid: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], parts: [], more: 0, onPart: false },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -8790,6 +9118,11 @@ ${insideObjects('.eb-paper.boxed')} {
         charsOpen: false,
         charSets: CHAR_SETS,
         charSet: 'Punctuation',
+        emojiOpen: false,
+        emoji: { groups: [], names: {} },
+        emojiTab: '',
+        emojiQuery: '',
+        emojiLoading: false,
         tocOpen: false,
         tocTitle: '',
         spellcheck: false,
@@ -8971,6 +9304,35 @@ ${insideObjects('.eb-paper.boxed')} {
           { cls: 'eb-al-j', icon: bars([[0, 16], [0, 16], [0, 16], [0, 16]]), label: this.t('Justify') },
         ];
       },
+      /** What the grid shows: the open tab, or -- while searching -- every emoji
+       *  whose name or keywords match, in the order the tabs are in. */
+      emojiShown() {
+        const q = this.emojiQuery.trim().toLowerCase();
+        const groups = this.emoji.groups;
+        if (!q) {
+          const g = groups.find((x) => x.key === this.emojiTab) || groups[0];
+          return g ? g.e : [];
+        }
+        // Typed in letters, the words are matched from their beginnings: "cat"
+        // should find the cat and not the intoxi-cat-ed face. Typed in Japanese
+        // there are no spaces to go by, so any part of the name will do.
+        const nq = kana(q), names = this.emoji.names, out = [], seen = Object.create(null);
+        const roman = /^[a-z0-9 ]+$/.test(q);
+        const hit = (name) => {
+          if (!name) { return false; }
+          const n = kana(name);
+          if (!roman) { return n.includes(nq); }
+          return n.split(/[^a-z0-9]+/).some((w) => w.startsWith(nq));
+        };
+        for (const g of groups) {
+          for (const em of g.e) {
+            if (seen[em]) { continue; }
+            if (em === q || hit(names[em] || '')) { seen[em] = true; out.push(em); }
+            if (out.length >= 400) { return out; }
+          }
+        }
+        return out;
+      },
       fontSizes() { return FONT_SIZES; },
       rulerMm() {
         const p = normalisePaper(this.doc.paper);
@@ -8995,6 +9357,65 @@ ${insideObjects('.eb-paper.boxed')} {
         return this.t('{n} rules in use', { n: this.cssRules });
       },
       cssHint() { return 'h2 { color: #1f3a5f; }'; },
+      /** The controls for where a border goes, drawn as the border they make. */
+      styleBorderSides() {
+        return [
+          { value: '', label: this.t('None') },
+          { value: 'all', label: this.t('All round') },
+          { value: 'top', label: this.t('Above') },
+          { value: 'bottom', label: this.t('Below') },
+          { value: 'left', label: this.t('Left') },
+          { value: 'right', label: this.t('Right') },
+        ];
+      },
+      /** The same four little pictures the toolbar uses for alignment. */
+      styleAligns() {
+        const at = { 'eb-al-l': 'left', 'eb-al-c': 'center', 'eb-al-r': 'right', 'eb-al-j': 'justify' };
+        return this.aligns.map((a) => ({ value: at[a.cls], label: a.label, icon: a.icon }));
+      },
+      /** A line of the kind being designed, to look at while designing it. */
+      styleWords() {
+        const kind = this.styleKey;
+        if (kind === 'h1' || kind === 'h2' || kind === 'h3' || kind === 'h4') { return this.t('A heading of this kind'); }
+        if (kind === 'li') { return this.t('An item of a list'); }
+        if (kind === 'blockquote') { return this.t('Something somebody else said'); }
+        if (kind === 'pre') { return 'const a = 1;'; }
+        if (kind === 'cell') { return this.t('What stands in a cell'); }
+        if (kind === 'caption') { return this.t('What is written under a picture'); }
+        return this.t('A paragraph of the body, with enough words in it to run on to a second line and show what the spacing does.');
+      },
+      /**
+       * The look of the chosen style, as the browser will draw it. Built from the
+       * same settings that go into the file, so what the writer sees while they
+       * work the controls is the thing itself and not a picture of it.
+       */
+      styleSample() {
+        const v = this.styleNow;
+        const out = {};
+        if (v.family) { out.fontFamily = this.fontPreviewStack(v.family); }
+        if (v.size !== '') { out.fontSize = v.size + 'pt'; }
+        if (v.colour) { out.color = v.colour; }
+        if (v.bold) { out.fontWeight = '700'; }
+        if (v.italic) { out.fontStyle = 'italic'; }
+        if (v.underline) { out.textDecoration = 'underline'; }
+        if (v.align) { out.textAlign = v.align; }
+        if (v.lineHeight !== '') { out.lineHeight = String(v.lineHeight); }
+        if (v.before !== '') { out.marginTop = v.before + 'pt'; }
+        if (v.after !== '') { out.marginBottom = v.after + 'pt'; }
+        if (v.spacing !== '') { out.letterSpacing = v.spacing + 'em'; }
+        if (v.indent !== '') { out.textIndent = v.indent + 'mm'; }
+        if (v.fill) { out.backgroundColor = v.fill; }
+        if (v.pad !== '') { out.padding = v.pad + 'mm'; }
+        if (v.radius !== '') { out.borderRadius = v.radius + 'mm'; }
+        if (v.border) {
+          const rule = (v.borderWidth === '' ? 0.75 : v.borderWidth) + 'pt ' + (v.borderStyle || 'solid')
+            + ' ' + (v.borderColour || v.colour || '#666');
+          const where = { all: 'border', top: 'borderTop', bottom: 'borderBottom', left: 'borderLeft', right: 'borderRight' };
+          out[where[v.border] || 'border'] = rule;
+        }
+        if (v.marker) { out.listStyleType = v.marker; }
+        return out;
+      },
       styleTargets() {
         const names = {
           p: this.t('Body text'), h1: this.t('Heading 1'), h2: this.t('Heading 2'),
@@ -9149,8 +9570,15 @@ ${insideObjects('.eb-paper.boxed')} {
           { kind: 'rect', label: this.t('Rectangle'), icon: box('border:1.5px solid currentColor') },
           { kind: 'round', label: this.t('Rounded rectangle'), icon: box('border:1.5px solid currentColor;border-radius:4px') },
           { kind: 'ellipse', label: this.t('Ellipse'), icon: box('border:1.5px solid currentColor;border-radius:50%') },
-          { kind: 'line', label: this.t('Line'), icon: box('border-top:1.5px solid currentColor;height:0;align-self:center') },
-          { kind: 'arrow', label: this.t('Arrow'), icon: box('border-top:1.5px solid currentColor;height:0;align-self:center;position:relative') },
+          // Drawn, not styled: as two bordered boxes the line and the arrow came
+          // out as the same short rule and nobody could tell which was which.
+          { kind: 'line', label: this.t('Line'),
+            icon: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
+              + '<path d="M1.5 8h13" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>' },
+          { kind: 'arrow', label: this.t('Arrow'),
+            icon: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
+              + '<path d="M1.5 8h11" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>'
+              + '<path d="M10 4.6 15 8l-5 3.4z" fill="currentColor"/></svg>' },
         ];
       },
       /* Not "boxes": that name is already taken by the switch that shows the
@@ -9886,10 +10314,19 @@ ${insideObjects('.eb-paper.boxed')} {
               .map((el) => Math.round(el.getBoundingClientRect().top)).join(',');
             for (let round = 0; round < 4; round += 1) {
               const was = where();
+              // Settled again on every round: making room for one object moves
+              // the writing under another, and an object brought back on to its
+              // page after the room was measured left a band of room standing
+              // where it used to be -- forty millimetres of nothing, hanging off
+              // the foot of the last page and making a blank sheet after it.
+              settleFreeObjects();
               applyWrap(c, this.frameZoom());
               pages = paginate();
               if (where() === was) { break; }
             }
+            // And the bands cut back to the writing, now that nothing more will
+            // move: what hangs below the last line only lengthens the document.
+            if (trimBands(c, this.frameZoom())) { pages = paginate(); }
           }
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
@@ -11030,6 +11467,17 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frame.free = objectFree(el);
         this.frame.wrap = wrapMode(el);
         this.frame.kind = objectKind(el);
+        // Something with no writing of its own -- a formula, a picture, a rule,
+        // an empty shape -- is moved by taking hold of it anywhere, the way it is
+        // in any drawing program. Only things that hold words keep to the ring
+        // round the edge, because a click in the middle of those has to put the
+        // caret in the writing rather than pick the box up. Grabbing an eight
+        // pixel border was the only way to move a formula, and on a formula four
+        // millimetres tall that is not a way at all.
+        this.frame.solid = objectFree(el)
+          && (/^(HR|FIGURE|IMG)$/.test(el.nodeName)
+            || this.frame.kind === 'MATH'
+            || !String(el.textContent || '').trim());
         this.frame.on = true;
         frameBox = a;
         // A table is the one frame with something inside it worth taking hold of:
@@ -12922,6 +13370,7 @@ ${insideObjects('.eb-paper.boxed')} {
           para: () => this.openPara(),
           toc: () => this.openToc(),
           chars: () => this.openChars(),
+          emoji: () => this.openEmoji(),
           cut: () => this.clipboard('cut'),
           copy: () => this.clipboard('copy'),
           paste: () => this.pasteFromClipboard(false),
@@ -13177,6 +13626,35 @@ ${insideObjects('.eb-paper.boxed')} {
       charsOf(key) {
         const set = CHAR_SETS.find((c) => c.key === key);
         return set ? Array.from(set.chars) : [];
+      },
+      // ---- emoji ----
+      // The whole set with its names is ~150 KB, so it is fetched the first time
+      // the picker is opened and kept for the rest of the session.
+      async loadEmoji() {
+        if (this.emoji.groups.length || this.emojiLoading) { return; }
+        this.emojiLoading = true;
+        try {
+          const r = await api('emoji/' + encodeURIComponent(this.settings.language || 'auto'));
+          this.emoji = { groups: r.groups || [], names: r.names || {} };
+          if (!this.emojiTab && this.emoji.groups.length) { this.emojiTab = this.emoji.groups[0].key; }
+        } catch (e) { this.notify(this.t('The emoji could not be fetched.')); }
+        this.emojiLoading = false;
+      },
+      openEmoji() {
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.emojiQuery = '';
+        this.emojiOpen = true;
+        this.loadEmoji();
+      },
+      pickEmoji(em) {
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        this.run(() => insertText(em));
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+      },
+      /** The CLDR short name, for the tooltip: the value is "name|keyword keyword". */
+      emojiName(em) {
+        const n = this.emoji.names[em];
+        return n ? n.split('|')[0] : em;
       },
       toggleSpellcheck() {
         this.spellcheck = !this.spellcheck;

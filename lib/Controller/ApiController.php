@@ -479,6 +479,32 @@ class ApiController extends Controller {
 		return $out;
 	}
 
+	/**
+	 * The whole Unicode emoji set for the picker, with the CLDR names and keywords
+	 * in the user's own language so it can be searched in Japanese as well as in
+	 * English. Fetched only when the picker is first opened -- it is ~150 KB.
+	 */
+	#[NoAdminRequired]
+	public function getEmoji(string $lang = 'auto'): JSONResponse {
+		if (!in_array($lang, $this->languageCodes(), true)) {
+			$lang = substr($this->l10nFactory->findLanguage(Application::APP_ID), 0, 2);
+		}
+		$base = realpath(__DIR__ . '/../../data/emoji');
+		if ($base === false) {
+			return new JSONResponse(['message' => 'no emoji data'], Http::STATUS_NOT_FOUND);
+		}
+		$names = realpath($base . '/' . $lang . '.json');
+		if ($names === false || strpos($names, $base) !== 0) {
+			$names = $base . '/en.json';
+		}
+		$list = json_decode((string)file_get_contents($base . '/list.json'), true);
+		return new JSONResponse([
+			'version' => $list['version'] ?? '',
+			'groups' => $list['groups'] ?? [],
+			'names' => json_decode((string)file_get_contents($names), true) ?: [],
+		]);
+	}
+
 	/** @return array<int, string> */
 	private function languageCodes(): array {
 		return array_map(static fn (array $l): string => $l['code'], $this->availableLanguages());

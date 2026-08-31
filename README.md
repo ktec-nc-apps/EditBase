@@ -71,6 +71,8 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   and indentation
 - Readings over words (ruby) at half size, emphasis dots, five highlight colours,
   free text colour, superscript, subscript, inline code
+- Special characters and the whole Unicode emoji set, searchable by name in your
+  own language
 - Footnotes gathered at the end, a table of contents built from the headings
 - Find and replace, recorded changes, mail merge from a list of records
 
@@ -91,8 +93,11 @@ sheets of paper, so what is on the screen is what comes out of the printer.
 
 **How it looks**
 
-- Styles for each kind of block — typeface, size, colour, alignment, line height,
-  space above and below — written into the file as rules, not on each paragraph
+- Styles for each kind of block — typeface, size, colour, letter spacing, weight,
+  alignment, line height, indent, the space above and below, a fill, a border on
+  any side, the mark in front of a list item — set with the mouse, with a sample
+  that changes as you go, and written into the file as rules rather than on each
+  paragraph
 - The document's own stylesheet, written by hand, for anything those fields cannot
   say
 - Light and dark themes per user; English and Japanese
@@ -209,6 +214,7 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 - 見出し・引用・整形済みテキスト・箇条書き・番号付きリスト・行揃え・インデント
 - ルビ（半分の大きさ・上の行に触れないよう行間を確保）、圏点、5色のハイライト、
   任意の文字色、上付き・下付き、インラインコード
+- 特殊文字と、Unicode の絵文字全種（自分の言語の名前で検索できます）
 - 文末にまとめる脚注、見出しから作る目次
 - 検索と置換、変更履歴の記録、差し込み印刷
 
@@ -227,8 +233,9 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 
 **見た目**
 
-- 種類ごとのスタイル（書体・サイズ・色・行揃え・行間・前後の間隔）。段落ごとでは
-  なく、ファイル内の規則として書き込まれます
+- 種類ごとのスタイル（書体・サイズ・色・字間・太さ・行揃え・行間・字下げ・前後の
+  間隔・背景色・辺ごとの罫線・行頭記号）。マウス操作で決められ、見本がその場で
+  変わります。段落ごとではなく、ファイル内の規則として書き込まれます
 - それでは書けないものは、文書自身のスタイルシートに CSS で直接書けます
 - 利用者ごとのライト／ダークテーマ、日本語・英語
 

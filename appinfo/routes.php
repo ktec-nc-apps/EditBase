@@ -10,6 +10,7 @@ return [
 		['name' => 'api#getSettings', 'url' => '/api/settings', 'verb' => 'GET'],
 		['name' => 'api#saveSettings', 'url' => '/api/settings', 'verb' => 'POST'],
 		['name' => 'api#getI18n', 'url' => '/api/i18n/{lang}', 'verb' => 'GET'],
+		['name' => 'api#getEmoji', 'url' => '/api/emoji/{lang}', 'verb' => 'GET'],
 		['name' => 'api#fonts', 'url' => '/api/fonts', 'verb' => 'GET'],
 		['name' => 'api#fetchPage', 'url' => '/api/fetch', 'verb' => 'GET'],
 

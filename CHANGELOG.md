@@ -92,7 +92,36 @@ The first version. Everything below is new, because there was nothing before it.
   ordinary way, and a save that would land on top of somebody else's is merged
   instead of winning. No service of its own and nothing to install; a document
   nobody else has open does none of this.
+- A styles designer: the look of every heading, list, quotation, table cell and
+  caption in the document set by hand rather than by writing CSS -- typeface,
+  size, colour, letter spacing, weight, alignment, line height, indent, the space
+  above and below, a fill, a border on any side and the mark in front of a list
+  item -- with a sample of the writing above the controls that changes as they are
+  moved. The CSS is still there, folded away at the foot of the dialogue, for
+  anyone who would rather write it.
+- Emoji: the whole Unicode set in nine groups, searchable by name in the user's own
+  language, put in at the caret. The character is what goes into the file, so it is
+  drawn by whatever emoji font the reader's machine has.
 - Light and dark themes, chosen per user, and English and Japanese translations.
+
+### Fixed
+
+- The screen and the printout now agree, measured page by page against Chrome's
+  own printing: a frame carried on to the next page kept a top margin on paper
+  that the editor did not draw, and a thing placed by hand was allowed to hang
+  into the bottom margin, where the printer cut it in two and put the lower part
+  on a sheet of its own.
+- Two objects over the same paragraph -- one keeping the words above and below it,
+  one with the words down its side -- no longer fight: their two bands were wider
+  than the column together, so the second was pushed down the page and the words
+  ran straight through the object it belonged to.
+- Anything with no writing in it -- a formula, a picture, a rule, an empty shape --
+  is now picked up anywhere on it. Only the eight pixels of its edge would take
+  hold before, which on a formula four millimetres tall meant it could not be
+  moved at all. Things that hold words still keep to their edge, because a click
+  in the middle of those has to put the caret in the writing.
+- A thing placed inside a frame stays in that frame when the page has to give it
+  room, instead of being stood on the foot of the page outside the box.
 
 ### Known limits
 
