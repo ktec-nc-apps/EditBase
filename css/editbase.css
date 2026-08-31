@@ -1136,3 +1136,23 @@
 #editbase-root .eb-docitem.lifted { opacity: .45; }
 #editbase-root .eb-cat.over { outline: 2px dashed var(--primary); outline-offset: -2px; }
 #editbase-root .eb-cat.over .cat-head { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
+
+/* Somebody else writing in this document: their caret, and the paragraph they
+   are in, which is theirs until they leave it. */
+#editbase-root .eb-mate {
+  position: absolute; width: 2px; background: var(--mate, #2563eb); pointer-events: none; z-index: 6;
+}
+#editbase-root .eb-mate .nm {
+  position: absolute; top: -1.35em; left: -1px; white-space: nowrap;
+  background: var(--mate, #2563eb); color: #fff; font-size: 10.5px; line-height: 1.4;
+  padding: 0 5px; border-radius: 4px 4px 4px 0;
+}
+#editbase-root .eb-paper .eb-lockedby {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--primary) 60%, transparent);
+  cursor: not-allowed; position: relative;
+}
+#editbase-root .eb-paper .eb-lockedby::after {
+  content: attr(data-eb-who); position: absolute; right: 2px; top: -.2em;
+  font-size: 9pt; color: var(--primary); opacity: .8; pointer-events: none;
+}

@@ -10,6 +10,7 @@ use OCA\EditBase\Service\Connectors;
 use OCA\EditBase\Service\FileBrowser;
 use OCA\EditBase\Service\ShareService;
 use OCA\EditBase\Service\SessionService;
+use OCA\EditBase\Service\LiveService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -32,6 +33,7 @@ class ApiController extends Controller {
 		private Connectors $connectors,
 		private ShareService $sharing,
 		private SessionService $sessions,
+		private LiveService $live,
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
@@ -289,7 +291,36 @@ class ApiController extends Controller {
 	public function leaveDocument(int $id): JSONResponse {
 		return $this->run(function () use ($id) {
 			$this->sessions->leave($id, $this->uid());
+			$this->live->leave($id, $this->uid());
 			return ['ok' => true];
+		});
+	}
+
+	/**
+	 * The fast lane: what has just been typed here, and what the others have typed
+	 * since this page last asked. Nothing is written to disk; the file is still
+	 * saved the ordinary way, on its own timer.
+	 */
+	#[NoAdminRequired]
+	public function liveDocument(int $id): JSONResponse {
+		return $this->run(function () use ($id) {
+			$uid = $this->uid();
+			// Being allowed to read the file is what allows this: the same check
+			// as opening it, and it throws if the document is not theirs to see.
+			$state = $this->documents->state($uid, $id);
+			$since = (int)($this->request->getParam('since') ?? 0);
+			$blocks = $this->request->getParam('blocks');
+			$where = $this->request->getParam('where');
+			$out = $this->live->exchange(
+				$id,
+				$uid,
+				$since,
+				is_array($blocks) ? $blocks : [],
+				is_array($where) ? $where : [],
+			);
+			$out['etag'] = $state['etag'];
+			$out['writable'] = $state['writable'];
+			return $out;
 		});
 	}
 

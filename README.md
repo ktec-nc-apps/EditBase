@@ -45,9 +45,11 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   single document, or a whole category, in which case everything filed in it goes
   too and the other person can add to it. It is Nextcloud's own sharing, undone
   from either place
-- **Two people can write in one document at once**: each copy asks how the file
-  stands every couple of seconds and folds in what the other has written, block by
-  block. What you are typing is never overwritten
+- **Two people can write in one document at once.** The moment somebody else opens
+  it, both go into shared mode: what is typed here appears on their screen in about
+  a second — before it is saved — their caret is drawn with their name on it, and
+  the paragraph they are writing in is held for them so that the one case that
+  cannot be merged cannot happen. A document nobody else has open costs nothing
 - Autosave, renaming, download
 
 **Paper and pages**
@@ -126,11 +128,11 @@ pile of inline styles:
 - **Vertical writing is behind.** The newest page-fitting work — frames that carry
   their writing on, and keeping placed things on one sheet — is written for
   horizontal text so far.
-- **Writing together is settled by the paragraph, not by the letter.** Two people
-  in different paragraphs merge cleanly and see each other's work within a couple
-  of seconds. Two people in the *same* paragraph: the one who saves last keeps it,
-  and the other is told so and can undo. There is no character-by-character
-  merging.
+- **Writing together is by the paragraph, not by the letter.** Two people in
+  different paragraphs see each other's typing in about a second; the paragraph
+  somebody is writing in is held against the other, rather than the two being
+  merged letter by letter. Nobody is locked out of a paragraph a colleague has
+  merely left their cursor in — only one they are writing in.
 - Printing has been checked in Chromium. The files open anywhere; how other
   browsers break them into pages has not been measured yet.
 
@@ -180,9 +182,10 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
   カテゴリごとにも**共有できます。カテゴリを共有すると中の文書はすべて渡り、相手が
   そこに文書を追加することもできます。Nextcloud 本体の共有機能そのものなので、
   どちらからでも解除できます
-- **一つの文書を二人で同時に編集できます。** 各自の画面が数秒ごとにファイルの状態を
-  問い合わせ、相手が書いた段落を取り込みます。自分が入力中の段落が上書きされることは
-  ありません
+- **一つの文書を二人で同時に編集できます。** 他の人が開いた瞬間に共有モードに入り、
+  入力した文字は**保存を待たず約1秒で相手の画面に現れます**。相手のカーソルは名前つきで
+  表示され、相手が入力中の段落はこちらでは編集できないよう確保されます（併合できない
+  唯一の場合を、そもそも起こさないためです）。誰も開いていない文書では何も動きません
 - 自動保存・名前の変更・ダウンロード
 
 **用紙とページ**
@@ -253,9 +256,9 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
   印刷ダイアログの「ヘッダーとフッター」を有効にすると、ブラウザが付けます。
 - **縦書きは遅れています。** 新しいページ調整（枠が次ページへ続く、自由配置物を
   1枚の紙に収める）は、いまのところ横書き向けに書かれています。
-- **同時編集は段落単位です。** 別々の段落なら数秒で互いに反映されます。同じ段落を
-  二人が同時に書いた場合は、後から保存した側が残り、もう一方には「書き換えられた」と
-  通知します（Ctrl+Z で戻せます）。一文字単位の併合は行いません。
+- **同時編集は段落単位です。** 別々の段落なら約1秒で互いに反映されます。同じ段落は、
+  一文字ずつ併合するのではなく、**先に書き始めた人のものとして確保**します。カーソルを
+  置いてあるだけの段落は確保されません（実際に入力している間だけです）。
 - 印刷の確認は Chromium で行っています。ファイル自体はどこでも開けますが、他の
   ブラウザがどうページを割るかはまだ測っていません。
 

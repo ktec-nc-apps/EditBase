@@ -73,13 +73,16 @@ The first version. Everything below is new, because there was nothing before it.
   either place. A shared category hands over everything filed in it, and everything
   filed in it afterwards; somebody who may write in one can put new documents in it
   as well. What others have shared arrives under their own name in the list.
-- Writing in one document at the same time as somebody else. Every block of the
-  document carries a name of its own; each copy asks the server every couple of
-  seconds how the file stands and who else has it open, and folds in whatever the
-  other person has written, block by block. What is being typed at this keyboard is
-  never overwritten, a save that would land on top of somebody else's is merged
-  instead of winning, and being written over is said out loud. No service of its
-  own and nothing to install: it is one small request on a timer.
+- Writing in one document at the same time as somebody else, in a shared mode that
+  begins the moment a second person opens it. Every block of the document carries a
+  name of its own; what is typed goes to the others in about a second without
+  waiting for a save, through a fast lane held in Nextcloud's own cache and never
+  written to disk. Their caret is drawn with their name on it, and the paragraph
+  somebody is writing in is held against the other person -- the one case that
+  cannot be merged is prevented rather than lost. The file is still saved the
+  ordinary way, and a save that would land on top of somebody else's is merged
+  instead of winning. No service of its own and nothing to install; a document
+  nobody else has open does none of this.
 - Light and dark themes, chosen per user, and English and Japanese translations.
 
 ### Known limits
@@ -91,7 +94,6 @@ The first version. Everything below is new, because there was nothing before it.
   their writing on to the next page, and keeping a thing placed by hand on one
   sheet, are written for horizontal text so far.
 - Printing has been checked in Chromium only.
-- Two people writing in the same paragraph at the same time is settled by the
-  paragraph, not by the letter: the one who saves last keeps that paragraph, and
-  the other is told that it happened and can undo it. Different paragraphs merge
-  cleanly.
+- Writing together is by the paragraph, not by the letter: the paragraph somebody
+  is writing in is held against the other person rather than the two being merged
+  character by character.
