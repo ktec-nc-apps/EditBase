@@ -136,6 +136,18 @@ The first version. Everything below is new, because there was nothing before it.
 - A thing placed inside a frame stays in that frame when the page has to give it
   room, instead of being stood on the foot of the page outside the box.
 
+- An item of a list is put in one level with Tab and taken out again with
+  Shift+Tab, and what that makes is a list inside a list -- the markers change
+  with the level (a ring under a dot, a square under that), a numbered list
+  counts in letters inside and in small roman numerals inside that, and the file
+  written is an ordinary nested list that reads correctly anywhere. It used to
+  add an indent to the item and leave the list flat.
+- The little pages in the preview bar are the pages themselves, made small,
+  rather than a plan of grey boxes.
+- A frame that carries its writing on to the next page now makes the editor draw
+  that page. It was drawn below the last sheet while the printer duly made a
+  second page.
+
 ### Known limits
 
 - A page number cannot be printed from the file itself: a browser has no count of

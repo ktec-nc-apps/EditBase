@@ -461,6 +461,13 @@
 .eb-doc ul ul { list-style-type: circle; }
 .eb-doc ul ul ul { list-style-type: square; }
 .eb-doc ol { list-style-type: decimal; }
+/* A numbered list within a numbered list counts in letters, and one deeper in
+   small roman numerals -- as a word processor does, and as a reader expects. */
+.eb-doc ol ol { list-style-type: lower-alpha; }
+.eb-doc ol ol ol { list-style-type: lower-roman; }
+/* A list inside a list stands in from the one it is in, and keeps the space
+   above and below for the list as a whole rather than for each level. */
+.eb-doc li > ul, .eb-doc li > ol { margin-bottom: 0; margin-top: .2em; }
 .eb-doc li { margin: 0.15em 0; }
 .eb-doc blockquote {
   margin: 1em 0; padding: .4em 0 .4em 1em; border-left: 3pt solid #999; color: #333;
@@ -2170,15 +2177,62 @@ ${insideObjects('.eb-paper.boxed')} {
       if (b.getAttribute('class') === '') { b.removeAttribute('class'); }
     });
   }
+  /**
+   * An item of a list, put in one level: it becomes an item of a list of its own
+   * inside the item above it. That is what a list within a list IS, and it is
+   * what every word processor does with Tab -- the markers change with the level
+   * (a dash under a dot), numbering starts again at one inside, and the file that
+   * is written is an ordinary nested list that reads correctly anywhere.
+   *
+   * The first item of a list has nothing to go inside, so it stays where it is.
+   */
+  function nestItem(li) {
+    const list = li.parentNode;
+    if (!list || (list.nodeName !== 'UL' && list.nodeName !== 'OL')) { return false; }
+    const prev = li.previousElementSibling;
+    if (!prev || prev.nodeName !== 'LI') { return false; }
+    let sub = prev.lastElementChild;
+    if (!sub || sub.nodeName !== list.nodeName) {
+      sub = document.createElement(list.nodeName);
+      prev.appendChild(sub);
+    }
+    sub.appendChild(li);
+    return true;
+  }
+  /** And out again: back beside the item it was inside, with its own tail kept. */
+  function liftItem(li) {
+    const list = li.parentNode;
+    if (!list || (list.nodeName !== 'UL' && list.nodeName !== 'OL')) { return false; }
+    const holder = list.parentNode;
+    if (!holder || holder.nodeName !== 'LI' || !holder.parentNode) { return false; }
+    const after = [];
+    let n = li.nextElementSibling;
+    while (n) { after.push(n); n = n.nextElementSibling; }
+    holder.parentNode.insertBefore(li, holder.nextSibling);
+    // What followed it stays under it: it was deeper than the item coming out.
+    if (after.length) {
+      const sub = document.createElement(list.nodeName);
+      after.forEach((x) => sub.appendChild(x));
+      li.appendChild(sub);
+    }
+    if (!list.children.length) { list.remove(); }
+    return true;
+  }
   function stepIndent(dir) {
     const order = ['', 'eb-in1', 'eb-in2', 'eb-in3'];
-    selectedBlocks(true).forEach((b) => {
+    // Out first and from the bottom up, in first and from the top down: an item
+    // moved changes what the next one's neighbours are.
+    const blocks = selectedBlocks(true);
+    (dir < 0 ? blocks.slice().reverse() : blocks).forEach((b) => {
       if (!b.classList) { return; }
+      if (b.nodeName === 'LI' && (dir > 0 ? nestItem(b) : liftItem(b))) { return; }
       let level = 0;
       order.forEach((c, i) => { if (c && b.classList.contains(c)) { level = i; } });
       const next = Math.min(3, Math.max(0, level + dir));
       order.forEach((c) => { if (c) { b.classList.remove(c); } });
       if (order[next]) { b.classList.add(order[next]); }
+      // An empty class attribute is litter in the file.
+      if (!b.className) { b.removeAttribute('class'); }
     });
   }
 
@@ -4537,7 +4591,25 @@ ${insideObjects('.eb-paper.boxed')} {
       child = next;
     }
     // A hair over a page needs another sheet; a hair under must not add one.
-    return Math.max(1, Math.ceil(((tate ? c.offsetWidth : c.offsetHeight) + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
+    let need = Math.max(1, Math.ceil(((tate ? c.offsetWidth : c.offsetHeight) + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
+    // And the sheets that things standing ON the page need. A placed thing is out
+    // of the flow, so it adds nothing to the height of the writing -- a frame that
+    // carried its writing on to a second page was drawn on the desk below the last
+    // sheet, while the printer duly made the second page. The screen has to draw
+    // the paper the printer will use.
+    const box = c.getBoundingClientRect();
+    const scale = (tate ? box.width / (c.offsetWidth || 1) : box.height / (c.offsetHeight || 1)) || 1;
+    Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((o) => {
+      if (!o.getBoundingClientRect) { return; }
+      const r = o.getBoundingClientRect();
+      if (!r.width && !r.height) { return; }
+      const far = tate
+        ? (box.right - r.left) / scale
+        : (r.bottom - box.top) / scale;
+      if (far <= 0) { return; }
+      need = Math.max(need, Math.ceil((far - 1) / (pageH + PAGE_GAP)));
+    });
+    return need;
   }
 
 
