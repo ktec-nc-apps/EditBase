@@ -1156,3 +1156,16 @@
   content: attr(data-eb-who); position: absolute; right: 2px; top: -.2em;
   font-size: 9pt; color: var(--primary); opacity: .8; pointer-events: none;
 }
+
+/* The rest of a frame that stands on more than one page. It is the same frame,
+   so it is drawn like the box round it -- the handles stay on the part that is
+   in hand -- and it says what it is, because a box round a paragraph of body
+   text would otherwise look like the dotted outline every block already wears. */
+/* Every page of a frame that stands on more than one wears the same box, and each
+   says so, because a box round a paragraph of body text would otherwise look like
+   the dotted outline every block already wears. */
+#editbase-root .eb-fsel .tag {
+  position: absolute; right: -1px; top: -1.5em; font-size: 10.5px; line-height: 1.4;
+  padding: 0 6px; border-radius: 4px 4px 0 0; background: var(--primary); color: #fff;
+  white-space: nowrap; pointer-events: none;
+}

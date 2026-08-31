@@ -7124,9 +7124,21 @@ ${insideObjects('.eb-paper.boxed')} {
           <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
             :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
         </div>
-        <div class="eb-fmore" v-for="(b, i) in frame.extras" :key="'m' + i"
+        <div class="eb-fmore" v-for="(b, i) in frame.extras" :key="'m' + i" v-show="!b.part"
           :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
-        <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging }"
+        <!-- The rest of a frame that stands on more than one page. It is the same
+             frame, so every page of it wears the same box with the same handles;
+             what they size is the frame, wherever they are taken hold of. -->
+        <div class="eb-fsel" v-for="(b, i) in frame.parts" :key="'p' + i" :class="{ dragging: frame.dragging }"
+          :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }">
+          <div class="box"></div>
+          <span class="tag">{{ t('continued') }}</span>
+          <div v-for="e in frameEdges" :key="'pe' + e" class="ed" :class="e"
+            @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="objectCtx($event)"></div>
+          <span v-for="h in frameHandles" :key="'ph' + h" class="hd" :class="h"
+            @pointerdown.prevent.stop="frameGrab($event, h)"></span>
+        </div>
+        <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging, onpart: frame.onPart }"
           :style="{ left: (frame.x - frame.padX / 2) + 'px', top: (frame.y - frame.padY / 2) + 'px',
                     width: (frame.w + frame.padX) + 'px', height: (frame.h + frame.padY) + 'px' }">
           <div class="box"></div>
@@ -8717,7 +8729,7 @@ ${insideObjects('.eb-paper.boxed')} {
         folders: [], openCat: '', naming: false, catNew: '', catColours: {},
         dragDoc: 0, dropCat: null,
         props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], more: 0 },
+        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], parts: [], more: 0, onPart: false },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -10868,13 +10880,28 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         // A frame carried on to the next page is not a second object: what is
         // held, resized, aligned, given properties or deleted is the frame.
+        // The box, though, is drawn round the part the writer is actually looking
+        // at -- take hold of it on the second page and the box appeared on the
+        // first, which reads as no box at all.
         if (isCont(frameEl)) { frameEl = chainLead(frameEl); }
         const el = frameEl;
+        // Which page of it the writer is on: wherever the caret is, that is the
+        // part the box is drawn round. Reading it from what was clicked is no
+        // good -- by the time this runs, a click inside a frame already held has
+        // left the frame itself in hand and not the part that was touched.
+        let face = el;
+        if (el && chainable(el)) {
+          const at = getRange();
+          const parts = chainOf(chainLead(el));
+          const inside = at && inCanvas(at.startContainer)
+            ? parts.filter((piece) => piece.contains(at.startContainer))[0] : null;
+          if (inside) { face = inside; }
+        }
         if (!el) { this.frame.on = false; this.syncText(); this.markLayerBar(); return; }
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
         if (!wrap || !el.getBoundingClientRect) { this.frame.on = false; this.markLayerBar(); return; }
         const z = this.frameZoom() || 1;
-        const a = el.getBoundingClientRect();
+        const a = (face || el).getBoundingClientRect();
         const b = wrap.getBoundingClientRect();
         // No layout to measure (a document not yet shown, or the test harness).
         if (!a.width && !a.height) { this.frame.on = false; this.syncText(); this.markLayerBar(); return; }
@@ -10899,19 +10926,27 @@ ${insideObjects('.eb-paper.boxed')} {
         // every other page wears a box as well. Without this only the first page
         // of it was drawn, and the rest of the frame looked like nothing at all.
         frameMore = frameMore.filter((o) => o && o.parentNode && c.contains(o) && o !== el);
-        const also = frameMore.slice();
+        const also = frameMore.map((o) => ({ el: o, part: false }));
         if (chainable(el)) {
-          chainOf(chainLead(el)).forEach((part) => {
-            if (part !== el && part.parentNode && c.contains(part) && also.indexOf(part) < 0) { also.push(part); }
+          chainOf(chainLead(el)).forEach((piece) => {
+            if (piece !== face && piece.parentNode && c.contains(piece) && !also.some((x) => x.el === piece)) {
+              also.push({ el: piece, part: true });
+            }
           });
         }
         this.frame.more = frameMore.length;
-        this.frame.extras = also.map((o) => {
-          const q = o.getBoundingClientRect();
-          return { x: (q.left - b.left) / z, y: (q.top - b.top) / z, w: q.width / z, h: q.height / z };
+        const seen = also.map((o) => {
+          const q = o.el.getBoundingClientRect();
+          return { x: (q.left - b.left) / z, y: (q.top - b.top) / z, w: q.width / z, h: q.height / z, part: o.part };
         });
+        this.frame.extras = seen.filter((o) => !o.part);
+        this.frame.parts = seen.filter((o) => o.part);
         this.frame.padX = this.frame.w < 10 ? (10 - this.frame.w) : 0;
         this.frame.padY = this.frame.h < 10 ? (10 - this.frame.h) : 0;
+        // The handles belong on the page the frame begins on: dragging them on a
+        // later page would set the whole frame's height from the part of it that
+        // happens to be there.
+        this.frame.onPart = face !== el;
         this.frame.free = objectFree(el);
         this.frame.wrap = wrapMode(el);
         this.frame.kind = objectKind(el);
