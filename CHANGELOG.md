@@ -153,6 +153,13 @@ The first version. Everything below is new, because there was nothing before it.
   heading was wiped to an empty heading and everything typed next came out as a
   heading too.
 
+- What is written to a file is cleaned on the way out as well as on the way in.
+  Everything arriving is checked -- what is opened, what is pasted, what somebody
+  else writing in the document sends -- but a saved file is opened by a browser
+  with nothing else around it, so a script or a handler that ever found its way
+  into the writing would have been written into a page and run when it was
+  opened.
+
 ### Known limits
 
 - A page number cannot be printed from the file itself: a browser has no count of

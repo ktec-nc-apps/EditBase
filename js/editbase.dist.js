@@ -15517,6 +15517,13 @@ return function render(_ctx, _cache) {
           el.style.removeProperty('--eb-shift');
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
         });
+        // The last gate before anything is written to a file. Everything that
+        // comes IN is cleaned -- what is opened, what is pasted, what somebody
+        // else writing in the document sends -- but a file is opened by a browser
+        // with nothing else around it, so what goes OUT is cleaned as well. A
+        // script or a handler that ever found its way into the writing would
+        // otherwise be written into a page and run when it was opened.
+        sanitiseInto(clone);
         fillEmbeds(clone);
         // An empty paragraph holds its line in the editor, where contenteditable
         // gives it one; on a plain page it collapses to nothing and everything
