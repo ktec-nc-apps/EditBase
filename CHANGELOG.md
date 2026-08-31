@@ -111,10 +111,23 @@ The first version. Everything below is new, because there was nothing before it.
   that the editor did not draw, and a thing placed by hand was allowed to hang
   into the bottom margin, where the printer cut it in two and put the lower part
   on a sheet of its own.
-- Two objects over the same paragraph -- one keeping the words above and below it,
-  one with the words down its side -- no longer fight: their two bands were wider
-  than the column together, so the second was pushed down the page and the words
-  ran straight through the object it belonged to.
+- Objects that keep the words clear no longer fight when they stand together. The
+  room an object holds is a float, and floats wider than the column together do
+  not sit side by side -- the second drops below the first, where it holds nothing
+  off anything. So the room is now cut to what the other things on that line
+  leave: what another band wants, and what a floated object has already taken,
+  measured to the edge of the writing rather than from its own width. Three and a
+  half millimetres of that difference was enough to send a band below a floated
+  arrow and let two lines run straight through the list beside it.
+- A thing put down by hand now stays where it was dropped. Its place is kept as a
+  distance from the line it hangs on, measured down a column with no page gaps in
+  it, while the editor draws a column with a gap at every fold; the conversion
+  between the two was wrong for a thing whose page was not its line's page, so a
+  formula dragged thirty millimetres up the page came to rest forty down. The
+  answer is now measured after the fact and the difference taken out.
+- Room can be made for a thing that stands below the last line of its frame: it
+  had nothing to hang from, kept the far end of the frame as its line, and room is
+  only ever made below that line -- so the words simply ran through it.
 - Anything with no writing in it -- a formula, a picture, a rule, an empty shape --
   is now picked up anywhere on it. Only the eight pixels of its edge would take
   hold before, which on a formula four millimetres tall meant it could not be

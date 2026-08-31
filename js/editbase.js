@@ -3972,72 +3972,18 @@ ${insideObjects('.eb-paper.boxed')} {
    * together want more than the column is simply blocked from edge to edge --
    * which is what a band as wide as the writing means in the first place.
    */
-  /**
-   * How far down the last line of writing in a block reaches. Not the block's own
-   * height: a float standing in it makes it taller than its words, and asking the
-   * block would then be asking about the band we are in the middle of drawing.
-   */
-  function writingBottom(b) {
-    let low = 0;
-    const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
-    let n;
-    while ((n = walk.nextNode())) {
-      if (!String(n.nodeValue || '').trim()) { continue; }
-      const r = document.createRange();
-      r.selectNodeContents(n);
-      Array.from(r.getClientRects()).forEach((q) => { if (q.height && q.bottom > low) { low = q.bottom; } });
-    }
-    Array.from(b.querySelectorAll('img, svg, math')).forEach((el) => {
-      const q = el.getBoundingClientRect();
-      if (q.height && q.bottom > low) { low = q.bottom; }
-    });
-    return low || b.getBoundingClientRect().bottom;
-  }
-  /** The last block in the document with anything written in it. */
-  function lastWriting(root) {
-    const all = Array.from(root.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, figcaption'));
-    for (let i = all.length - 1; i >= 0; i -= 1) {
-      if (String(all[i].textContent || '').trim()) { return all[i]; }
-    }
-    return null;
-  }
-  /**
-   * Bands trimmed to the writing, once everything else has settled.
+  /*
+   * There is no trimBands here on purpose.
    *
-   * A band is a float, and a float taller than the words in its block makes the
-   * block taller -- so a band drawn for an object standing below the last line of
-   * a document added a sheet to the printout with nothing on it. It cannot be cut
-   * short while the layout is being worked out, because the words move as the
-   * bands are laid and a band cut to where the words happen to be would let the
-   * last line stand beside the very object it was drawn for. Cut afterwards, when
-   * nothing is going to move again, it takes the phantom sheet away and leaves
-   * every line where it is.
+   * A band that reaches below the last line of a document lengthens it, and at
+   * the end of a document that means a blank sheet in the printout. Cutting the
+   * band back to the writing looks like the cure and is not: the words are held
+   * where they are BY the band, so shortening it lets the last line rise into
+   * the very object the band was drawn for -- and in the owner's document the
+   * last line came up through a formula. Whatever is done about the blank sheet
+   * has to be done to the object, not to the room it keeps.
    */
-  function trimBands(root, zoom) {
-    if (!root) { return false; }
-    const z = zoom || 1;
-    let cut = false;
-    // Only in the last writing there is. Shortening a band lets everything below
-    // it rise, and what rises can rise into the very object the band was drawn
-    // for -- which is how a paragraph came to sit across a picture again. At the
-    // end of the document there is nothing below to rise.
-    const last = lastWriting(root);
-    Array.from(root.querySelectorAll('span.eb-flow')).forEach((band) => {
-      const b = band.parentNode;
-      if (!b || !b.getBoundingClientRect) { return; }
-      if (!last || !(b === last || last.contains(b))) { return; }
-      const r = band.getBoundingClientRect();
-      if (!r.height) { return; }
-      const low = writingBottom(b);
-      const over = r.bottom - low;
-      if (over <= 1) { return; }
-      const height = Math.max(0, (r.height - over) / z * MM);
-      band.style.height = round1(height) + 'mm';
-      cut = true;
-    });
-    return cut;
-  }
-  function wrapPair(rows, room, mm) {
+  function wrapPair(rows, room, mm, taken) {
     const sides = { left: rows.left || [], right: rows.right || [] };
     if (!sides.left.length && !sides.right.length) { return {}; }
     const edges = [];
@@ -4061,13 +4007,21 @@ ${insideObjects('.eb-paper.boxed')} {
       runs.push({ from: from, to: to, l: widest(sides.left, from, to), r: widest(sides.right, from, to) });
     }
     // What each side is given. A hair is kept back so that the rounding to a
-    // tenth of a millimetre cannot make the pair a whisker too wide to fit.
+    // tenth of a millimetre cannot make the pair a whisker too wide to fit -- and
+    // what a floated object has already taken out of this block is not ours to
+    // give away twice: a band as wide as the column cannot stand beside a picture
+    // floated to the right, so it would drop below it and hold nothing off.
     const hair = 0.2 / MM;
+    const gone = { left: (taken && taken.left) || 0, right: (taken && taken.right) || 0 };
+    const free = Math.max(0, room - gone.left - gone.right);
     const wide = { left: 0, right: 0 };
     runs.forEach((s2) => { wide.left = Math.max(wide.left, s2.l); wide.right = Math.max(wide.right, s2.r); });
-    if (wide.left + wide.right > room - hair) {
-      if (wide.right >= room - hair) { wide.right = room; wide.left = 0; }
-      else { wide.left = Math.max(0, room - wide.right - hair); }
+    // A band on the same side as a float begins where that float ends.
+    wide.left = Math.max(0, Math.min(wide.left - gone.left, free));
+    wide.right = Math.max(0, Math.min(wide.right - gone.right, free));
+    if (wide.left + wide.right > free - hair) {
+      if (wide.right >= free - hair) { wide.right = free; wide.left = 0; }
+      else { wide.left = Math.max(0, free - wide.right - hair); }
     }
     const out = {};
     ['left', 'right'].forEach((side) => {
@@ -4080,9 +4034,9 @@ ${insideObjects('.eb-paper.boxed')} {
         // of this, a formula set to keep the words above and below it was handed
         // a band narrower than the column and two lines ran under it.
         const full = s2.l + s2.r > room + 0.5
-          || s2.l > wide.left + 0.5 || s2.r > wide.right + 0.5;
-        const want = side === 'left' ? s2.l : s2.r;
-        return { from: s2.from, to: s2.to, w: full ? width : Math.min(want, width) };
+          || s2.l - gone.left > wide.left + 0.5 || s2.r - gone.right > wide.right + 0.5;
+        const want = (side === 'left' ? s2.l - gone.left : s2.r - gone.right);
+        return { from: s2.from, to: s2.to, w: full ? width : Math.max(0, Math.min(want, width)) };
       });
       let height = 0;
       steps.forEach((s2) => { if (s2.w > 0) { height = Math.max(height, s2.to); } });
@@ -4137,10 +4091,43 @@ ${insideObjects('.eb-paper.boxed')} {
       // other, and the second lands nowhere near the thing it was making room
       // for. So all the objects over a block are drawn as one float with the
       // outline of the lot of them, which is what shape-outside is for.
+      // What is already taking room out of a block: an object that FLOATS -- a
+      // shape or a picture set to sit at one side with the words running past it
+      // -- is a float of the browser's own, and a band is a float too. Two floats
+      // wider than the column together do not sit side by side; the second drops
+      // below the first, and lands nowhere near the thing it was drawn for. That
+      // is how a list standing beside a floated arrow was left with no room at
+      // all and the words ran straight through it. So the band is cut to what is
+      // left beside the float.
+      const taken = (b) => {
+        const out = { left: 0, right: 0 };
+        const box = contentBox(b);
+        const look = (el) => {
+          if (!el || el.nodeType !== 1 || (el.classList && el.classList.contains('eb-flow'))) { return; }
+          const st = window.getComputedStyle(el);
+          const side = st.cssFloat || st.float || '';
+          if (side !== 'left' && side !== 'right') { return; }
+          const r = el.getBoundingClientRect();
+          if (!r.width || r.bottom <= box.top || r.top >= box.bottom) { return; }
+          // Measured against the edge of the writing, not from the float's own
+          // width: what a float takes is everything between it and the margin it
+          // sits against, its own margins included. Counting the width alone left
+          // the band a few millimetres too wide to fit beside it -- and a float
+          // that does not fit drops below, which is the whole trouble.
+          const w = side === 'left'
+            ? (r.right + (parseFloat(st.marginRight) || 0)) - box.left
+            : box.right - (r.left - (parseFloat(st.marginLeft) || 0));
+          if (w > out[side]) { out[side] = w; }
+        };
+        Array.from(b.children).forEach(look);
+        let prev = b.previousElementSibling;
+        for (let n = 0; prev && n < 6; n += 1) { look(prev); prev = prev.previousElementSibling; }
+        return out;
+      };
       const plan = new Map();
       const need = (b, side, band) => {
         let rows = plan.get(b);
-        if (!rows) { rows = { left: [], right: [], room: band.room }; plan.set(b, rows); }
+        if (!rows) { rows = { left: [], right: [], room: band.room, taken: taken(b) }; plan.set(b, rows); }
         rows[side].push(band);
       };
       // Nearest first, so two objects over the same paragraph reserve their room
@@ -4195,7 +4182,7 @@ ${insideObjects('.eb-paper.boxed')} {
         });
       clearWrapSpacers(root);
       plan.forEach((rows, b) => {
-        const pair = wrapPair(rows, rows.room, mm);
+        const pair = wrapPair(rows, rows.room, mm, rows.taken);
         ['left', 'right'].forEach((side) => {
           const style = pair[side];
           if (!style) { return; }
@@ -4808,6 +4795,17 @@ ${insideObjects('.eb-paper.boxed')} {
     else if (off < 0 && page > 0) { off = 0; }
     el.style.top = round1((page * geom.usable + off - paperTop) * MM) + 'mm';
     foldShift(el, (page - ka) * geom.extra);
+    // And then it is looked at. Where a thing is put down is the one thing the
+    // writer is certain about, and the arithmetic above has two coordinate
+    // systems in it -- the column the editor draws, with a gap at every fold,
+    // and the column the file is written in, with none. Rather than trust the
+    // sums, the answer is measured: if the thing is not drawn where it was put,
+    // it is moved by the difference. Dropping a formula thirty millimetres up
+    // the page used to put it forty millimetres down.
+    const slip = (topOnPaper(el) - geom.mt) - drawn;
+    if (Math.abs(slip) > 0.5) {
+      el.style.top = round1((lengthPx(el.style.top) - slip) * MM) + 'mm';
+    }
   }
   /** The gaps the editor drew above this thing, added back on for the screen. */
   function foldShift(el, px) {
@@ -4829,8 +4827,21 @@ ${insideObjects('.eb-paper.boxed')} {
     const anchor = el.parentNode;
     const r = el.getBoundingClientRect();
     if (!r.height && !r.width) { return false; }
-    const over = blockOver(el, r.top + 1);
+    let over = blockOver(el, r.top + 1);
     if (!over || !over.parentNode || over === anchor) { return false; }
+    // The peg stays in the box it is already in. A thing standing on the page and
+    // drawn over a frame must not be pegged to a paragraph INSIDE that frame: the
+    // peg is where the thing lives in the document, so that would move a list
+    // standing on the page into the frame, and the frame would carry it about
+    // and cut it at the fold. Pegged to the frame itself instead -- and a thing
+    // inside a frame is never pegged to anything outside it.
+    const home = anchor.parentNode;
+    if (over.parentNode !== home) {
+      let up = over;
+      while (up && up.parentNode && up.parentNode !== home) { up = up.parentNode; }
+      if (!up || up.parentNode !== home || up === el || up.contains(el)) { return false; }
+      over = up;
+    }
     let after = anchor.nextElementSibling;
     while (after && after.classList && after.classList.contains('eb-pagespacer')) { after = after.nextElementSibling; }
     if (after === over) { return false; }
@@ -4903,6 +4914,12 @@ ${insideObjects('.eb-paper.boxed')} {
     Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
       if (reanchor(el, geom)) { moved = true; }
       if (settleFree(el, geom)) { moved = true; }
+      // And again once it has been settled: a thing standing below the last line
+      // of its frame has nothing to peg to, and keeps the far end of the frame as
+      // its peg -- from where no room can ever be made for it, because room is
+      // only made below the peg. Brought back on to a line by the settling, it
+      // can be pegged to the line it now stands over.
+      if (reanchor(el, geom)) { moved = true; }
     });
     return moved;
   }
@@ -10324,9 +10341,7 @@ ${insideObjects('.eb-paper.boxed')} {
               pages = paginate();
               if (where() === was) { break; }
             }
-            // And the bands cut back to the writing, now that nothing more will
-            // move: what hangs below the last line only lengthens the document.
-            if (trimBands(c, this.frameZoom())) { pages = paginate(); }
+
           }
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
