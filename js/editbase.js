@@ -4615,6 +4615,18 @@ ${insideObjects('.eb-paper.boxed')} {
     return n;
   }
 
+  /**
+   * The sheets the writer is looking at. Not any old .eb-sheet in the window: the
+   * preview bar holds a copy of the whole page in every one of its little pages,
+   * so a search of the document finds those copies too -- and the count came out
+   * as twelve for a document of three.
+   */
+  function sheetsOnScreen() {
+    const c = canvas();
+    const wrap = c && c.parentNode;
+    return wrap ? Array.from(wrap.querySelectorAll(':scope > .eb-sheets > .eb-sheet')) : [];
+  }
+
   /** How the paper is laid out down the column, in the units offsetTop is in. */
   function pageGeometry() {
     const c = canvas();
@@ -7423,7 +7435,7 @@ ${insideObjects('.eb-paper.boxed')} {
          a plan of it: where the writing sits and where each object stands, drawn
          from their own measurements. It costs nothing to redraw and tells the
          writer at a glance what is on which page and what overlaps what. -->
-    <aside class="eb-preview" v-if="doc.id && previewOpen">
+    <aside class="eb-preview" v-if="doc.id && previewOpen" @scroll.passive="paintSoon">
       <div class="head">
         <span>{{ t('Pages') }}</span>
         <button class="eb-tb" @click="previewOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
@@ -7437,7 +7449,10 @@ ${insideObjects('.eb-paper.boxed')} {
           @drop.prevent="pageDrop(pg.n)"
           @click="goToPage(pg.n)" :title="t('Page {n}', { n: pg.n })">
           <span class="sheet" :style="{ paddingTop: pg.ratio + '%' }">
-            <span v-for="(b, i) in pg.blocks" :key="'b' + i" class="blk" :class="b.kind"
+            <!-- The page itself, made small. The grey blocks below are the plan
+                 it falls back to when a document is too long to copy cheaply. -->
+            <span class="mini" aria-hidden="true"></span>
+            <span v-if="!preview.mini" v-for="(b, i) in pg.blocks" :key="'b' + i" class="blk" :class="b.kind"
               :style="{ left: b.x + '%', top: b.y + '%', width: b.w + '%', height: b.h + '%' }"></span>
           </span>
           <span class="no">{{ pg.n }}</span>
@@ -9132,6 +9147,13 @@ ${insideObjects('.eb-paper.boxed')} {
         paraOpen: false,
         para: { align: '', lineHeight: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
           border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '' },
+        // Bumped whenever the language changes. A computed remembers its answer
+        // and only works it out again when something REACTIVE that it read has
+        // changed -- and t() is a function, not a thing Vue can watch. Forcing a
+        // re-render redraws the template but leaves the computed as it was, which
+        // is why the status line still said "A4 Portrait" in a Japanese window.
+        // Every computed that speaks to the reader reads this counter.
+        i18nTick: 0,
         charsOpen: false,
         charSets: CHAR_SETS,
         charSet: 'Punctuation',
@@ -9172,6 +9194,7 @@ ${insideObjects('.eb-paper.boxed')} {
     },
     computed: {
       stateText() {
+        this.i18nTick;   // read, so a change of language works it out again
         if (this.saving) { return this.t('Saving…'); }
         if (!this.doc.id) { return ''; }
         if (this.dirty) { return this.t('Unsaved changes'); }
@@ -9212,6 +9235,7 @@ ${insideObjects('.eb-paper.boxed')} {
         return { body: f.body, heading: f.head, mono: f.mono };
       },
       fontRoles() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { key: 'body', label: this.t('Body text') },
           { key: 'heading', label: this.t('Headings') },
@@ -9219,11 +9243,13 @@ ${insideObjects('.eb-paper.boxed')} {
         ];
       },
       fontRoleLabel() {
+        this.i18nTick;   // read, so a change of language works it out again
         if (this.fontRole === 'selection') { return this.t('The text you have chosen'); }
         const r = this.fontRoles.find((x) => x.key === this.fontRole);
         return r ? r.label : '';
       },
       fontCats() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { key: 'all', label: this.t('All') },
           { key: 'serif', label: this.t('Serif') },
@@ -9238,6 +9264,7 @@ ${insideObjects('.eb-paper.boxed')} {
       anySource() { return this.sourceKeys.length > 0; },
       contactFields() { return ['name', 'family', 'given', 'org', 'title', 'email', 'tel', 'postcode', 'region', 'locality', 'street']; },
       mergeHint() {
+        this.i18nTick;   // read, so a change of language works it out again
         return this.t('This document has no merge fields yet. Put a field such as {example} into the text first.', { example: this.fieldTag('name') });
       },
       defaultFontName() {
@@ -9260,6 +9287,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** Typefaces for the run dialogue: the ones the document already uses first. */
       /** The four ways the words can meet an object, with the picture of each. */
       wrapChoices() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { kind: 'none', label: this.t('Above and below'), icon: this.icons.wrapNone },
           { kind: 'left', label: this.t('Words to its left'), icon: this.icons.wrapRight },
@@ -9296,11 +9324,13 @@ ${insideObjects('.eb-paper.boxed')} {
         return samples[this.docScript] || 'The quick brown fox jumps over the lazy dog. 1234567890';
       },
       paperLabel() {
+        this.i18nTick;   // read, so a change of language works it out again
         const p = normalisePaper(this.doc.paper);
         const o = p.orientation === 'landscape' ? this.t('Landscape') : this.t('Portrait');
         return p.size + ' ' + o + ' · ' + p.margin.top + '/' + p.margin.right + '/' + p.margin.bottom + '/' + p.margin.left + ' mm';
       },
       highlights() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { key: 'mark', color: '#fff3a3', label: this.t('Yellow') },
           { key: 'mark-g', color: '#c9f2c7', label: this.t('Green') },
@@ -9310,6 +9340,7 @@ ${insideObjects('.eb-paper.boxed')} {
         ];
       },
       aligns() {
+        this.i18nTick;   // read, so a change of language works it out again
         // Drawn rather than lettered: no font ships a dependable alignment glyph.
         const bars = (widths) => '<svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">'
           + widths.map((w, i) => '<rect x="' + w[0] + '" y="' + (1 + i * 3) + '" width="' + w[1] + '" height="1.6" rx=".8" fill="currentColor"/>').join('')
@@ -9369,6 +9400,7 @@ ${insideObjects('.eb-paper.boxed')} {
       cellFill() { return this.fmt.cellFill || ''; },
       /** What the browser made of the writer's own stylesheet, in a few words. */
       cssNote() {
+        this.i18nTick;   // read, so a change of language works it out again
         if (this.cssBad) { return this.t('None of it could be read as CSS.'); }
         if (!this.cssRules) { return ''; }
         return this.t('{n} rules in use', { n: this.cssRules });
@@ -9376,6 +9408,7 @@ ${insideObjects('.eb-paper.boxed')} {
       cssHint() { return 'h2 { color: #1f3a5f; }'; },
       /** The controls for where a border goes, drawn as the border they make. */
       styleBorderSides() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { value: '', label: this.t('None') },
           { value: 'all', label: this.t('All round') },
@@ -9392,6 +9425,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** A line of the kind being designed, to look at while designing it. */
       styleWords() {
+        this.i18nTick;   // read, so a change of language works it out again
         const kind = this.styleKey;
         if (kind === 'h1' || kind === 'h2' || kind === 'h3' || kind === 'h4') { return this.t('A heading of this kind'); }
         if (kind === 'li') { return this.t('An item of a list'); }
@@ -9434,6 +9468,7 @@ ${insideObjects('.eb-paper.boxed')} {
         return out;
       },
       styleTargets() {
+        this.i18nTick;   // read, so a change of language works it out again
         const names = {
           p: this.t('Body text'), h1: this.t('Heading 1'), h2: this.t('Heading 2'),
           h3: this.t('Heading 3'), h4: this.t('Heading 4'), li: this.t('List item'),
@@ -9460,6 +9495,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The parts of a running header that are filled in, and what each says. */
       runTokens() {
+        this.i18nTick;   // read, so a change of language works it out again
         const what = {
           title: this.t('The title of the document'),
           name: this.t('The name of the file'),
@@ -9474,6 +9510,7 @@ ${insideObjects('.eb-paper.boxed')} {
         return !!(h.l || h.c || h.r || f.l || f.c || f.r);
       },
       listMarkers() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { type: 'disc', sample: '•', label: this.t('Disc') },
           { type: 'circle', sample: '◦', label: this.t('Circle') },
@@ -9525,6 +9562,7 @@ ${insideObjects('.eb-paper.boxed')} {
        * there in Files, and moving a document in Files moves it here.
        */
       docGroups() {
+        this.i18nTick;   // read, so a change of language works it out again
         const groups = new Map();
         const put = (key, label, d) => {
           if (!groups.has(key)) {
@@ -9560,6 +9598,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** Everybody else who has this document open at the moment. */
       othersHere() { return (this.people || []).filter((p) => !p.me); },
       catColourChoices() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { value: '', label: this.t('None') },
           { value: '#e8eefc', label: this.t('Blue') },
@@ -9574,6 +9613,7 @@ ${insideObjects('.eb-paper.boxed')} {
       frameLabel() { return this.kindName(this.frame.kind); },
       /** What stands on the shelf beside the paper. */
       paletteItems() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [{ kind: 'textbox', label: this.t('Text frame'), icon: this.icons.frame },
           { kind: 'frame', label: this.t('Block frame'), icon: this.icons.box },
           { kind: 'table', label: this.t('Insert table'), icon: this.icons.table },
@@ -9582,6 +9622,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The shapes that can be put on a page, drawn in CSS rather than in a font. */
       shapes() {
+        this.i18nTick;   // read, so a change of language works it out again
         const box = (extra) => '<span class="sh" style="' + extra + '"></span>';
         return [
           { kind: 'rect', label: this.t('Rectangle'), icon: box('border:1.5px solid currentColor') },
@@ -9602,6 +9643,7 @@ ${insideObjects('.eb-paper.boxed')} {
          bounding boxes, and a data field beats a computed one, so this list came
          out empty and the boxes never appeared in the insert menu at all. */
       boxKinds() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { variant: '', icon: '▢', label: this.t('Rounded box') },
           { variant: 'sq', icon: '▭', label: this.t('Square box') },
@@ -9611,6 +9653,7 @@ ${insideObjects('.eb-paper.boxed')} {
         ];
       },
       rules() {
+        this.i18nTick;   // read, so a change of language works it out again
         return [
           { cls: '', icon: '―', label: this.t('Thin rule') },
           { cls: 'eb-rule-thick', icon: '━', label: this.t('Thick rule') },
@@ -9618,6 +9661,7 @@ ${insideObjects('.eb-paper.boxed')} {
         ];
       },
       mathSnippets() {
+        this.i18nTick;   // read, so a change of language works it out again
         const m = (inner) => '<math xmlns="http://www.w3.org/1998/Math/MathML">' + inner + '</math>';
         return [
           { label: this.t('Fraction'), code: m('<mfrac><mi>a</mi><mi>b</mi></mfrac>') },
@@ -11163,7 +11207,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.checkOpen = true;
         if (!c) { return; }
         const found = [];
-        const sheets = Array.from(this.$el.querySelectorAll('.eb-sheet')).map((s) => s.getBoundingClientRect());
+        const sheets = sheetsOnScreen().map((s) => s.getBoundingClientRect());
         const pageOf = (r) => {
           const at = sheets.findIndex((s) => r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5);
           return at < 0 ? 0 : at + 1;
@@ -12919,7 +12963,7 @@ ${insideObjects('.eb-paper.boxed')} {
        */
       blocksOfPage(n) {
         const c = canvas();
-        const sheet = this.$el.querySelector('.eb-sheet');
+        const sheet = sheetsOnScreen()[0];
         if (!c || !sheet) { return []; }
         const z = this.frameZoom() || 1;
         const pageH = sheet.getBoundingClientRect().height / z;
@@ -12982,10 +13026,71 @@ ${insideObjects('.eb-paper.boxed')} {
        * A plan of each page: the writing as grey bars, the objects as outlines,
        * placed from their own measurements. Redrawn whenever the page settles.
        */
+      /**
+       * The little pages down the side, drawn as the pages themselves rather than
+       * as a plan of grey boxes. A copy of the sheets is put in each one, made
+       * small and slid up by the pages above it, so what the writer sees there is
+       * what is on the paper -- which is the whole point of a preview.
+       *
+       * A copy per page, so a very long document keeps the plan instead: thirty
+       * copies of a hundred-page document is not a preview, it is a stall.
+       */
+      /** Painted a moment after the scrolling stops, not on every pixel of it. */
+      paintSoon() {
+        clearTimeout(this._miniTimer);
+        this._miniTimer = setTimeout(() => this.paintPreview(), 120);
+      },
+      paintPreview() {
+        const c = canvas();
+        const wrap = c && c.parentNode;
+        const bar = this.$el && this.$el.querySelector('.eb-preview .pages');
+        if (!wrap || !bar) { return; }
+        const cells = Array.from(bar.querySelectorAll('.pg .sheet .mini'));
+        const sheets = sheetsOnScreen();
+        if (!cells.length || !sheets.length) { return; }
+        const first = sheets[0].getBoundingClientRect();
+        if (!first.width) { return; }
+        const step = sheets.length > 1
+          ? sheets[1].getBoundingClientRect().top - first.top
+          : first.height + 16 * (this.frameZoom() || 1);
+        // Only the little pages the writer can actually see. A copy of the whole
+        // document goes into each one, so painting all of them would be one copy
+        // per page -- a hundred pages would mean a hundred copies of a hundred
+        // pages. The bar is scrolled through, and each one is painted as it
+        // arrives and emptied again when it leaves.
+        // Against the window, not against the bar: the bar is as tall as all its
+        // little pages together and it is the aside around it that scrolls, so
+        // asking the bar whether a page is in view always answered yes -- and
+        // twenty copies of a twenty-page document were drawn, which took two
+        // seconds and put four hundred sheets in the window.
+        cells.forEach((cell, i) => {
+          const box = cell.getBoundingClientRect();
+          const near = box.bottom > -box.height && box.top < window.innerHeight + box.height;
+          if (!near) { if (cell.firstChild) { cell.textContent = ''; } return; }
+          const room = box;
+          if (!room.width) { return; }
+          const scale = room.width / first.width;
+          const copy = wrap.cloneNode(true);
+          // A copy must not be mistaken for the thing itself: no ids, no block
+          // names (the names are how a document being written with somebody else
+          // is matched up), and nothing anybody can type into.
+          copy.className = (copy.className || '') + ' eb-copy';
+          copy.removeAttribute('id');
+          Array.from(copy.querySelectorAll('[id]')).forEach((n) => n.removeAttribute('id'));
+          Array.from(copy.querySelectorAll('[data-eb-id]')).forEach((n) => n.removeAttribute('data-eb-id'));
+          Array.from(copy.querySelectorAll('[contenteditable]')).forEach((n) => n.setAttribute('contenteditable', 'false'));
+          copy.style.margin = '0';
+          copy.style.transformOrigin = '0 0';
+          copy.style.transform = 'scale(' + scale + ') translateY(' + (-i * step) + 'px)';
+          cell.textContent = '';
+          cell.appendChild(copy);
+        });
+        this.preview.mini = true;
+      },
       refreshPreview() {
         const c = canvas();
         if (!c || !this.previewOpen) { this.preview = []; return; }
-        const sheet = this.$el.querySelector('.eb-sheet');
+        const sheet = sheetsOnScreen()[0];
         if (!sheet) { this.preview = []; return; }
         const z = this.frameZoom() || 1;
         const pageH = sheet.getBoundingClientRect().height / z;
@@ -13050,9 +13155,11 @@ ${insideObjects('.eb-paper.boxed')} {
         };
         Array.from(c.children).forEach((el) => walk(el, 'text', 0));
         this.preview = pages;
+        // And then the pages themselves are painted into them.
+        this.$nextTick(() => this.paintPreview());
       },
       goToPage(n) {
-        const sheet = this.$el.querySelectorAll('.eb-sheet')[n - 1];
+        const sheet = sheetsOnScreen()[n - 1];
         if (sheet) { sheet.scrollIntoView({ block: 'start', behavior: 'smooth' }); this.pageNow = n; }
       },
       /** The chosen words, and what is written on them. */
@@ -13978,6 +14085,7 @@ ${insideObjects('.eb-paper.boxed')} {
             i18nOverride = (r && r.translations) ? r.translations : {};
           } catch (e) { i18nOverride = null; }
         }
+        this.i18nTick += 1;
         this.$forceUpdate();
       },
 

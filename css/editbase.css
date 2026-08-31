@@ -1306,3 +1306,9 @@
 #editbase-root .eb-fsel .mv {
   position: absolute; inset: 0; pointer-events: auto; cursor: move; touch-action: none;
 }
+/* The little page in the preview bar holds a copy of the sheet, made small. */
+#editbase-root .eb-preview .sheet { position: relative; overflow: hidden; background: #fff; }
+#editbase-root .eb-preview .mini {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none; user-select: none;
+}
+#editbase-root .eb-preview .mini > * { position: absolute; left: 0; top: 0; }
