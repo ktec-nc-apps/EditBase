@@ -9,6 +9,9 @@
         "Numbers": "Numbers",
         "Close": "Close",
         "New document": "New document",
+        "Show the page exactly as it prints": "Show the page exactly as it prints",
+        "Show the editor’s marks again": "Show the editor’s marks again",
+        "The browser adds the date and the address of the file in the margins. Turn “Headers and footers” off in the print dialogue to print the page as it stands.": "The browser adds the date and the address of the file in the margins. Turn “Headers and footers” off in the print dialogue to print the page as it stands.",
         "Line style": "Line style",
         "Emoji…": "Emoji…",
         "Search emoji": "Search emoji",
@@ -761,7 +764,21 @@
         "Duplicate this page": "Duplicate this page",
         "Add a page above": "Add a page above",
         "Add a page below": "Add a page below",
-        "Delete everything on this page": "Delete everything on this page"
+        "Delete everything on this page": "Delete everything on this page",
+        "Clear the formatting on the chosen words": "Clear the formatting on the chosen words",
+        "Clear all the formatting inside {what}": "Clear all the formatting inside {what}",
+        "Clear the formatting of this paragraph": "Clear the formatting of this paragraph",
+        "View": "View",
+        "A new layer above them all": "A new layer above them all",
+        "the writing": "the writing",
+        "New layer": "New layer",
+        "empty": "empty",
+        "In the writing": "In the writing",
+        "A new layer here": "A new layer here",
+        "It is already at the top": "It is already at the top",
+        "Only things standing on the paper have a layer": "Only things standing on the paper have a layer",
+        "It is already at the bottom": "It is already at the bottom",
+        "A new layer below them all": "A new layer below them all"
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

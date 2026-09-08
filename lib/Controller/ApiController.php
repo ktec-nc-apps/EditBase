@@ -190,8 +190,48 @@ class ApiController extends Controller {
 			if (strlen($body) > 4 * 1024 * 1024) {
 				$body = substr($body, 0, 4 * 1024 * 1024);
 			}
-			return ['url' => $clean, 'html' => $body];
+			return ['url' => $clean, 'html' => $this->asUtf8($body, $type)];
 		});
+	}
+
+	/**
+	 * A page in the writing it was written in, turned into UTF-8.
+	 *
+	 * Half the Japanese web is still Shift_JIS -- Aozora Bunko, to name the one
+	 * that matters -- and those bytes are not valid UTF-8. Handed to json_encode
+	 * as they are, the whole answer comes back empty and the writer sees a page
+	 * that brought in nothing at all, with nothing said about why.
+	 */
+	private function asUtf8(string $body, string $type): string {
+		$charset = '';
+		if (preg_match('/charset=["\']?([A-Za-z0-9_.:-]+)/i', $type, $m)) {
+			$charset = $m[1];
+		}
+		if ($charset === '' && preg_match('/<meta[^>]+charset=["\']?([A-Za-z0-9_.:-]+)/i', substr($body, 0, 4096), $m)) {
+			$charset = $m[1];
+		}
+		if ($charset === '') {
+			$charset = (string)mb_detect_encoding($body, ['UTF-8', 'SJIS-win', 'EUC-JP', 'ISO-2022-JP', 'ISO-8859-1'], true);
+		}
+		$charset = strtoupper(trim($charset));
+		if ($charset === 'SHIFT_JIS' || $charset === 'SHIFT-JIS' || $charset === 'SJIS' || $charset === 'X-SJIS' || $charset === 'MS_KANJI') {
+			// The web's Shift_JIS is really Windows-31J: the ① and ㈱ of a Japanese
+			// page are in the Microsoft extension, and plain SJIS loses them.
+			$charset = 'SJIS-WIN';
+		}
+		if ($charset !== '' && $charset !== 'UTF-8' && $charset !== 'UTF8') {
+			$turned = @mb_convert_encoding($body, 'UTF-8', $charset);
+			if (is_string($turned) && $turned !== '') {
+				$body = $turned;
+			}
+		}
+		if (!mb_check_encoding($body, 'UTF-8')) {
+			$body = (string)mb_convert_encoding($body, 'UTF-8', 'UTF-8');
+		}
+		// The page now IS UTF-8; a meta tag still saying otherwise would have the
+		// browser read it back the old way.
+		$body = preg_replace('/<meta[^>]+charset=["\']?[A-Za-z0-9_.:-]+["\']?[^>]*>/i', '<meta charset="utf-8">', $body, 1) ?? $body;
+		return $body;
 	}
 
 	#[NoAdminRequired]

@@ -70,8 +70,24 @@ The first version. Everything below is new, because there was nothing before it.
   there as a version of its own, so that can be undone in turn.
 - A view of the raw HTML of the current document.
 - A layer bar and a page bar down the right. Every row of the layer bar can be
-  dragged: two things standing on the paper change places in the pile, and anything
-  else moves through the document.
+  dragged with the mouse: dropped on another row it joins that thing's layer, on a
+  layer's heading it moves to that layer, and above or below them all it gets a
+  layer of its own. Anything that is not standing on the paper moves through the
+  document instead. The levels are renumbered from the bottom after every change,
+  so they stay one apart with nothing empty in between. The two places to drop for
+  a layer of one's own stay pinned at the top and the bottom of the bar, and the
+  list scrolls itself when a row is held near either end, so they can be reached
+  however long the list is. A dragged row travels with the pointer, and a place
+  that would do nothing is greyed out with the reason written in it rather than
+  quietly ignoring the drop. The numbers shown in the bar close up after a
+  deletion, but only in what is shown: looking at the bar never rewrites the
+  levels in the document, which would move things in the pile and change which of
+  two overlapping things the writing flows around. A layer itself is dragged by
+  its heading and everything on it moves together, and a new empty layer is made
+  with the button in the bar's head and becomes real when the first thing is
+  dropped into it. A thing drawn on the page has no level of its own; the bar
+  shows it at the level the browser actually paints it, and writes the levels
+  down the moment the writer moves something through the pile.
 - Categories down the left: a document can be filed in a folder inside the save
   folder, and the list shows one box per category — coloured as the writer likes,
   opening one at a time, with documents carried between them by dragging a row on
@@ -106,6 +122,80 @@ The first version. Everything below is new, because there was nothing before it.
 
 ### Fixed
 
+- The editor no longer draws a sheet the printer does not make. It counted sheets
+  from the height of the whole column of writing; the printer counts by what fits
+  in each page's own text area. When the writing ended a little past a fold -- one
+  empty paragraph was enough -- the editor showed a blank last page that never
+  printed. The count now follows the writing page by page, and a blank page put in
+  on purpose still counts as a page.
+- Anything standing on the page shows its own box when it is clicked, wherever in
+  the box the click lands. A list, a quotation or a heading placed by hand was not
+  counted as an object at all, so clicking one gave the box of whatever paragraph
+  lay behind it; and a click on the transparent part of any object -- a picture's
+  corner, the empty half of a list -- fell through in the same way. What stands
+  under the pointer is now what is taken hold of, the innermost first and the one
+  drawn on top before the one drawn under.
+- A running header and footer that stand where they were asked to stand: in the
+  paper's own margin, three millimetres clear of the writing, as deep as the
+  writer chooses up to the margin less those three. They are written into the
+  page's own margin boxes, so the printer repeats them on every page and counts
+  the pages itself -- {page} and {pages} are the printer's counters, not words.
+  They can be typed straight into the band on the first sheet, and shown on every
+  page or on the first alone. The writing does not move by a hair for them: it
+  begins where the margin says it does.
+- Words no longer run through an object that stands beside another. A real float
+  in the same paragraph was counted as taking room from every line of it, so a
+  second object further down was left with no room to be kept clear of, and the
+  words walked straight through it. What a float takes is now counted only on the
+  lines it actually stands on.
+- Setting a size on the words chosen inside a 文字枠 no longer changes the whole
+  frame. Clicking the size box on the toolbar takes the selection away before the
+  value is read; the last run of words chosen is now remembered and put back.
+- A 文字枠 asked to hold a list, a table or a picture becomes a frame that can
+  hold blocks, keeping its place and its size. It used to be thrown away and its
+  words left standing loose on the page.
+- Styling a word inside a block that carries that style no longer takes the block
+  apart: a 文字枠 with a size of its own was pulled out of the document when the
+  size of a few words in it was changed.
+- Opening a document no longer counts as writing it. Setting the paper of the
+  document being opened was taken for a change made by the writer, so the file
+  was saved a couple of seconds later and a version kept of it: a document nobody
+  had touched grew a snapshot every time it was looked at.
+- A long document opens in seconds rather than in half a minute, and the keyboard
+  is free while it does. A frame carried over page by page was laid out again by
+  the browser after every cut -- the whole document, every time -- so a story of a
+  hundred and twenty pages was laid out a hundred and twenty times. What is far
+  below the page being cut is now lifted out while that page is measured and put
+  back afterwards, the pages are counted from one reading instead of one for every
+  page, and a frame that cannot be made to fit is not laid out again and again in
+  the hope of a different answer. Opening 銀河鉄道の夜 (35 pages) went from 39
+  seconds to 2.5, and こころ (127 pages) from 38 seconds to 6.
+- A table taller than the page is now carried on to the next page, cut between
+  its rows -- and where a single row is taller than the page, cell by cell, the
+  lists and the tables inside it cut in the same way. It used to stay whole in
+  one frame and run off the paper: the editor drew eight sheets where the printer
+  made thirteen pages. A head row is repeated on the next page as the printer
+  repeats it, unless it is a banner deep enough to cost a third of the page.
+- A document with a frame carried on to another page could come back twice as
+  long. The carried-on frame wore the same name as the frame it carries on from,
+  so the machinery that folds in another person's writing took it for that frame
+  and wrote the whole of it over the last link of the chain. Every carried-on
+  frame now has a name of its own.
+- A block cut across three pages or more is put back as the one block it was.
+  The mark saying "this was cut" was taken off as soon as the second piece was
+  joined, so the third stood on as a block of its own -- which is how a table
+  grew a repeated head row at every pass.
+- A frame that stops short because the next row will not fit is left alone. It
+  was read as half empty and laid out again, over and over, without ever settling.
+- A table standing in another table's cell kept being taken apart. Its header row
+  was read as the outer table's, so at every opening one more row was lifted out
+  of the inner table and put at the top of the outer one: a Wikipedia article
+  came back in a different order every time it was read, for ever. The head is
+  now looked for in the table itself and nowhere else.
+- A document no longer grows every time it is saved. Cutting a paragraph at the
+  very edge of a link left the link behind with nothing in it; the next pass cut
+  at the same place and left another beside it. Those empty shells are taken off
+  as the cut is made.
 - The screen and the printout now agree, measured page by page against Chrome's
   own printing: a frame carried on to the next page kept a top margin on paper
   that the editor did not draw, and a thing placed by hand was allowed to hang

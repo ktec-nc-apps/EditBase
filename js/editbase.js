@@ -71,11 +71,14 @@
   const DEFAULT_PAPER = {
     size: 'A4', orientation: 'portrait', margin: { top: 25, right: 20, bottom: 25, left: 20 },
     font: 'serif', fontSize: 10.5, lineHeight: 1.75, fonts: { body: '', heading: '', mono: '' },
-    header: { l: '', c: '', r: '' }, footer: { l: '', c: '', r: '' },
+    // A running header and footer live in the paper's own margin: the writing
+    // begins where the margin says it does, and the band stands above it, three
+    // millimetres clear. The band may be as deep as the margin less those three.
+    header: { l: '', c: '', r: '', on: 'all', height: 8 },
+    footer: { l: '', c: '', r: '', on: 'all', height: 8 },
     // A page has a body always, and a header and a footer only when they are
     // asked for. They are regions of the page, not objects laid on it: no box
     // round them, no handles, nothing to pick up -- you write in them.
-    headerOn: false, footerOn: false,
     headingNumbers: '',
     vertical: false,
     // The paper itself: what it is painted with and what is drawn round it.
@@ -102,8 +105,6 @@
     if (p.font === 'sans') { out.font = 'sans'; }
     if (p.headingNumbers === 'decimal' || p.headingNumbers === 'japanese') { out.headingNumbers = p.headingNumbers; }
     out.vertical = !!p.vertical;
-    out.headerOn = !!p.headerOn;
-    out.footerOn = !!p.footerOn;
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
     const lh = Number(p.lineHeight);
@@ -152,7 +153,14 @@
       ['l', 'c', 'r'].forEach((k) => {
         if (typeof src[k] === 'string') { out[which][k] = src[k].replace(/[<>]/g, '').slice(0, 120); }
       });
+      if (src.on === 'first') { out[which].on = 'first'; }
+      const h = Number(src.height);
+      if (h > 0) { out[which].height = Math.min(60, Math.max(3, Math.round(h * 10) / 10)); }
     });
+    // The band cannot be deeper than the margin it stands in, less the three
+    // millimetres that keep it off the writing.
+    out.header.height = Math.min(out.header.height, Math.max(3, out.margin.top - 3));
+    out.footer.height = Math.min(out.footer.height, Math.max(3, out.margin.bottom - 3));
     return out;
   }
   /**
@@ -227,7 +235,7 @@
     return paper.orientation === 'landscape' ? { w: s.h, h: s.w } : { w: s.w, h: s.h };
   }
   /** The @page rule — the one piece of CSS that differs per document. */
-  function pageRule(paper) {
+  function pageRule(paper, about) {
     const s = PAPERS[paper.size] || PAPERS.A4;
     const sh = sheet(paper);
     const m = paper.margin;
@@ -253,7 +261,73 @@
         + ' background-repeat: no-repeat;'
         + ' background-position: ' + (-m.left) + 'mm ' + (-m.top) + 'mm;'
       : '';
-    return '@page { size: ' + size + '; margin: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;' + paint + ' }';
+    const box = '@page { size: ' + size + '; margin: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;' + paint + ' }';
+    return box + marginBoxes(paper, about);
+  }
+  /**
+   * The running header and footer, written where the printer keeps them: the
+   * page's own margin boxes. A browser fills @top-centre and its neighbours from
+   * the page margin, so the writing is not moved by a hair, the band repeats on
+   * every page by itself, and counter(page) is the number of the page it is
+   * printed on -- which nothing inside the document can know.
+   *
+   * The bands are held three millimetres clear of the writing, and are as deep as
+   * the writer asked for. A browser that does not know margin boxes prints the
+   * document with no band at all rather than with the band in the wrong place.
+   */
+  function marginBoxes(paper, about) {
+    const m = paper.margin;
+    const out = [];
+    const zones = { l: 'left', c: 'center', r: 'right' };
+    const say = (side, which, gap, deep) => {
+      const slots = paper[which] || {};
+      const rules = [];
+      Object.keys(zones).forEach((k) => {
+        const text = runText(String(slots[k] || ''), about);
+        if (!text) { return; }
+        rules.push('@' + side + '-' + zones[k] + ' { content: ' + cssContent(text) + ';'
+          + ' vertical-align: ' + (side === 'top' ? 'bottom' : 'top') + ';'
+          + ' padding-' + (side === 'top' ? 'bottom' : 'top') + ': ' + round1(gap) + 'mm;'
+          + ' font-size: 9pt; color: #444; }');
+      });
+      return rules;
+    };
+    const head = paper.header || {};
+    const foot = paper.footer || {};
+    // The band stands at the near edge of the margin, three millimetres off the
+    // writing; the rest of the margin above or below it stays empty. The margin
+    // box fills the whole margin, and the writing in it is set against the edge
+    // nearest the page (vertical-align below), so three millimetres of padding
+    // is the whole of it -- the rest of the margin is empty by itself.
+    //
+    // The gap the band's own depth leaves was being added to that padding, which
+    // pushed the band the OTHER way, to the far edge of the margin: measured on
+    // A4 with a 25mm margin, the editor drew the header 17.8mm down the sheet
+    // and the printer put it at 4.2mm -- 13.5mm out, and close enough to the
+    // paper's edge that many printers would not print it at all.
+    const headGap = 0;
+    const footGap = 0;
+    const onAll = [];
+    const onFirst = [];
+    const headRules = say('top', 'header', 3 + headGap);
+    const footRules = say('bottom', 'footer', 3 + footGap);
+    if (head.on === 'first') { onFirst.push.apply(onFirst, headRules); } else { onAll.push.apply(onAll, headRules); }
+    if (foot.on === 'first') { onFirst.push.apply(onFirst, footRules); } else { onAll.push.apply(onAll, footRules); }
+    if (onAll.length) { out.push('@page { ' + onAll.join(' ') + ' }'); }
+    if (onFirst.length) { out.push('@page :first { ' + onFirst.join(' ') + ' }'); }
+    return out.length ? '\n' + out.join('\n') : '';
+  }
+  /** A running band's words as the content of a margin box: the parts that change
+   *  are the printer's own counters, and the rest is written as it stands. */
+  function cssContent(text) {
+    const bits = [];
+    String(text).split(/(\{page\}|\{pages\})/).forEach((piece) => {
+      if (!piece) { return; }
+      if (piece === '{page}') { bits.push('counter(page)'); return; }
+      if (piece === '{pages}') { bits.push('counter(pages)'); return; }
+      bits.push('"' + piece.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
+    });
+    return bits.length ? bits.join(' ') : '""';
   }
 
   // ---- typefaces ---------------------------------------------------------------
@@ -438,8 +512,15 @@
   font-family: var(--eb-font-body, "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif);
   font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: left;
   word-break: normal; overflow-wrap: anywhere; hyphens: auto;
+  /* A thing put behind the writing is given a level below it, and a browser
+     paints those behind everything in the box they belong to -- which, with no
+     box of its own, means behind the paper as well, where it cannot be seen.
+     The page is made a box of its own so that behind the writing means behind
+     the writing, and no further. */
+  isolation: isolate;
 }
 .eb-doc > *:first-child { margin-top: 0; }
+.eb-doc > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
 .eb-doc p { margin: 0 0 0.9em; }
 /* Everything a heading, a list, a block of code or a table needs is said here
    rather than left to the browser: an interface stylesheet round the editor can
@@ -502,6 +583,7 @@
 .eb-doc .eb-box.thick { border-width: 2pt; }
 .eb-doc .eb-box.tint { background: #f5f7fb; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-box > *:first-child { margin-top: 0; }
+.eb-doc .eb-box > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
 .eb-doc .eb-box > *:last-child { margin-bottom: 0; }
 .eb-doc .eb-box .eb-box-title { font-weight: 700; margin-bottom: .4em; }
 .eb-doc .eb-note {
@@ -591,7 +673,23 @@
    top margin of the sheet. Two and a half millimetres of disagreement between
    the screen and the printout, measured. The margin goes. */
 .eb-doc .eb-cont, .eb-doc .eb-pagebreak + * { margin-top: 0; }
+/* And the block after a fold is not always the NEXT element. A peg of no height
+   (.eb-anchor) is left in the writing wherever an object was placed, and the
+   editor puts a spacer of its own in to carry the block to the sheet below; both
+   can stand between the fold and the writing it was meant for, and then the rule
+   above lands on them instead and the block keeps its own top margin. Measured
+   after inserting a sheet in front of test.html: the summary frame began 4.2mm
+   below the top margin of its page, and every object drawn on that page moved
+   down with it. Said again for the shapes that really occur. */
+.eb-doc .eb-pagebreak + .eb-pagespacer + *,
+.eb-doc .eb-pagebreak + .eb-anchor + *,
+.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + *,
+.eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + *,
+.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + *,
+.eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + .eb-anchor + *,
+.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + .eb-anchor + * { margin-top: 0; }
 .eb-doc .eb-frame > *:first-child { margin-top: 0; }
+.eb-doc .eb-frame > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
 .eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
 /* A run of words made into a frame: a box, but not a box that shows until it is
    told to. It is inline-block so it can be given a size, floated or placed. */
@@ -609,7 +707,17 @@
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
    paragraph goes wherever that paragraph goes. */
-.eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; }
+.eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; display: flow-root; }
+/* A placed object is taken out of the writing and put where the writer put it.
+   A shape's own rule may be the more particular one -- the arrow says
+   position: relative so its head can be hung on it -- and then the object is
+   left standing in the flow, where its top margin collapses through the
+   height-0 anchor and pushes the whole of the writing down. Measured: an arrow
+   with margin-top 11.1mm pushed the text of the frame down by 11.1mm. Said here
+   more particularly still, so the anchor wins whatever a shape asks for. */
+.eb-doc .eb-anchor > .eb-shape,
+.eb-doc .eb-anchor > .eb-shape.eb-sh-arrow,
+.eb-doc .eb-anchor > .eb-shape.eb-sh-line { position: absolute; }
 /* Where the words under a picture stand. Below it is the default and needs no
    rule; above it is a matter of which comes first in the markup; inside it is a
    band laid over the foot of the picture itself. */
@@ -735,6 +843,7 @@
 /* columns */
 .eb-doc .eb-cols { column-gap: 8mm; column-rule: none; }
 .eb-doc .eb-cols > *:first-child { margin-top: 0; }
+.eb-doc .eb-cols > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
 
 /* Nothing at all, standing where the writing on the last page stops, so that the
    footer is at the foot of that page as it is on every other. */
@@ -783,6 +892,24 @@
 
 /* an explicit page break: invisible on paper, a labelled line on screen */
 .eb-doc .eb-pagebreak { break-before: page; height: 0; margin: 0; border: none; }
+/* A page the writer asked for, standing on its own. Adding a page used to be
+   said with TWO page breaks -- one to end the page before it and one to end the
+   blank page -- and the writer, who had asked for a page, got two marks he had
+   not written. Worse, the two did not agree with the printer: measured on a
+   plain two-page document, one press drew four sheets and printed three, and a
+   blank page asked for at the very front printed not at all, because a break
+   BEFORE the first thing in a document has nothing to break from.
+   One thing, that breaks on both sides, is a page: it prints where it is drawn,
+   at the front as well, and it says in the writer's own list what it is. */
+.eb-doc .eb-blankpage {
+  break-before: page; break-after: page; page-break-before: always; page-break-after: always;
+  /* A hair high, not nothing at all. Two blank pages asked for one after the
+     other are two boxes of no height with a forced break between them, and a
+     browser drops a break between two boxes that hold nothing: two pages asked
+     for at the very front printed as one. A single transparent pixel is a box,
+     and a box takes the page it is broken on to. */
+  height: 1px; margin: 0; border: none; background: none;
+}
 @media screen {
   .eb-doc .eb-pagebreak {
     height: 1.6em; margin: 1.2em 0; border-top: 1.5pt dashed #2563eb; position: relative;
@@ -790,6 +917,7 @@
 }
 @media print {
   .eb-doc .eb-pagebreak { height: 0 !important; margin: 0 !important; border: none !important; }
+  .eb-doc .eb-blankpage { height: 1px !important; margin: 0 !important; border: none !important; }
   .eb-doc a { text-decoration: none; }
 }
 `;
@@ -808,6 +936,12 @@
    object and it was drawn a whole page from where the editor had worked out it
    stood. translate moves it without touching either its margin or the layout. */
 .eb-paper.eb-doc .eb-anchor > * { translate: 0 var(--eb-shift, 0px); }
+/* A page the writer asked for is a blank page, and a blank page looks blank.
+   Nothing is drawn on it -- no mark, no label, no shading. The owner, more than
+   once: "adding a page above should not need this symbol." It is only as deep as
+   a page so that the arithmetic that moves blocks moves it; on paper it has no
+   height at all and breaks on both sides, which is the same page. */
+.eb-paper.eb-doc .eb-blankpage { height: var(--eb-usable, 0px); background: none; border: none; }
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -816,12 +950,17 @@
 .eb-paper p:empty::after, .eb-paper h1:empty::after, .eb-paper h2:empty::after,
 .eb-paper h3:empty::after, .eb-paper h4:empty::after, .eb-paper li:empty::after { content: ""; display: inline-block; }
 .eb-paper [contenteditable="false"] { user-select: none; }
-.eb-paper figcaption:empty { display: block; min-height: 1.3em; }
-.eb-paper figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
+/* The word "Caption" under a picture with no caption yet, and the line of room
+   it stands in, belong to the editor: neither is printed. With the guides turned
+   off the screen has to be the page as it will come out, so they go with them --
+   an empty caption reading "Caption" on the screen and nothing on the paper is
+   exactly the kind of difference that makes a writer distrust the preview. */
+.eb-paper.boxed figcaption:empty { display: block; min-height: 1.3em; }
+.eb-paper.boxed figcaption:empty::before { content: attr(data-ph); color: #9aa3b0; font-size: .88em; }
 .eb-paper table.eb-table td:focus, .eb-paper table.eb-table th:focus { outline: 2px solid #2563eb33; }
 /* While it is being written, an embedded page is a labelled box: the address it
    will show, and nothing fetched from anyone. The page itself is in the file. */
-.eb-paper .eb-embed {
+.eb-paper.boxed .eb-embed {
   background: repeating-linear-gradient(45deg, #f4f5f7 0 8px, #eceef2 8px 16px);
   border: .75pt dashed #98a2b3;
 }
@@ -1089,7 +1228,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'data-eb-id', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'data-free-peg', 'data-eb-again', 'data-eb-id', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
   const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
   /**
@@ -1128,7 +1267,18 @@ ${insideObjects('.eb-paper.boxed')} {
       if (/url\s*\(/i.test(val) && !/^url\(\s*["']?data:image\/[a-z+.-]+[,;]/i.test(val)) { return; }
       // A document may lay its own frames out; it may not pin anything to the
       // window, which in the editor means over the app's own chrome.
-      if (prop === 'position' && !/^(static|relative|absolute)$/i.test(val)) { return; }
+      //
+      // Nor may it place anything by hand with a style of its own. In EditBase a
+      // thing standing on the paper hangs off an anchor, and the stylesheet is
+      // what places it -- so an inline `position: absolute` can only have come
+      // from somewhere else, and it means two different things in the two places
+      // that matter: in the editor it resolves against the sheet's own corner,
+      // on paper against the text area, and the same page came out 18.5mm across
+      // and 24.3mm down from where the screen drew it. Worse, being out of the
+      // flow it makes no pages at all -- a whole story arrived as one slab.
+      // Taken away, the writing joins the column, breaks into pages, and prints
+      // where it is drawn.
+      if (prop === 'position' && !/^(static|relative)$/i.test(val)) { return; }
       kept.push(prop + ': ' + val);
     });
     return kept.join('; ');
@@ -1175,6 +1325,9 @@ ${insideObjects('.eb-paper.boxed')} {
             const v = cleanStyle(a.value);
             if (v) { el.setAttribute('style', v); } else { el.removeAttribute('style'); }
           }
+          // class="" is litter: it survives a save, comes back, and makes two
+          // copies of the same document look different.
+          if (an === 'class' && !String(a.value).trim()) { el.removeAttribute('class'); }
           if ((an === 'href' || an === 'src') && /^\s*(javascript|data:text\/html|vbscript)/i.test(a.value)) {
             el.removeAttribute(a.name);
           }
@@ -1225,14 +1378,18 @@ ${insideObjects('.eb-paper.boxed')} {
    * with that page's own number in it, standing in the paper's margin. The parts
    * that change are written by the writer as words in braces.
    */
-  const RUN_TOKENS = ['title', 'name', 'date', 'time'];
+  const RUN_TOKENS = ['page', 'pages', 'title', 'name', 'date', 'time'];
   function runText(text, about) {
     const c = about || {};
     return String(text == null ? '' : text).replace(/\{([a-z]+)\}/gi, (whole, key) => {
       const k = String(key).toLowerCase();
       if (RUN_TOKENS.indexOf(k) < 0) { return whole; }
       const v = c[k];
-      return v == null ? '' : String(v);
+      // Nobody here knows what this one says -- the page number, when the file is
+      // being written rather than drawn -- so it is left standing for whoever
+      // does. The printer's own counter fills it in on paper.
+      if (v == null) { return whole; }
+      return String(v);
     });
   }
   function hasSlots(s) { return !!(s && (s.l || s.c || s.r)); }
@@ -1246,54 +1403,15 @@ ${insideObjects('.eb-paper.boxed')} {
     };
   }
   /** The height of the band a running header or footer stands in, in mm. */
-  const RUN_BAND = 8;
+  /** How deep the two bands are, in millimetres: what the writer asked for, held
+   *  to the margin they stand in less the three millimetres that keep them off
+   *  the writing. */
   function runBands(paper) {
+    const room = (side) => Math.max(3, (paper.margin[side] || 0) - 3);
     return {
-      top: hasSlots(paper.header) ? RUN_BAND : 0,
-      bottom: hasSlots(paper.footer) ? RUN_BAND : 0,
+      top: hasSlots(paper.header) ? Math.min(paper.header.height || 8, room('top')) : 0,
+      bottom: hasSlots(paper.footer) ? Math.min(paper.footer.height || 8, room('bottom')) : 0,
     };
-  }
-  function runRow(cls, slots, about) {
-    const say = (v) => escapeAttr(runText(v || '', about));
-    return '<div class="' + cls + '">'
-      + '<span class="l">' + say(slots.l) + '</span>'
-      + '<span class="c">' + say(slots.c) + '</span>'
-      + '<span class="r">' + say(slots.r) + '</span>'
-      + '</div>';
-  }
-  /**
-   * A running header and footer that really do repeat on every printed page.
-   *
-   * They cannot be placed in the paper's margin: a browser gives no way to put
-   * anything there. Fixed to the top of the page it lands on the first line of
-   * the writing; measured up into the margin it comes out at the foot of the page
-   * before, because the margins are not part of the column the writing flows
-   * down. All four ways were tried and printed to see.
-   *
-   * What a browser does repeat, on every page, is the head and the foot of a
-   * table. So the writing is put in a table of one cell, with the header in its
-   * head and the footer in its foot; the band each of them stands in is taken off
-   * the writing area, on every page, by the table itself. The editor takes the
-   * same band off its own sheets, so the two agree.
-   */
-  function runningTable(paper, doc, body) {
-    if (!hasSlots(paper.header) && !hasSlots(paper.footer)) { return body; }
-    const about = runAbout(doc);
-    // The foot of a table follows what the table holds, so on the last page --
-    // where the writing stops half way down -- the footer would ride up under it
-    // instead of standing at the foot of the page. The room left on that page is
-    // filled with nothing, so it stands where it does on every other page. A few
-    // millimetres short of the true gap, so that a browser laying the file out a
-    // line differently does not push the footer on to a page of its own.
-    const fill = hasSlots(paper.footer) && doc.fill > 34 ? doc.fill - 20 : 0;
-    return '<table class="eb-run">\n'
-      + (hasSlots(paper.header)
-        ? '<thead><tr><th>' + runRow('eb-runhead', paper.header, about) + '</th></tr></thead>\n' : '')
-      + (hasSlots(paper.footer)
-        ? '<tfoot><tr><td>' + runRow('eb-runfoot', paper.footer, about) + '</td></tr></tfoot>\n' : '')
-      + '<tbody><tr><td>\n' + body
-      + (fill ? '\n<div class="eb-runfill" aria-hidden="true" style="height: ' + round1(fill) + 'mm"></div>' : '')
-      + '\n</td></tr></tbody>\n</table>\n';
   }
   /** The classes the document itself wears: the numbering scheme, if any. */
   function docClasses(paper, clean) {
@@ -1365,7 +1483,7 @@ ${insideObjects('.eb-paper.boxed')} {
       + (anyStyles(styles) ? '<meta name="editbase-styles" content="' + escapeAttr(JSON.stringify(styles)) + '">\n' : '')
       + '<title>' + escapeAttr(doc.title || 'Document') + '</title>\n'
       + fontLinks
-      + '<style>\n' + pageRule(paper) + '\n' + page + '\n' + DOC_CSS
+      + '<style>\n' + pageRule(paper, runAbout(doc)) + '\n' + page + '\n' + DOC_CSS
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
       // The writer's own rules stand in a sheet of their own, after everything
@@ -1373,12 +1491,12 @@ ${insideObjects('.eb-paper.boxed')} {
       // glance which of the rules in it are theirs.
       + (own ? '<style id="eb-css">\n' + scopeCss(own, '') + '\n</style>\n' : '')
       + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
-      // The writing comes first and nothing else does. The running header, the
-      // footer and the page's paint are all placed by CSS and could sit anywhere,
-      // but a document whose first element is not its first paragraph loses the
-      // rule that takes the space off the top of the page -- and every line in
-      // the file then sat 42.5px lower than the same line in the editor.
-      + runningTable(paper, doc, body) + '\n'
+      // The writing, and nothing else. The running header and footer are the
+      // page's own margin boxes, written in the @page rule; the paper's paint is
+      // on the page box. Nothing stands between the top of the body and the
+      // first paragraph, so the file begins its writing exactly where the editor
+      // draws it.
+      + body + '\n'
       + '</body>\n</html>\n';
   }
 
@@ -1404,11 +1522,24 @@ ${insideObjects('.eb-paper.boxed')} {
       run.remove();
     }
     Array.from(body.querySelectorAll('.eb-runpage, .eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
+    // An older EditBase put the header and the footer in the writing itself, as a
+    // <header> and a <footer> block. They printed over the words and stood on one
+    // page only. What such a file carries is taken into the running band, where it
+    // belongs, and out of the writing.
+    ['header', 'footer'].forEach((which) => {
+      const el = body.querySelector(':scope > ' + (which === 'header' ? 'header.eb-header' : 'footer.eb-footer'));
+      if (!el) { return; }
+      const said = String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (said) {
+        if (!paper || typeof paper !== 'object') { paper = {}; }
+        if (!paper[which] || typeof paper[which] !== 'object') { paper[which] = { l: '', c: '', r: '' }; }
+        if (!paper[which].l && !paper[which].c && !paper[which].r) { paper[which].c = said; }
+      }
+      el.remove();
+    });
     sanitiseInto(body);
     toObjects(body);
     return {
-      hasHeader: !!body.querySelector(':scope > header.eb-header'),
-      hasFooter: !!body.querySelector(':scope > footer.eb-footer'),
       title: (dom.title || '').trim(),
       lang: dom.documentElement.getAttribute('lang') || 'ja',
       paper: normalisePaper(paper),
@@ -1439,6 +1570,23 @@ ${insideObjects('.eb-paper.boxed')} {
   let pastePlain = false;
   let wrapTimer = null;
   let layerEls = [];
+  // When a row in the layer bar was last let go of, so that the click which ends
+  // a drag on the row it started from is not also taken as a choice.
+  let layerDropped = 0;
+  // The copy of the row that travels with the pointer while it is being dragged.
+  // Without it nothing on the screen says that anything is being carried, and a
+  // drag that works looks like a drag that does nothing.
+  let layerGhost = null;
+  /** A copy of a row, cut loose and following the pointer. */
+  function liftRow(row) {
+    if (!row || !row.cloneNode) { return null; }
+    const box = row.getBoundingClientRect();
+    const copy = row.cloneNode(true);
+    copy.className = 'eb-layerghost';
+    copy.style.width = box.width + 'px';
+    document.body.appendChild(copy);
+    return copy;
+  }
   // The object the layer bar is currently showing as chosen, so the bar is only
   // redrawn when what is in hand actually changes.
   let layerMarked = null;
@@ -1489,6 +1637,16 @@ ${insideObjects('.eb-paper.boxed')} {
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(r);
+  }
+  /** The last run of words chosen in the writing, kept for the toolbar's own
+   *  boxes: they take the focus, and with it the selection. */
+  let heldRange = null;
+  function takeHeldRange() {
+    const now = getRange();
+    if (now && !now.collapsed) { return; }
+    if (!heldRange || !inCanvas(heldRange.commonAncestorContainer)) { return; }
+    if (!canvas() || !canvas().contains(heldRange.commonAncestorContainer)) { return; }
+    try { selectRange(heldRange); } catch (e) { /* the words have moved on */ }
   }
   function rangeHolds(range, node) {
     const nr = document.createRange();
@@ -1557,9 +1715,17 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     return null;
   }
+  /**
+   * The inline wrapper above a word that carries this property -- a span, a bold,
+   * a link. A block is never one: a paragraph, and above all a 文字枠, carries
+   * its size for everything in it, and taking a word "out of" it meant pulling
+   * the frame apart. Setting the size on a run inside simply wraps that run,
+   * which is what wins over the block anyway.
+   */
   function ancestorWithStyle(node, prop) {
     let n = node.parentNode;
     while (n && n !== canvas()) {
+      if (n.nodeType === 1 && isBlock(n)) { return null; }
       if (n.nodeType === 1 && n.style && n.style[prop]) { return n; }
       n = n.parentNode;
     }
@@ -2089,7 +2255,8 @@ ${insideObjects('.eb-paper.boxed')} {
         b.parentNode.replaceChild(frag, b);
         return;
       }
-      if (b.nodeName === 'TABLE' || b.nodeName === 'HR' || b.classList.contains('eb-pagebreak')) { return; }
+      if (b.nodeName === 'TABLE' || b.nodeName === 'HR'
+        || b.classList.contains('eb-pagebreak') || b.classList.contains('eb-blankpage')) { return; }
       // A container -- a まとめ枠, a 囲み枠 -- is styled through the writing inside
       // it: setting Heading 1 in a box makes the line in the box a heading. It
       // does not turn the box itself into a heading and throw the box away.
@@ -2104,8 +2271,15 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   function toggleList(tag) {
-    const blocks = selectedBlocks();
+    let blocks = selectedBlocks();
     if (!blocks.length) { return; }
+    // A 文字枠 is a paragraph, and a paragraph cannot hold a list. The frame keeps
+    // its place and its size and becomes one that can.
+    blocks = blocks.map((b) => {
+      if (!b.matches || !b.matches('p.eb-textbox')) { return b; }
+      const held = frameForBlocks(b);
+      return held ? held.firstElementChild : b;
+    });
     const allSame = blocks.every((b) => b.nodeName === tag);
     if (allSame) {
       blocks.forEach((list) => {
@@ -2521,8 +2695,65 @@ ${insideObjects('.eb-paper.boxed')} {
    * dropped into, not after the whole table -- so the innermost thing that can
    * hold blocks is what it goes into.
    */
+  /**
+   * A 文字枠 asked to hold something a paragraph cannot hold -- a list, a table, a
+   * picture with a caption -- becomes a block frame: the same box, in the same
+   * place, at the same size, wearing div instead of p. Without this the writer's
+   * frame was thrown away to make room for the list, and everything that made it
+   * a frame went with it.
+   * @returns {HTMLElement|null} The frame to put blocks in, or null if this was
+   *   not a 文字枠 at all.
+   */
+  function frameForBlocks(box) {
+    if (!box || !box.matches || !box.matches('p.eb-textbox')) { return null; }
+    const div = document.createElement('div');
+    Array.from(box.attributes).forEach((a) => div.setAttribute(a.name, a.value));
+    div.className = String(box.className).split(/\s+/).map((k) => (k === 'eb-textbox' ? 'eb-frame' : k)).join(' ');
+    const p = document.createElement('p');
+    while (box.firstChild) { p.appendChild(box.firstChild); }
+    if (!p.firstChild) { p.appendChild(document.createElement('br')); }
+    div.appendChild(p);
+    box.parentNode.replaceChild(div, box);
+    return div;
+  }
+  /** The 文字枠 the caret is in, if it is in one. */
+  function textboxAt(node) {
+    const c = canvas();
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    while (n && n !== c) {
+      if (n.nodeType === 1 && n.matches && n.matches('p.eb-textbox')) { return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
   function insertBlockNode(node) {
-    const range = getRange();
+    let range = getRange();
+    // In a 文字枠, the frame becomes one that can hold blocks and the thing goes
+    // inside it -- rather than landing outside the frame, which is where it used
+    // to end up.
+    // A frame, a box or a shape put down while the caret is in a 文字枠 is a new
+    // object standing beside it, not something the frame has to hold: only the
+    // writing's own blocks -- a table, a list, a picture, a rule -- turn the
+    // frame into one that can hold blocks.
+    const CONTENT_BLOCKS = /^(TABLE|UL|OL|FIGURE|HR|BLOCKQUOTE|PRE|DL)$/;
+    const contentish = node && (CONTENT_BLOCKS.test(node.nodeName)
+      || (node.classList && (node.classList.contains('eb-math-block') || node.classList.contains('eb-toc'))));
+    const box = contentish && range ? textboxAt(range.startContainer) : null;
+    if (box) {
+      const held = frameForBlocks(box);
+      if (held) {
+        const first = held.firstElementChild;
+        if (first && !String(first.textContent || '').length && !first.querySelector('img, table, figure')) {
+          held.replaceChild(node, first);
+        } else if (first) {
+          held.insertBefore(node, first.nextSibling);
+        } else {
+          held.appendChild(node);
+        }
+        return node;
+      }
+    }
+    range = getRange();
     const inner = range ? innerBlockOf(range.startContainer) : null;
     const host = inner && inner.parentNode
       && (inner.matches('td, th') || (inner.parentNode.matches && inner.parentNode.matches(BLOCK_HOSTS)))
@@ -2740,7 +2971,17 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     return null;
   }
-  function tableRows(table) { return Array.from(table.querySelectorAll('tr')); }
+  /**
+   * The rows of THIS table -- not of the tables inside it. A page brought in
+   * from the web is full of tables within tables, and asking for every <tr>
+   * underneath handed back the inner table's rows as if they were the outer
+   * one's: the header tidy then tore a row out of an inner table and put it at
+   * the top of the outer one, and the document came out different every time it
+   * was opened.
+   */
+  function tableRows(table) {
+    return Array.from(table.querySelectorAll(':scope > tr, :scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr'));
+  }
   function cellIndex(cell) { return Array.prototype.indexOf.call(cell.parentNode.children, cell); }
   function blankCell(tag) {
     const c = document.createElement(tag || 'TD');
@@ -2861,14 +3102,18 @@ ${insideObjects('.eb-paper.boxed')} {
     const first = rows[0];
     if (!first) { return; }
     const isHeader = !!(first.children[0] && first.children[0].nodeName === 'TH');
-    const thead = table.querySelector('thead');
+    // This table's own head, not one belonging to a table standing in one of its
+    // cells. Unscoped, the head of a nested table was taken to be this table's,
+    // and its rows were moved up into the outer table -- one more of them at
+    // every opening, so a Wikipedia box came back in a different order for ever.
+    const thead = table.querySelector(':scope > thead');
     if (isHeader) {
       if (thead && thead.contains(first)) { return; }
       const head = thead || document.createElement('thead');
       if (!thead) { table.insertBefore(head, table.firstChild); }
       head.appendChild(first);
     } else if (thead) {
-      const body = table.querySelector('tbody') || table;
+      const body = table.querySelector(':scope > tbody') || table;
       while (thead.firstChild) { body.insertBefore(thead.firstChild, body.firstChild); }
       thead.remove();
     }
@@ -3543,6 +3788,16 @@ ${insideObjects('.eb-paper.boxed')} {
   /** One CSS pixel in millimetres: the whole app measures paper, not screens. */
   const MM = 25.4 / 96;
   const round1 = (n) => Math.round(n * 10) / 10;
+  /**
+   * A line and an arrow are a stroke drawn with a top border. They have a length
+   * and no height at all: the CSS says min-height: 0. Anything that writes a
+   * height on one makes the writing keep clear of a band of empty paper --
+   * measured, an arrow standing 39.8mm tall for a hairline, on the first page.
+   */
+  function strokeShape(el) {
+    return !!(el && el.classList
+      && (el.classList.contains('eb-sh-line') || el.classList.contains('eb-sh-arrow')));
+  }
 
   /**
    * A rule and a line are a pixel tall, which is nothing to aim at, and a click
@@ -3564,11 +3819,45 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return best ? best[1] : null;
   }
+  /**
+   * The thing standing on the page under the pointer. A placed object is a box on
+   * the paper: pressing anywhere inside it takes hold of it, even where it is
+   * transparent -- a picture's corner, a formula's white space, the empty half of
+   * a list. Without this the press fell through to whatever lay behind, and the
+   * writer was given the box of something they had not touched.
+   *
+   * The innermost wins over the one that holds it, and above that the one drawn
+   * on top wins over the one drawn under.
+   */
+  function placedAt(x, y) {
+    const c = canvas();
+    if (!c || !(x >= 0) || !(y >= 0)) { return null; }
+    const found = [];
+    Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
+      if (!el.getBoundingClientRect) { return; }
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) { return; }
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) { return; }
+      found.push(el);
+    });
+    if (!found.length) { return null; }
+    found.sort((a, b) => {
+      if (a !== b && a.contains(b)) { return 1; }
+      if (a !== b && b.contains(a)) { return -1; }
+      return stackRank(b) - stackRank(a);
+    });
+    return found[0];
+  }
   function objectAt(node) {
     let n = node && node.nodeType === 3 ? node.parentNode : node;
     const c = canvas();
     while (n && n !== c && n.nodeType === 1) {
       if (n.matches && n.matches(OBJECT_SEL)) { return n; }
+      // Anything placed by hand is an object, whatever its tag. A list, a
+      // quotation or a heading standing on the page was not in the list of kinds,
+      // so clicking one gave no box at all -- the click fell through to whatever
+      // paragraph lay behind it.
+      if (objectFree(n)) { return n; }
       n = n.parentNode;
     }
     return null;
@@ -3707,6 +3996,15 @@ ${insideObjects('.eb-paper.boxed')} {
       el.style.removeProperty('top');
     }
     if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+  }
+  /**
+   * Whether a thing standing in the run of the writing can be lifted out of it
+   * and onto a layer. An object can: a picture, a table, a box, a shape, a frame,
+   * a formula. The writing itself cannot -- a paragraph IS the text, and the text
+   * is the layer it is in, so there is nowhere else for it to go.
+   */
+  function liftable(el) {
+    return !!(el && el.matches && (el.matches(OBJECT_SEL) || el.matches(TEXT_SEL)));
   }
   /** The block of the document that this height on the page falls in. */
   function blockAtY(y) {
@@ -3865,22 +4163,6 @@ ${insideObjects('.eb-paper.boxed')} {
     const c = canvas();
     return c ? Array.from(c.querySelectorAll('.eb-anchor > *')) : [];
   }
-  function restack(el, where) {
-    const list = stackedFrames();
-    if (list.length < 2 || list.indexOf(el) < 0) {
-      if (el && list.indexOf(el) >= 0) { el.style.zIndex = '1'; }
-      return;
-    }
-    const order = list.map((n, i) => ({ n, z: Number(n.style.zIndex) || 0, i }));
-    order.sort((a, b) => (a.z - b.z) || (a.i - b.i));
-    const from = order.findIndex((x) => x.n === el);
-    let to = from;
-    if (where === 'front') { to = order.length - 1; } else if (where === 'back') { to = 0; } else { to = Math.max(0, Math.min(order.length - 1, from + where)); }
-    const moved = order.splice(from, 1)[0];
-    order.splice(to, 0, moved);
-    order.forEach((x, k) => { x.n.style.zIndex = String(k + 1); });
-  }
-
   // ---- 折り返し: how the words get round an object ----------------------------
   // LibreOffice calls it 折り返し. A browser has one tool for it -- the float --
   // and a float only holds words off from the edge of the column, and only the
@@ -3981,14 +4263,23 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     // Everything laid over the words: unwrapped, the words themselves left behind.
     for (let pass = 0; pass < 20; pass += 1) {
-      const dressed = el.querySelector('b, i, u, s, em, strong, code, mark, font, small, big, sub, sup, span:not(.eb-flow):not(.eb-frame)');
+      const dressed = Array.from(el.querySelectorAll('b, i, u, s, em, strong, code, mark, font, small, big, sub, sup, span:not(.eb-flow):not(.eb-frame)'))
+        .find((n) => { const own = n.closest(OBJECT_SEL + ', .eb-anchor'); return !own || own === el; });
       if (!dressed) { break; }
       const parent = dressed.parentNode;
       while (dressed.firstChild) { parent.insertBefore(dressed.firstChild, dressed); }
       parent.removeChild(dressed);
     }
+    // A thing standing inside the block -- a picture, a shape, a frame, another
+    // box -- is not formatting laid over the words. It is a thing the writer put
+    // there, and what makes it that thing is its class and its size. Stripping
+    // those does not make it plain: it makes it vanish, which is what taking the
+    // formatting out of a まとめ枠 used to do to everything standing in it.
+    const ownThing = OBJECT_SEL + ', .eb-anchor';
     Array.from(el.querySelectorAll('[style], [class]')).forEach((kid) => {
       if (kid.classList && kid.classList.contains('eb-flow')) { return; }
+      const own = kid.closest ? kid.closest(ownThing) : null;
+      if (own && own !== el) { return; }
       kid.removeAttribute('style');
       const keep = Array.from(kid.classList || []).filter((c) => /^eb-al-/.test(c));
       if (keep.length) { kid.setAttribute('class', keep.join(' ')); } else { kid.removeAttribute('class'); }
@@ -4075,64 +4366,96 @@ ${insideObjects('.eb-paper.boxed')} {
     // The room above the first band belongs to the writing, and it has to be said
     // so. Without a step of no width there, the outline runs diagonally from the
     // top corner of the float down to the first band, and the words are drawn
-    // into a wedge -- a paragraph narrowing line by line to a point, which is
-    // what the owner's document was doing.
+    // into a wedge -- a paragraph narrowing line by line to a point.
     if (stops[0] > 0.01) { stops.unshift(0); }
     const widest = (bands, from, to) => {
       let w = 0;
       bands.forEach((b) => { if (b.top <= from + 0.5 && b.bottom >= to - 0.5 && b.width > w) { w = b.width; } });
       return Math.min(w, room);
     };
+    // What a real float of the browser's own has already taken out of this block,
+    // and over which lines of it.
+    const goneAt = (side, from, to) => {
+      let w = 0;
+      ((taken && taken[side]) || []).forEach((t) => {
+        if (t.to > from + 0.5 && t.from < to - 0.5 && t.w > w) { w = t.w; }
+      });
+      return Math.min(w, room);
+    };
+    const hair = 0.2 / MM;
+    // Line by line, what each side has to hold off -- less whatever a real float
+    // of the browser's own is already holding off on that same line. Settled here,
+    // for that line alone: one line asking for more than it can have is that
+    // line's own affair, and used to be answered by standing BOTH bands at their
+    // full width over every line of the paragraph. A right band 50mm wide then
+    // stood across lines where nothing of its own was there at all, and the words
+    // stopped 76mm short of the circle they were making room for.
     const runs = [];
     for (let i = 0; i < stops.length - 1; i += 1) {
-      const from = stops[i], to = stops[i + 1];
-      runs.push({ from: from, to: to, l: widest(sides.left, from, to), r: widest(sides.right, from, to) });
+      const from = stops[i];
+      const to = stops[i + 1];
+      const gl = goneAt('left', from, to);
+      const gr = goneAt('right', from, to);
+      const free = Math.max(0, room - gl - gr);
+      let l = Math.max(0, widest(sides.left, from, to) - gl);
+      let r = Math.max(0, widest(sides.right, from, to) - gr);
+      // More than the line holds: it is blocked across, and the two share what
+      // there is. The right keeps what it asked for, because a thing at the right
+      // margin has nowhere else to go.
+      if (l + r > free) { r = Math.min(r, free); l = Math.max(0, free - r); }
+      runs.push({ from: from, to: to, l: l, r: r });
     }
-    // What each side is given. A hair is kept back so that the rounding to a
-    // tenth of a millimetre cannot make the pair a whisker too wide to fit -- and
-    // what a floated object has already taken out of this block is not ours to
-    // give away twice: a band as wide as the column cannot stand beside a picture
-    // floated to the right, so it would drop below it and hold nothing off.
-    const hair = 0.2 / MM;
-    const gone = { left: (taken && taken.left) || 0, right: (taken && taken.right) || 0 };
-    const free = Math.max(0, room - gone.left - gone.right);
+    // Each float is drawn as wide as the widest line it serves, and the outline
+    // gives every other line exactly what that line asked for.
     const wide = { left: 0, right: 0 };
     runs.forEach((s2) => { wide.left = Math.max(wide.left, s2.l); wide.right = Math.max(wide.right, s2.r); });
-    // A band on the same side as a float begins where that float ends.
-    wide.left = Math.max(0, Math.min(wide.left - gone.left, free));
-    wide.right = Math.max(0, Math.min(wide.right - gone.right, free));
-    if (wide.left + wide.right > free - hair) {
-      if (wide.right >= free - hair) { wide.right = free; wide.left = 0; }
-      else { wide.left = Math.max(0, free - wide.right - hair); }
+    // The two have to stand side by side: a pair too wide for the column does not
+    // sit together, the second drops below the first, and a band drawn for a line
+    // near the head of the paragraph opens its room below the middle of it.
+    if (wide.left + wide.right > room - hair) {
+      wide.right = Math.min(wide.right, Math.max(0, room - hair));
+      const keep = Math.max(0, room - hair - wide.right);
+      // What will not fit on the left is handed to the right, so that the pair of
+      // them still hold the line off between them. Simply cutting the left band
+      // down to what fits left the rest of the line open -- and the right band,
+      // drawn only as deep as the thing that made it, was not even standing on
+      // that line. A text frame the width of the column then had 73mm of writing
+      // running straight across it.
+      runs.forEach((s2) => {
+        if (s2.l > keep) {
+          const over = s2.l - keep;
+          s2.l = keep;
+          s2.r = Math.min(wide.right, Math.max(s2.r, over));
+        }
+        s2.r = Math.min(s2.r, wide.right);
+      });
+      wide.left = keep;
     }
     const out = {};
     ['left', 'right'].forEach((side) => {
       const width = wide[side];
-      if (width <= 0) { return; }
-      const steps = runs.map((s2) => {
-        // Wanted more than the column holds -- or more than the side it is on was
-        // given, which comes to the same thing: the line is blocked across, and
-        // both bands stand at their full width to do it. Without the second half
-        // of this, a formula set to keep the words above and below it was handed
-        // a band narrower than the column and two lines ran under it.
-        const full = s2.l + s2.r > room + 0.5
-          || s2.l - gone.left > wide.left + 0.5 || s2.r - gone.right > wide.right + 0.5;
-        const want = (side === 'left' ? s2.l - gone.left : s2.r - gone.right);
-        return { from: s2.from, to: s2.to, w: full ? width : Math.max(0, Math.min(want, width)) };
-      });
+      if (width <= 0.05) { return; }
       let height = 0;
-      steps.forEach((s2) => { if (s2.w > 0) { height = Math.max(height, s2.to); } });
+      runs.forEach((s2) => { if ((side === 'left' ? s2.l : s2.r) > 0.05) { height = Math.max(height, s2.to); } });
       if (height <= 0) { return; }
       const pt = (x, y) => mm(x) + 'mm ' + mm(y) + 'mm';
       const points = [];
-      const within = steps.filter((s2) => s2.from < height - 0.01);
+      const within = runs.filter((s2) => s2.from < height - 0.01);
       if (side === 'left') {
         points.push(pt(0, 0));
-        within.forEach((s2) => { points.push(pt(s2.w, s2.from)); points.push(pt(s2.w, Math.min(s2.to, height))); });
+        within.forEach((s2) => {
+          const w = Math.min(s2.l, width);
+          points.push(pt(w, s2.from));
+          points.push(pt(w, Math.min(s2.to, height)));
+        });
         points.push(pt(0, height));
       } else {
         points.push(pt(width, 0));
-        within.forEach((s2) => { points.push(pt(width - s2.w, s2.from)); points.push(pt(width - s2.w, Math.min(s2.to, height))); });
+        within.forEach((s2) => {
+          const w = Math.min(s2.r, width);
+          points.push(pt(width - w, s2.from));
+          points.push(pt(width - w, Math.min(s2.to, height)));
+        });
         points.push(pt(width, height));
       }
       out[side] = 'float:' + side + ';width:' + mm(width) + 'mm;height:' + mm(height) + 'mm;'
@@ -4140,6 +4463,7 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return out;
   }
+
   function applyWrap(root, zoom) {
     if (!root) { return; }
     const z = zoom || 1;
@@ -4182,7 +4506,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // all and the words ran straight through it. So the band is cut to what is
       // left beside the float.
       const taken = (b) => {
-        const out = { left: 0, right: 0 };
+        const out = { left: [], right: [] };
         const box = contentBox(b);
         const look = (el) => {
           if (!el || el.nodeType !== 1 || (el.classList && el.classList.contains('eb-flow'))) { return; }
@@ -4199,7 +4523,11 @@ ${insideObjects('.eb-paper.boxed')} {
           const w = side === 'left'
             ? (r.right + (parseFloat(st.marginRight) || 0)) - box.left
             : box.right - (r.left - (parseFloat(st.marginLeft) || 0));
-          if (w > out[side]) { out[side] = w; }
+          // Where it intrudes as well as by how much: a float that touches the top
+          // of a paragraph takes nothing from the lines below it, and treating it
+          // as if it took the whole column left an object further down the same
+          // paragraph with no room at all -- the words ran straight through it.
+          if (w > 0) { out[side].push({ from: Math.max(0, r.top - box.top), to: r.bottom - box.top, w: w }); }
         };
         Array.from(b.children).forEach(look);
         let prev = b.previousElementSibling;
@@ -4239,9 +4567,16 @@ ${insideObjects('.eb-paper.boxed')} {
             if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
             // One band to each box the words are written in: the same paragraph
             // asked twice by the same object would reserve the room twice.
-            const rootEl = b.closest(WRAP_HOSTS) || flowRoot(b);
-            if (done.has(rootEl)) { return; }
-            done.add(rootEl);
+            // A band for each PARAGRAPH the thing lies over, and each one kept
+            // inside its own paragraph. One band for the whole box, hung in the
+            // first paragraph and left to reach down over the ones after it, is a
+            // float that outlives its block -- and a float that outlives its block
+            // is still standing there when the next block's band is placed, so the
+            // two queue up side by side and eat the line between them. Measured on
+            // a page of the owner's: a band of 72.8mm with a band of 50mm beside
+            // it, and the words ending 76mm short of the circle they made room for.
+            if (done.has(b)) { return; }
+            done.add(b);
             const room = cb.right - cb.left;
             let how = mode;
             // A column too narrow to write in is no wrap at all: LibreOffice's own
@@ -4257,7 +4592,7 @@ ${insideObjects('.eb-paper.boxed')} {
             const width = how === 'none' ? room
               : (side === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
             const top = Math.max(0, (or.top - gapPx) - cb.top);
-            const bottom = (or.bottom + gapPx) - cb.top;
+            const bottom = Math.min((or.bottom + gapPx) - cb.top, cb.bottom - cb.top);
             if (width <= 0 || bottom <= top) { return; }
             need(b, side, { top: top, bottom: bottom, width: Math.min(width, room), room: room });
           });
@@ -4274,6 +4609,39 @@ ${insideObjects('.eb-paper.boxed')} {
           spacer.setAttribute('aria-hidden', 'true');
           spacer.setAttribute('style', style);
           b.insertBefore(spacer, b.firstChild);
+          // The outline is drawn from the head of the paragraph, because that is
+          // where the spacer is put. But a float may not stand higher than the
+          // foot of a float that came before it, so a band belonging to an object
+          // further up the page pushed this one down -- and the room then opened
+          // below the thing it was made for, with the words running straight
+          // through the thing itself. Measured on the owner's page: a circle at
+          // 41.7mm down the paragraph, its room opened at 67.9mm, 26mm too low.
+          // The spacer is pulled back up to the head it was drawn from.
+          // The outline is drawn from the head of the paragraph, because that is
+          // where the spacer is put. But a float may not stand higher than the
+          // foot of a float that came before it, so a band belonging to an object
+          // further up the page pushes this one down -- and the room then opens
+          // below the thing it was made for, with the words running straight
+          // through the thing itself. Measured on a page of the owner's: a circle
+          // 41.7mm down the paragraph, its room opened at 67.9mm, 26mm too low.
+          //
+          // The spacer is not moved back up: shape-outside is measured from the
+          // float's own margin box, so a negative margin carries the outline with
+          // it and nothing is gained. What is redrawn is the outline itself, from
+          // where the float actually stands.
+          const head = contentBox(b).top;
+          const drop = spacer.getBoundingClientRect().top - head;
+          if (drop > 0.5) {
+            const d = mm(drop);
+            const shifted = (spacer.getAttribute('style') || '')
+              .replace(/polygon\(([^)]*)\)/, (all, pts) => 'polygon(' + pts.split(',').map((pt) => {
+                const q = pt.trim().split(/\s+/);
+                return q[0] + ' ' + Math.max(0, Math.round((parseFloat(q[1]) - d) * 10) / 10) + 'mm';
+              }).join(',') + ')')
+              .replace(/height:\s*([\d.]+)mm/, (all, h) =>
+                'height:' + Math.max(0, Math.round((parseFloat(h) - d) * 10) / 10) + 'mm');
+            spacer.setAttribute('style', shifted);
+          }
         });
       });
       const after = objects.map((o) => o.getBoundingClientRect().top);
@@ -4359,7 +4727,10 @@ ${insideObjects('.eb-paper.boxed')} {
     const w = num(v.width);
     if (w) { s.width = w + 'mm'; s.maxWidth = 'none'; }
     const h = num(v.height);
-    if (h) { if (el.nodeName === 'HR') { s.height = h + 'mm'; } else { s.minHeight = h + 'mm'; } }
+    if (h) {
+      if (el.nodeName === 'HR') { s.height = h + 'mm'; }
+      else if (!strokeShape(el)) { s.minHeight = h + 'mm'; }
+    }
     declareFrameHeight(el);
     const mt = num(v.mt); const mb = num(v.mb); const ml = num(v.ml); const mr = num(v.mr);
     if (mt != null) { s.marginTop = mt + 'mm'; }
@@ -4388,7 +4759,11 @@ ${insideObjects('.eb-paper.boxed')} {
       if (mr != null) { s.marginRight = mr + 'mm'; }
     }
     const pad = num(v.pad);
-    if (pad != null) {
+    // A stroke has no inside. Padding on one does not hold the words further off
+    // -- the line is drawn on the top border, so the padding hangs below it and
+    // the room lands on one side only. Measured: 7mm of it gave an arrow a box
+    // 14.3mm tall with all of the clearance under the line.
+    if (pad != null && !strokeShape(el)) {
       s.paddingTop = pad + 'mm'; s.paddingBottom = pad + 'mm';
       s.paddingLeft = pad + 'mm'; s.paddingRight = pad + 'mm';
     }
@@ -4518,6 +4893,345 @@ ${insideObjects('.eb-paper.boxed')} {
     return out;
   }
 
+  /**
+   * A paragraph that runs past the foot of the page is cut at the line the page
+   * ends on, and the rest of it begins the next sheet -- which is exactly what a
+   * browser does when it prints the very same file. Before this the editor moved
+   * the whole paragraph to the next sheet instead, and the screen and the paper
+   * then disagreed about where every page ended: measured on six plain
+   * paragraphs of eight lines, the editor drew 32 lines on page one and left
+   * 30.8mm of white below them, while the printer put 36 lines there. Nothing
+   * else in this application matters if those two disagree -- the whole point of
+   * it is that what is on the screen is what comes off the printer.
+   *
+   * The cut is the editor's own, like the spacers: it is put back together
+   * before the file is written, so what is saved is the paragraph the writer
+   * wrote, and the browser cuts it again in the same place when it prints it.
+   */
+  const FLOWCUT = 'data-eb-flowcut';
+  /** Put every paragraph the editor cut at a page foot back together again. */
+  function joinFlowCuts(root) {
+    if (!root || !root.querySelector) { return false; }
+    let any = false;
+    for (let guard = 0; guard < 2000; guard += 1) {
+      const first = root.querySelector('[' + FLOWCUT + ']');
+      if (!first) { break; }
+      first.removeAttribute(FLOWCUT);
+      first.removeAttribute('data-split');
+      first.style.removeProperty('margin-block-end');
+      if (!first.getAttribute('style')) { first.removeAttribute('style'); }
+      let rest = first.nextElementSibling;
+      while (rest && rest.classList && rest.classList.contains('eb-pagespacer')) {
+        const gone = rest; rest = rest.nextElementSibling; gone.remove();
+      }
+      if (!rest || rest.nodeName !== first.nodeName) { continue; }
+      const goesOn = rest.hasAttribute(FLOWCUT);
+      rest.style.removeProperty('margin-block-start');
+      const stray = first.lastElementChild;
+      if (stray && stray.nodeName === 'BR' && first.childNodes.length === 1) { stray.remove(); }
+      if (first.nodeName === 'TABLE') { mergeTableInto(first, rest); }
+      else { mergeCut(first, rest); }
+      rest.remove();
+      if (goesOn) { first.setAttribute(FLOWCUT, 'on'); }
+      any = true;
+    }
+    return any;
+  }
+  /**
+   * Put a block back together with the rest of it, however deep the cut went. A
+   * list cut inside one of its items has to have that item made whole again, not
+   * left as two items with a sentence broken between them.
+   */
+  function mergeCut(first, rest) {
+    while (rest.firstChild) {
+      const node = rest.firstChild;
+      const last = first.lastElementChild;
+      const goesOn = node.nodeType === 1 && node.getAttribute && node.getAttribute('data-split') === 'on';
+      if (node.nodeType === 1 && last && last.getAttribute
+        && last.getAttribute('data-split') === 'on' && last.nodeName === node.nodeName) {
+        if (node.nodeName === 'TABLE') { mergeTableInto(last, node); }
+        else {
+          const stray = last.lastElementChild;
+          if (stray && stray.nodeName === 'BR' && last.childNodes.length === 1) { stray.remove(); }
+          mergeCut(last, node);
+        }
+        last.removeAttribute('data-split');
+        if (goesOn) { last.setAttribute('data-split', 'on'); }
+        rest.removeChild(node);
+        continue;
+      }
+      first.appendChild(node);
+    }
+  }
+  /**
+   * Whether a block is carried over with whatever follows it. A heading alone at
+   * the foot of a page is what the stylesheet forbids -- `break-after: avoid-page`
+   * on h1..h6 -- and a browser printing the file obeys it, so the editor must
+   * too: measured on five headings with their paragraphs, the screen put 20.6mm
+   * more on page one than the paper did. Read from the markup rather than from
+   * the computed style, because this is asked of every block on every pass and
+   * getComputedStyle is what makes a long document slow to open.
+   */
+  const KEEP_WITH_NEXT = /^H[1-6]$/;
+  function keepsWithNext(el) {
+    const own = el && el.style ? (el.style.breakAfter || el.style.pageBreakAfter) : '';
+    if (own) { return own === 'avoid' || own === 'avoid-page'; }
+    return !!(el && KEEP_WITH_NEXT.test(el.nodeName));
+  }
+  /** What a page foot may be allowed to fall inside, and what it may not. */
+  const FLOW_BOXES = /^(UL|OL)$/;
+  function flowCuttable(el) {
+    if (!el || el.nodeType !== 1 || !el.matches) { return false; }
+    if (el.classList.contains('eb-cont') || el.classList.contains('eb-textbox')) { return false; }
+    if (el.hasAttribute('data-frame-height')) { return false; }
+    // Placed by hand, it is an object standing on the paper, not writing in the
+    // column: it has a page because of where it is drawn, and the frame chain
+    // is what carries it over.
+    if (objectFree(el)) { return false; }
+    // A box the stylesheet says is never to be broken -- a quotation, a callout,
+    // a picture with its caption -- is not broken here either, because the
+    // printer will not break it. What the printer does is the measure.
+    const keep = window.getComputedStyle(el).getPropertyValue('break-inside');
+    if (keep === 'avoid' || keep === 'avoid-page') { return false; }
+    return el.matches(TEXT_BLOCKS) || FLOW_BOXES.test(el.nodeName) || el.nodeName === 'TABLE';
+  }
+  /**
+   * Where a block may be cut so that neither page is left with a single line of
+   * it -- orphans and widows, both two, which is what a browser printing the
+   * file does of its own accord and what LibreOffice does.
+   *
+   * What is left over is measured from where the cut ACTUALLY lands -- the last
+   * whole line that fits -- and not from the limit. Measured from the limit, the
+   * few pixels between the last line and the foot of the page were counted as
+   * part of the remainder, so "one line and a bit" read as "less than two" and
+   * the cut was pulled back a line that needed no pulling: A5 landscape came out
+   * with 13 lines on page two where the paper had 14.
+   *
+   * Returns the depth to cut at, or -1 for "do not cut this here".
+   */
+  function widowSafe(limit, deep, line) {
+    if (!(line > 0)) { return limit; }
+    if (limit < 2 * line - 0.5) { return -1; }
+    const lands = Math.floor((limit + 0.5) / line) * line;
+    if (deep - lands >= 2 * line - 0.5) { return limit; }
+    const back = limit - line;
+    return back >= 2 * line - 0.5 ? back : -1;
+  }
+  /**
+   * Cut a block at a given depth into it and hand back the rest of it, as a block
+   * of the same kind. A paragraph is cut at the line, a table between its rows, a
+   * list between its items -- and inside the item the cut falls in.
+   */
+  function carveAt(el, limit) {
+    if (!el || el.nodeType !== 1 || limit <= 0) { return null; }
+    if (el.matches(TEXT_BLOCKS)) {
+      // Two lines have to stay and two have to go, the same rule the printer
+      // keeps of its own accord. Cutting an item of a list one line too late is
+      // how the screen and the paper came apart by 6.3mm in 縦書き.
+      const want = widowSafe(limit, sizeAlong(el, isTate(el)), lineOf(el));
+      if (want < 0) { return null; }
+      const at = cutOffsetIn(el, want);
+      return at > 0 ? splitBlockAt(el, at) : null;
+    }
+    const tate = isTate(el);
+    // A table is cut between its rows, along whichever axis the writing runs.
+    // 2026-09-08 に縦書きへ回したが、画面と紙が合わなかったので戻した。
+    // printmatch「縦書きの長い表」1ページ目 左21.7mm / 2ページ目 左-51.6mm。
+    // 合うようにしてから、また回す。それまでは縦書きで表は丸ごと扱う。
+    if (el.nodeName === 'TABLE') { return tate ? null : splitTableAt(el, limit); }
+    if (!FLOW_BOXES.test(el.nodeName)) { return null; }
+    const kids = Array.from(el.children);
+    if (kids.length < 1) { return null; }
+    const box = el.getBoundingClientRect();
+    const scale = scaleOf(el, box, tate);
+    const at = (k) => startIn(box, k.getBoundingClientRect(), tate) / scale;
+    let first = -1;
+    for (let i = 0; i < kids.length; i += 1) {
+      if (at(kids[i]) + sizeAlong(kids[i], tate) > limit + 0.5) { first = i; break; }
+    }
+    if (first < 0) { return null; }
+    let carry = kids.slice(first);
+    const top = at(kids[first]);
+    if (top < limit - 2) {
+      const rest = carveAt(kids[first], limit - top);
+      if (rest) {
+        kids[first].setAttribute('data-split', 'on');
+        carry = [rest].concat(kids.slice(first + 1));
+      }
+    }
+    if (!carry.length || carry[0] === kids[0]) { return null; }   // nothing would stay
+    const shell = el.cloneNode(false);
+    shell.removeAttribute('id');
+    shell.removeAttribute('data-eb-id');
+    // A numbered list carried on goes on counting where it left off.
+    if (el.nodeName === 'OL') {
+      const start = Number(el.getAttribute('start') || 1) || 1;
+      const stayed = kids.length - carry.length + (carry[0] !== kids[first] ? 1 : 0);
+      shell.setAttribute('start', String(start + Math.max(0, stayed)));
+    }
+    carry.forEach((k) => shell.appendChild(k));
+    return shell;
+  }
+  /**
+   * Cut every paragraph that a page foot falls inside. One reading of the page,
+   * as paginate does: the cut keeps the writing at the same total height, so the
+   * arithmetic below can be carried right through the document without stopping
+   * to measure again. Returns whether anything was cut.
+   */
+  function cutFlowAtFolds(note) {
+    const c = canvas();
+    if (!c) { return false; }
+    // 縦書き runs the writing down the page and the pages right to left. The
+    // arithmetic is the same along the other axis, which is what paginate does,
+    // and what everything below now does as well.
+    const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+    const wrap = c.parentNode;
+    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
+    const pageH = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    if (!pageH || !(tate ? c.offsetWidth : c.offsetHeight)) { return false; }
+    c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+    const style = window.getComputedStyle(c);
+    const mt = parseFloat(tate ? style.paddingRight : style.paddingTop) || 0;
+    const mb = parseFloat(tate ? style.paddingLeft : style.paddingBottom) || 0;
+    const usable = pageH - mt - mb;
+    if (usable < 40) { return false; }
+    const extra = mt + mb + PAGE_GAP;
+    const kids = Array.from(c.children);
+    const place = (el) => (tate ? (c.offsetWidth - el.offsetLeft - el.offsetWidth - mt) : (el.offsetTop - mt));
+    const top = kids.map(place);
+    const high = kids.map((el) => sizeAlong(el, tate));
+    const plan = [];
+    let shift = 0;
+    let pageTop = 0;
+    let pending = false;
+    // The run of blocks immediately above this one that are carried over with
+    // what follows them: a heading, or a run of headings.
+    let keepers = [];
+    for (let i = 0; i < kids.length; i += 1) {
+      const el = kids[i];
+      if (el.classList.contains('eb-pagebreak')) { if (i > 0) { pending = true; } keepers = []; continue; }
+      let t = top[i] + shift;
+      const h = high[i];
+      while (t >= pageTop + usable) { pageTop += usable + extra; }
+      const blankPage = el.classList.contains('eb-blankpage');
+      const forced = pending || el.classList.contains('eb-cont') || blankPage;
+      pending = false;
+      if (t < pageTop - 0.5) { shift += pageTop - t; t = pageTop; }
+      else if (forced && (t > pageTop + 0.5 || (blankPage && i > 0))) {
+        shift += (pageTop + usable + extra) - t;
+        pageTop += usable + extra;
+        continue;
+      }
+      const boundary = pageTop + usable;
+      if (note) { note.push({ i: i, tag: el.tagName.toLowerCase(), t: Math.round(t), h: Math.round(h),
+        pageTop: Math.round(pageTop), boundary: Math.round(boundary), usable: Math.round(usable),
+        extra: Math.round(extra), shift: Math.round(shift) }); }
+      if (t + h <= boundary + 0.5) {
+        // It fits where it stands. Remember it if it is carried over with what
+        // follows -- newest first, so the earliest of a run is found last.
+        if (keepsWithNext(el)) { keepers.unshift({ el: el, top: t, height: h }); }
+        else { keepers = []; }
+        continue;
+      }
+      const room = boundary - t;
+      const words = el.matches(TEXT_BLOCKS);
+      const line = lineOf(!words && el.firstElementChild ? el.firstElementChild : el);
+      // Two lines have to be left behind, or the paragraph goes over whole: that
+      // is what orphans:2 means, and it is what a browser printing this file
+      // does of its own accord -- and what LibreOffice does. It is a rule about
+      // the lines of ONE block, though: a list is cut between its items, and each
+      // item keeps the rule for itself. Asking it of the list as a whole cut the
+      // list one line early -- 6.3mm apart from the paper, measured in 縦書き.
+      // Pushed whole, as it was before any of this: the arithmetic has to follow
+      // it, or every cut below this point is measured against a page that moved.
+      const pushWhole = () => {
+        if (h <= usable) {
+          // The earliest of the run of headings that still stands below the top
+          // of this page: the whole run goes over, not just the last of it.
+          let keeper = null;
+          for (let k = 0; k < keepers.length; k += 1) {
+            if (keepers[k].top <= pageTop + 0.5) { break; }
+            keeper = keepers[k];
+          }
+          const from = keeper ? keeper.top : t;
+          shift += (boundary - from) + extra;
+          pageTop = boundary + extra;
+        } else {
+          while (t + h > pageTop + usable) { pageTop += usable + extra; }
+        }
+        keepers = [];
+      };
+      if (!flowCuttable(el) || room < (words ? 2 * line : line)) { pushWhole(); continue; }
+      const limits = [];
+      for (let L = room; L < h - 0.5; L += usable) { limits.push(L); }
+      if (!limits.length) { pushWhole(); continue; }
+      // And two lines have to go over: widows:2. Leaving one line alone at the
+      // top of a page is something the printer will not do, so the editor must
+      // not either -- they would part company by exactly one line.
+      //
+      // What is left over is measured from where the cut actually lands -- the
+      // last whole line that fits -- and not from the limit itself. Measuring it
+      // from the limit counted the few pixels between the last line and the foot
+      // of the page as part of the remainder, said "one line and a bit is less
+      // than two", and pulled the cut back a line that did not need pulling:
+      // A5 landscape came out with 13 lines on page two where the paper had 14.
+      const end = limits.length - 1;
+      if (words) {
+        const deep = end > 0 ? h - limits[end - 1] : h;
+        const from = end > 0 ? limits[end - 1] : 0;
+        const want = widowSafe(limits[end] - from, deep, line);
+        // Only the first cut can be given up on: dropping a later one would
+        // leave the piece before it holding more than a page.
+        if (want < 0) { if (end === 0) { pushWhole(); continue; } }
+        else { limits[end] = from + want; }
+      }
+      if (note) { note[note.length - 1].limits = limits.map((v) => Math.round(v)); }
+      plan.push({ el: el, limits: limits });
+      shift += limits.length * extra;
+      keepers = [];
+    }
+    if (!plan.length) { return false; }
+    // Cut from the foot of the paragraph upwards: what is above a cut keeps the
+    // lines it had, so every offset measured before the first cut is still the
+    // offset it was.
+    let cut = false;
+    plan.forEach((job) => {
+      const pieces = [job.el];
+      for (let k = job.limits.length - 1; k >= 0; k -= 1) {
+        const rest = carveAt(job.el, job.limits[k]);
+        if (!rest) { continue; }
+        rest.style.setProperty('margin-block-start', '0');
+        job.el.parentNode.insertBefore(rest, job.el.nextSibling);
+        pieces.splice(1, 0, rest);
+        cut = true;
+      }
+      pieces.slice(0, -1).forEach((piece) => {
+        piece.setAttribute(FLOWCUT, 'on');
+        piece.style.setProperty('margin-block-end', '0');
+      });
+    });
+    return cut;
+  }
+
+  /**
+   * Put the cut paragraphs back together and cut them again where the page feet
+   * now fall, keeping the writer's place. The caret is remembered as a count of
+   * characters, because the cut moves the very text node being typed into: the
+   * browser leaves the caret at the end of the piece that stays behind, and
+   * measured on thirty characters typed at a page foot, they went in scattered
+   * instead of one after another.
+   */
+  function recutFlow() {
+    const c = canvas();
+    if (!c) { return false; }
+    const r = getRange();
+    const at = (r && c.contains(r.startContainer)) ? caretOffset() : null;
+    const joined = joinFlowCuts(c);
+    const cut = cutFlowAtFolds();
+    if ((joined || cut) && at != null) { setCaretOffset(at); }
+    return cut;
+  }
+
   function makeSpacer(size, tate) {
     const el = document.createElement('div');
     el.className = 'eb-pagespacer';
@@ -4534,7 +5248,28 @@ ${insideObjects('.eb-paper.boxed')} {
    * Does nothing where there is no layout to measure (a document not yet shown,
    * or the test harness), so it can be called freely.
    */
+  /**
+   * How many sheets the writing alone reaches, as paginate last counted it.
+   * Not how many sheets there are: a thing placed low on the paper adds sheets,
+   * and those must not be the ones that decide where a placed thing may go.
+   */
+  let flowPages = 0;
+  /**
+   * The page plan, written down as it is made.
+   *
+   * Switched off, this costs one test of a null per block. Switched on, it says
+   * which CALL of paginate made each decision -- and that is the thing that was
+   * missing on 2026-09-08, when a condition was added to a branch that the
+   * record said was never taken, and something else broke. The record covered
+   * three calls; the laying out makes more (after a page is added, inside
+   * reflowFrames, after the chain is joined), and nobody could see them.
+   */
+  let planLog = null;
+  let planRuns = 0;
+  function planNote(row) { if (planLog && planLog.length < 4000) { planLog.push(row); } }
   function paginate() {
+    planRuns += 1;
+    const runNo = planRuns;
     const c = canvas();
     if (!c) { return 1; }
     c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
@@ -4552,74 +5287,221 @@ ${insideObjects('.eb-paper.boxed')} {
     const usable = pageH - mt - mb;
     if (usable < 40) { return 1; }
     const extra = mt + mb + PAGE_GAP;
+    // How deep a page is, told to the stylesheet. A page the writer asked for is
+    // exactly that deep on the screen, so it is an ordinary block that happens to
+    // fill a page -- and the arithmetic that has always moved a block too big for
+    // the room left moves it, with no rule of its own to get wrong. On paper it
+    // has no height at all and breaks on both sides, which is the same page.
+    c.style.setProperty('--eb-usable', round1(usable) + 'px');
 
+    // Where everything stands, read once. Reading a position after every spacer
+    // is put in makes the browser lay out the whole document again each time --
+    // on a story of a hundred and twenty pages that was seconds of waiting. The
+    // arithmetic below works from this one reading, and what the spacers really
+    // did is checked at the end.
+    const kids = Array.from(c.children).filter((el) => !el.classList.contains('eb-pagespacer'));
+    const place = (el) => (tate ? (c.offsetWidth - el.offsetLeft - el.offsetWidth - mt) : (el.offsetTop - mt));
+    const pos = kids.map(place);
+    const size = kids.map((el) => (tate ? el.offsetWidth : el.offsetHeight));
+    const prop = tate ? 'width' : 'height';
+    const put = [];
+    // Which sheet the writing actually reaches. Counting the height of the whole
+    // column instead said "one more sheet" whenever the last line ended a few
+    // millimetres past a fold -- the editor drew three sheets where the printer
+    // made two, because on paper that line still sat inside the second page's own
+    // text area.
+    const step = usable + extra;
+    const pageAt = (top, height, base) => {
+      const first = Math.round(base / step) + 1;
+      const over = (top + height) - (base + usable);
+      return over > 0.5 ? first + Math.ceil(over / usable) : first;
+    };
+    let reached = 1;
     let pageTop = 0;
-    let child = c.firstElementChild;
+    let shift = 0;
     let index = 0;
     let pendingBreak = false;
-    while (child) {
-      const next = child.nextElementSibling;
+    // The run of blocks just above, that are carried over with what follows them.
+    let keepers = [];
+    // How many folds have been asked for in a row and not yet acted on. Two folds
+    // one after the other ask for two cuts, and the sheet between the cuts is
+    // blank. Both are of no height and stand at the same place, so the arithmetic
+    // below read them as the same page and the blank sheet was never counted.
+    let foldsAsked = 0;
+    // How many sheets had been counted when this run of folds began.
+    let foldBase = 0;
+    for (let i = 0; i < kids.length; i += 1) {
+      const child = kids[i];
       if (child.classList.contains('eb-pagebreak')) {
         // The marker stays where the writer put it, at the foot of the page; what
-        // moves to the next sheet is the text after it.
-        if (index > 0) { pendingBreak = true; }
-        index++;
-        child = next;
-        continue;
-      }
-      if (!child.classList.contains('eb-pagespacer')) {
-        // Right to left: how far the block starts from the right edge of the canvas.
-        const top = tate ? (c.offsetWidth - child.offsetLeft - child.offsetWidth - mt) : (child.offsetTop - mt);
-        const height = tate ? child.offsetWidth : child.offsetHeight;
-        while (top >= pageTop + usable) { pageTop += usable + extra; }
-        const boundary = pageTop + usable;
-        // A frame carrying on from the page before always starts a fresh page:
-        // that is what makes it the same frame, continued, rather than a second
-        // box that happens to follow.
-        const forced = pendingBreak || child.classList.contains('eb-cont');
-        pendingBreak = false;
-        // Where the block has to end up, or 0 for where it already is.
-        //  - It begins in the dead band between two sheets, because whatever is
-        //    above it ends exactly at the fold: it drops to the top of the text
-        //    on the page it is already counted as being on. A forced break here
-        //    would have cost a whole blank page, and did.
-        //  - It is forced, and stands somewhere in the middle of a page: it goes
-        //    to the top of the next one.
-        //  - It would be cut in half by the fold: the same.
-        //  - A frame that carries its writing on to the next page stays where the
-        //    writer put it, however much is typed into it: what runs past the
-        //    fold is cut off and carried over, not the whole frame moved. Without
-        //    this, one line typed into a full frame sent the frame to the next
-        //    sheet and left the page it came from empty.
-        const carries = child.hasAttribute('data-frame-height');
-        let wanted = 0;
-        if (top < pageTop - 0.5) { wanted = pageTop; }
-        else if (forced && top > pageTop + 0.5) { wanted = boundary + extra; }
-        else if (!forced && !carries && height <= usable && top < boundary && top + height > boundary + 0.5) { wanted = boundary + extra; }
-        if (wanted) {
-          const spacer = makeSpacer(wanted - top, tate);
-          c.insertBefore(spacer, child);
-          // Putting an element between two blocks stops their margins collapsing, so
-          // the block lands a little lower than the arithmetic says. Measure where it
-          // actually went and take the difference back out of the spacer.
-          const landed = tate ? (c.offsetWidth - child.offsetLeft - child.offsetWidth - mt) : (child.offsetTop - mt);
-          const drift = landed - wanted;
-          if (Math.abs(drift) > 0.5) {
-            const prop = tate ? 'width' : 'height';
-            spacer.style[prop] = Math.max(0, parseFloat(spacer.style[prop]) - drift) + 'px';
-          }
-          if (wanted > pageTop) { pageTop = wanted; }
-        } else {
-          while (height > usable && top + height > pageTop + usable) {
-            pageTop += usable + extra;
-          }
+        // moves to the next sheet is the text after it. The sheet it asks for
+        // exists whether or not anything is written on it yet -- a blank page put
+        // in on purpose is a page.
+        if (index > 0) {
+          pendingBreak = true;
+          keepers = [];
+          // The sheets a run of folds asks for are counted from what has been
+          // counted already, not from where the marker is drawn. The markers
+          // have a height of their own on screen -- about 50px each -- and a run
+          // of them stands past the foot of the page the writing ended on. Read
+          // from the marker's own place, the second fold of a run counted the
+          // sheet it had been pushed on to AND the sheets the run was asking
+          // for, and the count jumped 3, 5, 6, 7 instead of 3, 4, 5, 6.
+          // Measured: two pages of writing and four folds after them drew 7
+          // sheets and printed 6. A fold between two paragraphs never showed it,
+          // because a single marker does not reach the foot on its own.
+          if (!foldsAsked) { foldBase = reached; }
+          foldsAsked += 1;
+          reached = Math.max(reached, foldBase + foldsAsked);
         }
         index++;
+        continue;
       }
-      child = next;
+      const top = pos[i] + shift;
+      const height = size[i];
+      while (top >= pageTop + usable) { pageTop += usable + extra; }
+      reached = Math.max(reached, pageAt(top, height, pageTop));
+      const boundary = pageTop + usable;
+      // A frame carrying on from the page before always starts a fresh page:
+      // that is what makes it the same frame, continued, rather than a second
+      // box that happens to follow.
+      // A page the writer asked for always begins a sheet of its own -- the one
+      // after whatever came before it. Standing exactly at the top of a page that
+      // something else had already made (a fold, say), it would otherwise simply
+      // fill that page, and a page asked for below the last one did not appear at
+      // all: measured on the owner's own document, 6 sheets stayed 6.
+      const blankPage = child.classList.contains('eb-blankpage');
+      // Whether a fold stands immediately before this block. It is what tells the
+      // two page-asking cases apart, and it has to be kept because pendingBreak
+      // is cleared on the next line.
+      const afterFold = pendingBreak;
+      const forced = pendingBreak || child.classList.contains('eb-cont') || blankPage;
+      pendingBreak = false;
+      // The run of folds ends here, and this block goes past every sheet they
+      // asked for -- one for the cut, and one more for each blank sheet between
+      // two cuts.
+      const blanks = Math.max(0, foldsAsked - 1);
+      foldsAsked = 0;
+      // Where the block has to end up, or 0 for where it already is.
+      //  - It begins in the dead band between two sheets, because whatever is
+      //    above it ends exactly at the fold: it drops to the top of the text
+      //    on the page it is already counted as being on. A forced break here
+      //    would have cost a whole blank page, and did.
+      //  - It is forced, and stands somewhere in the middle of a page: it goes
+      //    to the top of the next one.
+      //  - It would be cut in half by the fold: the same.
+      //  - A frame that carries its writing on to the next page stays where the
+      //    writer put it, however much is typed into it: what runs past the
+      //    fold is cut off and carried over, not the whole frame moved. Without
+      //    this, one line typed into a full frame sent the frame to the next
+      //    sheet and left the page it came from empty.
+      const carries = child.hasAttribute('data-frame-height');
+      let wanted = 0;
+      let branch = '';
+      // A block that has drifted above the top of the page it is counted as being
+      // on is dropped back on to it. A page the writer ASKED for is not drifting:
+      // it is asking for a sheet, and dropping it on to a sheet that already
+      // exists is how the asking gets lost. Measured (2026-09-08, foldlog):
+      // with one, two or three folds at the end of the document, the marks stand
+      // in the dead band between two sheets and carry the blank page up with
+      // them -- top 2156 / 2206 / 2255 against a pageTop of 2278 -- so this
+      // branch fired and the page went to 2278, the head of a sheet the folds
+      // had already made. The sheet count never moved. With four marks the pile
+      // finally cleared 2278 and the right branch ran, which is why only the
+      // four-mark case ever worked.
+      // A block that has drifted above the top of the page it is counted as being
+      // on is dropped back on to it -- that page is where it belongs.
+      //
+      // Not a page the writer asked for that stands behind a fold. The fold has
+      // already asked for that page, so putting the asked-for page on it loses
+      // one of the two. The marks have a height of their own, and a run of them
+      // stands in the dead band between two sheets carrying the blank page up
+      // with it, so this branch fired and the page landed on the sheet the fold
+      // had made. Measured 2026-09-08: one, two and three marks gave top
+      // 2156 / 2206 / 2255 against a pageTop of 2278, and the sheet count never
+      // moved; four marks cleared 2278 and worked, which is why that one case
+      // had always been the only right one.
+      //
+      // The test is the FOLD, not the blank page. Told only "never send a blank
+      // page back", "add a page above" broke: there is no fold there, top is 945
+      // against a pageTop of 1139, and 1139 is exactly the sheet the page should
+      // take -- sent on to the next one it added two sheets instead of one.
+      // Measured twice by PS and once here before the difference was found.
+      if (!(blankPage && afterFold) && top < pageTop - 0.5) { wanted = pageTop; branch = '1 上へ戻す'; }
+      else if (forced && (top > pageTop + 0.5 || (blankPage && index > 0))) { wanted = boundary + extra + blanks * step; branch = '2 次の紙へ'; }
+      else if (!forced && !carries && height <= usable && top < boundary && top + height > boundary + 0.5) { wanted = boundary + extra; branch = '3 折り目をまたぐ'; }
+      planNote({ run: runNo, i: i, what: (String(child.className).trim() || child.tagName),
+        top: Math.round(top), pageTop: Math.round(pageTop), boundary: Math.round(boundary),
+        height: Math.round(height), forced: forced, blankPage: blankPage, blanks: blanks,
+        reached: reached, branch: branch || '（動かさない）', wanted: Math.round(wanted) });
+      if (wanted) {
+        // A heading is not left alone at the foot of a page: it is carried over
+        // with the writing it belongs to. The stylesheet says so and the printer
+        // obeys it, so the spacer goes in front of the heading, not in front of
+        // the block that moved.
+        let keeper = null;
+        if (!forced) {
+          for (let k = 0; k < keepers.length; k += 1) {
+            if (keepers[k].top <= pageTop + 0.5) { break; }
+            keeper = keepers[k];
+          }
+        }
+        const moverEl = keeper ? keeper.el : child;
+        const moverTop = keeper ? keeper.top : top;
+        const spacer = makeSpacer(wanted - moverTop, tate);
+        c.insertBefore(spacer, moverEl);
+        put.push({ spacer: spacer, el: moverEl, wanted: wanted });
+        shift += wanted - moverTop;
+        if (wanted > pageTop) { pageTop = wanted; }
+        // The sheets reached were counted from where this block lay BEFORE it was
+        // moved. Usually the block after it counts again from its own place and
+        // the tally catches up -- but the last block in the document has nothing
+        // after it. A page asked for below the last page is exactly that, so the
+        // editor drew six sheets while the printer made seven. Measured: the
+        // blank page was sent to 6834, which is the seventh sheet, and the tally
+        // stayed at six. Counted again where it now lands.
+        reached = Math.max(reached, pageAt(top + (wanted - moverTop), height, pageTop));
+        keepers = [];
+      } else {
+        while (height > usable && top + height > pageTop + usable) {
+          pageTop += usable + extra;
+        }
+        if (keepsWithNext(child)) { keepers.unshift({ el: child, top: top, height: height }); }
+        else { keepers = []; }
+      }
+      index++;
     }
-    // A hair over a page needs another sheet; a hair under must not add one.
-    let need = Math.max(1, Math.ceil(((tate ? c.offsetWidth : c.offsetHeight) + PAGE_GAP - 1) / (pageH + PAGE_GAP)));
+    // And what the spacers really did. Putting an element between two blocks stops
+    // their margins collapsing, so a block lands a little lower than the
+    // arithmetic says; the difference is taken back out of the spacer. All of them
+    // are read at once, and the reading is repeated only while something is still
+    // out of place.
+    for (let pass = 0; pass < 3 && put.length; pass += 1) {
+      const landed = put.map((p) => place(p.el));
+      let moved = 0;
+      let again = false;
+      put.forEach((p, k) => {
+        const drift = (landed[k] + moved) - p.wanted;
+        if (Math.abs(drift) <= 0.5) { return; }
+        const now = parseFloat(p.spacer.style[prop]) || 0;
+        const next = Math.max(0, now - drift);
+        p.spacer.style[prop] = next + 'px';
+        moved -= now - next;
+        again = true;
+      });
+      if (!again) { break; }
+    }
+    // As many sheets as the writing reaches, and no more.
+    let need = Math.max(1, reached);
+    // Kept, because it is not the same number as the one below. This is how many
+    // sheets the WRITING needs; what comes out of this function is how many the
+    // paper needs, which is more when something has been placed low on it. Where
+    // a placed thing is allowed to stand has to be decided from the first, or the
+    // decision is made from a number the thing itself moved: dropped 640mm down,
+    // it made three sheets, was allowed to stay on the third because there were
+    // now three, and left two blank ones behind it. Measured, on paper: 4 pages,
+    // pages 2 and 3 with nothing on them at all.
+    flowPages = need;
     // And the sheets that things standing ON the page need. A placed thing is out
     // of the flow, so it adds nothing to the height of the writing -- a frame that
     // carried its writing on to a second page was drawn on the desk below the last
@@ -4664,7 +5546,12 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   // Not p.eb-textbox: a text frame set to a heading is an h1, and is still the
   // same frame in the same place.
-  const CHAIN_SEL = '.eb-textbox, div.eb-frame';
+  // What can be cut at the foot of its page and carried on to the next. A shape
+  // holds writing like any other box, and writing grows: given more than a page
+  // of it, a shape that cannot be carried on goes on growing down the desk,
+  // through the fold and off the paper -- measured at 7,380px across 7 pages
+  // from 3,000 characters, and at 29,663px across 34 by hand.
+  const CHAIN_SEL = '.eb-textbox, div.eb-frame, div.eb-shape';
   function isCont(el) {
     return !!(el && el.nodeType === 1 && el.classList && el.classList.contains('eb-cont'));
   }
@@ -4679,6 +5566,24 @@ ${insideObjects('.eb-paper.boxed')} {
     // and it is carried on into the next one by a frame of its own, hung off an
     // anchor of its own at the same place in the text.
     return !objectFree(el) || !!(el.parentNode && el.parentNode.nodeName === 'DIV');
+  }
+  /**
+   * Which kind of thing this is, for the purpose of carrying writing on. A frame
+   * is carried on by a frame, a shape by a shape, a text box by a text box. They
+   * never carry one another: measured on the owner's own document, a shape placed
+   * by hand had its peg moved -- by reanchor, which puts the peg on whatever the
+   * thing is drawn over -- to a spot between two continuation frames, and chainOf
+   * then took the frame after it for its own continuation. joinChain moved 522
+   * characters of the writing into the shape, and splitChain grew a second shape
+   * to hold what would not fit. The page breaks that used to sit between them had
+   * been hiding it: they broke the walk.
+   */
+  function chainKind(el) {
+    if (!el || !el.matches) { return ''; }
+    if (el.matches('div.eb-shape')) { return 'shape'; }
+    if (el.matches('div.eb-frame')) { return 'frame'; }
+    if (el.matches('.eb-textbox')) { return 'textbox'; }
+    return '';
   }
   /** What stands in the column: the anchor a placed frame hangs off, or the frame. */
   function chainHost(el) {
@@ -4696,7 +5601,7 @@ ${insideObjects('.eb-paper.boxed')} {
     while (n) {
       if (n.classList && n.classList.contains('eb-pagespacer')) { n = n.nextElementSibling; continue; }
       const frame = hungOn(n);
-      if (!isCont(frame)) { break; }
+      if (!isCont(frame) || chainKind(frame) !== chainKind(lead)) { break; }
       out.push(frame);
       n = n.nextElementSibling;
     }
@@ -4710,6 +5615,7 @@ ${insideObjects('.eb-paper.boxed')} {
       while (back && back.classList && back.classList.contains('eb-pagespacer')) { back = back.previousElementSibling; }
       const frame = hungOn(back);
       if (!frame || !frame.matches || !frame.matches(CHAIN_SEL)) { break; }
+      if (chainKind(frame) !== chainKind(n)) { break; }
       n = frame;
     }
     return n;
@@ -4731,22 +5637,33 @@ ${insideObjects('.eb-paper.boxed')} {
   function pageGeometry() {
     const c = canvas();
     if (!c) { return null; }
-    // 縦書き runs the writing down the page and the pages right to left. The same
-    // arithmetic applies along the other axis, but none of the measuring below has
-    // been turned round yet, so a frame in vertical writing is left as it was.
+    // 縦書き runs the writing down the page and the pages right to left, so the
+    // axis everything below is measured along is the horizontal one, and the near
+    // edge of a page is its right edge. The arithmetic is the same; only what is
+    // measured changes -- exactly as in paginate, which has read it this way all
+    // along. This used to answer null in vertical writing, and answering null is
+    // what switched the whole chain off: a frame taller than the page did not
+    // carry on, and nothing said so, because the screen and the paper agreed on
+    // being wrong together.
+    // 2026-09-08 に縦書きでも答えるようにしたが、まとめ枠の続きが画面と紙で
+    // 合わなかったので戻した。printmatch「縦書きの長いまとめ枠」3ページ目 左104.9mm。
+    // 合うようにしてから、また答えさせる。
     if (c.classList && c.classList.contains('eb-tategaki')) { return null; }
+    const tate = false;
     const wrap = c.parentNode;
     const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
-    if (!sheet || !sheet.offsetHeight || !c.offsetHeight) { return null; }
+    const deep = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    if (!deep || !(tate ? c.offsetWidth : c.offsetHeight)) { return null; }
     const style = window.getComputedStyle(c);
-    const mt = parseFloat(style.paddingTop) || 0;
-    const mb = parseFloat(style.paddingBottom) || 0;
-    const usable = sheet.offsetHeight - mt - mb;
+    const mt = parseFloat(tate ? style.paddingRight : style.paddingTop) || 0;
+    const mb = parseFloat(tate ? style.paddingLeft : style.paddingBottom) || 0;
+    const usable = deep - mt - mb;
     if (usable < 40) { return null; }
     // How many sheets there are: a thing cannot be sent past the last one.
     const step = usable + mt + mb + PAGE_GAP;
-    const pages = Math.max(1, Math.round((c.offsetHeight + PAGE_GAP) / step));
-    return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP, pages: pages };
+    const along = tate ? c.offsetWidth : c.offsetHeight;
+    const pages = Math.max(1, Math.round((along + PAGE_GAP) / step));
+    return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP, pages: pages, tate: tate };
   }
   /**
    * How far down the paper something is drawn, in the units offsetTop is in. A
@@ -4757,13 +5674,21 @@ ${insideObjects('.eb-paper.boxed')} {
   function topOnPaper(el) {
     const c = canvas();
     if (!c || !el || !el.getBoundingClientRect) { return 0; }
+    const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
     const box = c.getBoundingClientRect();
-    const scale = box.height / (c.offsetHeight || 1) || 1;
-    return (el.getBoundingClientRect().top - box.top) / scale;
+    const scale = scaleOf(c, box, tate);
+    return startIn(box, el.getBoundingClientRect(), tate) / scale;
   }
   /** Where a frame stands, measured from the top of the writing on its page. */
   function frameTop(el, geom) {
-    return (objectFree(el) ? topOnPaper(el) : el.offsetTop) - geom.mt;
+    if (objectFree(el)) { return topOnPaper(el) - geom.mt; }
+    // In the column, offsetTop is the distance down; in 縦書き the distance in
+    // from the right edge is what the pages are counted along, and offsetLeft
+    // measures from the left, so it is taken from the far side of the canvas.
+    if (!geom.tate) { return el.offsetTop - geom.mt; }
+    const c = canvas();
+    const wide = c ? c.offsetWidth : 0;
+    return (wide - el.offsetLeft - el.offsetWidth) - geom.mt;
   }
   /**
    * A thing placed by hand stands on one sheet, and is drawn where it will print.
@@ -4781,14 +5706,83 @@ ${insideObjects('.eb-paper.boxed')} {
    * there of its own accord as soon as the page has room for it again. Without
    * that, every turn of the layout would push it a little further down the paper.
    */
-  function settleFree(el, geom) {
+  /**
+   * Where the peg stood when the writer's own offset was written down. Kept
+   * beside the mark, so the mark can still be read after the page has been laid
+   * out again and the peg has moved underneath it.
+   */
+  function pegOf(el, geom) {
+    // The paper's own column, with no folds in it -- the same arithmetic
+    // settleFree does below. Measured on the screen instead, the answer is out
+    // by a whole fold's worth (167px, 44mm) whenever the peg crosses one, and
+    // the mark is then written back against the wrong page.
+    const step = geom.usable + geom.extra;
+    const anchorTop = topOnPaper(el.parentNode) - geom.mt;
+    const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
+    return anchorTop - ka * geom.extra;
+  }
+  function markPeg(el, geom) {
+    el.setAttribute('data-free-peg', String(Math.round(pegOf(el, geom))));
+  }
+  /**
+   * The last sheet that has something on it, not counting the thing being placed.
+   *
+   * The owner, 2026-09-08: 「中身が去ったページは自動的に削除されてよい。空のページは
+   * 残らない。」 A page is a place where something is; a run of blank sheets between
+   * the writing and a picture is not pages, it is a gap, and no word processor
+   * makes one. So a thing may go at most one sheet past the last sheet that holds
+   * anything -- far enough to start a new page with itself on it, never far enough
+   * to leave an empty one behind.
+   */
+  function filledLast(el, geom) {
+    const c = canvas();
+    const flow = Math.max(0, (flowPages || geom.pages || 1) - 1);
+    if (!c) { return flow; }
+    const step = geom.usable + geom.extra;
+    // Walked in the order they stand in the document, with a frontier that moves
+    // out one sheet at a time. Asking each thing where the OTHER things happen to
+    // be drawn deadlocks: two things both sitting on sheet six each see the other
+    // on six, each concludes seven is allowed, and neither ever comes back. The
+    // frontier begins at the last sheet of writing and only ever advances by the
+    // things that have already earned their place on it.
+    let front = flow;
+    const kids = c.querySelectorAll('.eb-anchor > *');
+    for (let i = 0; i < kids.length; i += 1) {
+      const o = kids[i];
+      if (o === el) { return front; }
+      if (!o.getBoundingClientRect) { continue; }
+      const r = o.getBoundingClientRect();
+      if (!r.width && !r.height) { continue; }
+      const drawn = topOnPaper(o) - geom.mt;
+      if (drawn < -0.5) { continue; }
+      const sheet = Math.floor((drawn + 0.5) / step);
+      front = Math.max(front, Math.min(sheet, front + 1));
+    }
+    return front;
+  }
+  function settleFree(el, geom, note) {
     if (!el || !geom || !objectFree(el) || !el.parentNode) { return false; }
     const c = canvas();
     const before = (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '');
     if (el.hasAttribute('data-free-top')) {
       const own = el.getAttribute('data-free-top');
-      if (own) { el.style.top = own; } else { el.style.removeProperty('top'); }
+      if (own) {
+        // The mark is the writer's own offset, and it is measured from the peg.
+        // The peg does not stand still: laying the page out again moves it --
+        // taking a thing off page one lets the writing close up, and the peg
+        // rises with it -- and nothing was putting that back. reanchor corrected
+        // the mark when IT moved the peg, but the peg also moves on its own.
+        // Written back as it stood, the thing landed somewhere else on every
+        // turn of the settling and stopped wherever it happened to fit on the
+        // paper. Measured: a picture dropped at 339.7mm came to rest at 170.9mm,
+        // on the page it started on, after six turns. So the peg's own travel is
+        // taken off the mark before the mark is used.
+        const pegWas = parseFloat(el.getAttribute('data-free-peg'));
+        const drift = isNaN(pegWas) ? 0 : (pegWas - pegOf(el, geom));
+        el.style.top = Math.abs(drift) > 0.5 ? round1((lengthPx(own) + drift) * MM) + 'mm' : own;
+      } else { el.style.removeProperty('top'); }
       el.removeAttribute('data-free-top');
+      el.removeAttribute('data-free-peg');
     }
     const step = geom.usable + geom.extra;
     // The anchor is a peg of no height standing in the writing: where it is on
@@ -4799,11 +5793,42 @@ ${insideObjects('.eb-paper.boxed')} {
     let top = paperTop + lengthPx(el.style.top);
     // There are only so many sheets: a thing worked out to be on a page past the
     // last one would be drawn on the desk beside the paper. It belongs on the
-    // last sheet there is.
-    const last = Math.max(0, (geom.pages || 1) - 1);
+    // last sheet there is -- and the last sheet there is, for this purpose, is one
+    // past the last sheet that holds anything. Counted from geom.pages it was
+    // counted from a number this very thing had just made bigger.
+    const last = filledLast(el, geom) + 1;
     const carrier = chainable(el);
     let page = Math.max(0, Math.floor((top + 0.5) / geom.usable));
-    if (!carrier) { page = Math.min(last, page); }
+    {
+      // Everything, a carrier included. The pass carriers used to get here was
+      // meant for a frame that opens the next page by carrying its own writing
+      // on to it -- but a shape is a carrier by the same test, and with the pass
+      // it walked straight past the rule and stood on sheet four of a one-sheet
+      // document. Measured: last 1, page 3, carrier true, and nothing happened.
+      // Carrying on to the NEXT page is not the same as starting on a page three
+      // sheets away, and no chain begins with two blank sheets.
+      const held = Math.min(last, page);
+      if (held !== page) {
+        // Told it may not stand there, the thing has to be BROUGHT there. Only
+        // the page number was being held back before, while the offset stayed
+        // where it was: everything after this measured a thing on sheet four
+        // that had been told it was on sheet two, and the branch that brings a
+        // thing back on to the paper reads the sheet it is DRAWN on -- so it
+        // tidied it to the foot of sheet four and left sheets two and three
+        // blank. Measured, with the fix in and deployed: 4 sheets, pages 2 and
+        // 3 with nothing on them, screen and paper agreeing on it.
+        //
+        // It keeps its place ON the page -- the same distance down -- and only
+        // changes which sheet that is. If it no longer fits there, the rules
+        // below bring it up, as they do for anything else.
+        const own = el.style.top || '';
+        const within = Math.max(0, top - page * geom.usable);
+        page = held;
+        top = page * geom.usable + within;
+        el.style.top = round1((top - paperTop) * MM) + 'mm';
+        if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
+      }
+    }
     const height = el.offsetHeight;
     // It fits on a sheet but is drawn across the edge of one: it goes on to the
     // next page whole. Taller than the writing area, no sheet can hold it and
@@ -4814,11 +5839,18 @@ ${insideObjects('.eb-paper.boxed')} {
     // Above the top edge of its own sheet -- which the writing shrinking under it
     // can do -- it is brought back on to the paper.
     const head = page * geom.usable - geom.mt;
-    if (top < head - 0.5) {
+    // Only a thing that FITS is brought back on to its page. One taller than the
+    // writing area cannot be made to fit by moving it, and pinning it to the head
+    // of the page does more than fail: settleFree keeps the writer's own offset in
+    // data-free-top and puts it back at the start of every settle, so the pinning
+    // undoes every drag. Measured: a placed paragraph 291.7mm tall could be moved
+    // sideways but not up or down at all -- the same paragraph cut to 80mm moved
+    // the full 120px asked of it. Left alone, it stays where it was put.
+    if (height <= geom.usable && top < head - 0.5) {
       const own = el.style.top || '';
       top = head;
       el.style.top = round1((top - paperTop) * MM) + 'mm';
-      if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); }
+      if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
     }
     // The foot of the WRITING, not the foot of the paper. A printer cuts a page
     // at the bottom of its text area and prints whatever hangs below it on the
@@ -4835,15 +5867,35 @@ ${insideObjects('.eb-paper.boxed')} {
     // Nowhere to send it: there is no page after the last one, and a thing put
     // there would be drawn on the desk beside the paper rather than on a sheet.
     const somewhere = carrier || page + 1 <= last;
+    if (note) { note.push({ where: 'settleFree', top: Math.round(top), paperTop: Math.round(paperTop),
+      anchorTop: Math.round(anchorTop), ka: ka, page: page, last: last, usable: Math.round(geom.usable),
+      height: Math.round(height), foot: Math.round(foot), head: Math.round(head), lead: Math.round(lead),
+      overPaper: overPaper, carrier: carrier, somewhere: somewhere, styleTop: el.style.top }); }
     const move = somewhere && height && (height <= geom.usable
       ? overPaper
       : (chainable(el) && room < 2 * lineOf(el)));
     if (move) {
       const own = el.style.top || '';
-      page += 1;
-      top = page * geom.usable;
+      // Two places it could go, and the writer's hand decides which. The head of
+      // the next sheet, or the lowest place on this one where the whole of it
+      // still fits. It used to be always the next sheet -- so a picture dragged
+      // UP the page and let go where it did not quite fit jumped DOWN to the
+      // sheet below: measured, let go at 228.2mm and it landed at 332.5mm, a
+      // hundred millimetres the wrong way. The hand was moving up. What the
+      // writer meant is the place they let go of it, so of the two places it may
+      // legally stand, it goes to whichever is nearer to that.
+      const ahead = (page + 1) * geom.usable;
+      const lifted = foot - lead - height;
+      const canLift = height <= geom.usable && lifted >= head - 0.5;
+      if (canLift && Math.abs(lifted - top) < Math.abs(ahead - top)) {
+        top = lifted;
+      } else {
+        page += 1;
+        top = ahead;
+      }
       el.style.top = round1((top - paperTop) * MM) + 'mm';
       el.setAttribute('data-free-top', own);
+      markPeg(el, geom);
     } else if (height <= geom.usable && (overPaper || top + 0.5 > foot)) {
       // There is no page after this one to send it to, so it is brought up until
       // it is inside the page again. Left where it was, the printer cuts it at
@@ -4871,9 +5923,11 @@ ${insideObjects('.eb-paper.boxed')} {
         const own = el.style.top || '';
         el.style.top = round1((lengthPx(el.style.top) - lift) * MM) + 'mm';
         top -= lift;
-        if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); }
+        if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
       }
     }
+    if (note) { note.push({ where: 'settleFree の後', move: move, page: page, styleTop: el.style.top,
+      freeTop: el.getAttribute('data-free-top') }); }
     foldShift(el, (page - ka) * geom.extra);
     return (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '') !== before;
   }
@@ -4954,6 +6008,29 @@ ${insideObjects('.eb-paper.boxed')} {
       if (!up || up.parentNode !== home || up === el || up.contains(el)) { return false; }
       over = up;
     }
+    // A peg never stands INSIDE a chain. A frame carried on to the next page is
+    // one frame in two pieces, and a peg driven between the pieces breaks it in
+    // two ways at once, both of them measured on the owner's own document:
+    //
+    //  - the walk that finds what carries what took the piece after the peg for
+    //    the peg's own continuation, and 522 characters of the writing were moved
+    //    into a shape (2026-09-08, found by PS);
+    //  - and the printer counts the pages differently from the editor. The same
+    //    file, printed bare in Chrome with only the peg moved:
+    //        peg between the pieces  1219, 0, 522   ← a blank second page
+    //        peg before them         1219, 522, 0
+    //        peg after them          1219, 522, 0
+    //    The editor draws the second. The printer, with the peg in the middle,
+    //    prints the first -- and that was the last disagreement in printmatch.
+    //
+    // So a peg offered a continuation is driven into the frame that continuation
+    // belongs to. The thing itself does not move: placeFreeAt below keeps where
+    // it is drawn and works the offset out again from the new peg.
+    if (isCont(over)) {
+      const lead = chainLead(over);
+      const host = lead ? chainHost(lead) : null;
+      if (host && host.parentNode === home && host !== anchor) { over = host; }
+    }
     let after = anchor.nextElementSibling;
     while (after && after.classList && after.classList.contains('eb-pagespacer')) { after = after.nextElementSibling; }
     if (after === over) { return false; }
@@ -4970,13 +6047,11 @@ ${insideObjects('.eb-paper.boxed')} {
     // thing's own offset just moved. Left as it was, the memory pointed at a
     // place a page further down every time the peg changed, and a thing pushed
     // off the foot of the paper walked off the end of the document.
-    if (el.hasAttribute('data-free-top')) {
-      const mark = el.getAttribute('data-free-top');
-      if (mark) {
-        el.setAttribute('data-free-top',
-          round1((lengthPx(mark) + (lengthPx(el.style.top) - from)) * MM) + 'mm');
-      }
-    }
+    // The mark is not patched up here any more. It is kept together with the
+    // place the peg stood at when it was written (data-free-peg), and settleFree
+    // takes the peg's travel off it as it reads it -- which covers this move and
+    // the ones the laying out makes on its own, which this could never see.
+    void from;
     return true;
   }
   /**
@@ -5022,6 +6097,13 @@ ${insideObjects('.eb-paper.boxed')} {
     const c = canvas();
     const geom = c ? pageGeometry() : null;
     if (!geom) { return false; }
+    // Placing a thing by hand has NOT been turned round yet: settleFree works in
+    // left and top, which are the same two words in both writing modes but not
+    // the same two directions. pageGeometry used to answer null in 縦書き and that
+    // is what kept this from running there; now that it answers, the refusal has
+    // to be said here instead of being a side effect somewhere else. A thing
+    // placed in vertical writing stays exactly where the writer put it.
+    if (geom.tate) { return false; }
     let moved = false;
     Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
       if (reanchor(el, geom)) { moved = true; }
@@ -5051,14 +6133,20 @@ ${insideObjects('.eb-paper.boxed')} {
   /** The deepest the writing inside a frame may reach, from the frame's own top. */
   function fillLimit(frame, room) {
     const st = window.getComputedStyle(frame);
-    return room - (parseFloat(st.paddingBottom) || 0) - (parseFloat(st.borderBottomWidth) || 0);
+    // The far edge along the axis the writing runs. In 縦書き that is the left
+    // side of the box, not the bottom of it.
+    const tate = isTate(frame);
+    const pad = parseFloat(tate ? st.paddingLeft : st.paddingBottom) || 0;
+    const edge = parseFloat(tate ? st.borderLeftWidth : st.borderBottomWidth) || 0;
+    return room - pad - edge;
   }
   /** Where a block inside a frame stands, from the frame's own top, at 100%. */
   function insideFrame(frame, el) {
+    const tate = isTate(frame);
     const box = frame.getBoundingClientRect();
-    const scale = box.height / (frame.offsetHeight || 1) || 1;
-    const top = (el.getBoundingClientRect().top - box.top) / scale;
-    return { top: top, foot: top + el.offsetHeight };
+    const scale = scaleOf(frame, box, tate);
+    const top = startIn(box, el.getBoundingClientRect(), tate) / scale;
+    return { top: top, foot: top + sizeAlong(el, tate) };
   }
   /** The foot of the last thing written in a frame, from the frame's own top. */
   function writtenBottom(frame) {
@@ -5076,15 +6164,104 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return bottom;
   }
+  /** Whether the frame has an edge or a colour of its own on the paper. */
+  function frameIsDrawn(el) {
+    if (!el || !window.getComputedStyle) { return false; }
+    const st = window.getComputedStyle(el);
+    const edge = (parseFloat(st.borderBottomWidth) || 0) > 0 && st.borderBottomStyle !== 'none';
+    const paint = st.backgroundColor && !/^rgba?\(0, 0, 0, 0\)$|transparent/.test(st.backgroundColor);
+    return !!(edge || paint);
+  }
+  /**
+   * The space a block's own box adds below its last line: the half-leading, and
+   * any padding or border the block itself has. The cut is made on the ink, but
+   * a frame with an edge of its own is judged on the box -- its height is a
+   * minimum, so a block a hair too deep makes the whole frame that much taller
+   * and its border lands on the next page. Measured, not guessed, so a block
+   * with a line height of its own is cut where that line height says.
+   */
+  function boxSlack(frame, el) {
+    if (!frameIsDrawn(frame)) { return 0; }
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    return Math.max(0, el.offsetHeight - rangeBottom(el, r));
+  }
+  /** How far down the frame the writing itself reaches -- ink, not boxes. */
+  function inkBottom(frame) {
+    const r = document.createRange();
+    r.selectNodeContents(frame);
+    return rangeBottom(frame, r);
+  }
   /** How far down an element the lines of a range reach, at 100%. */
+  /**
+   * The shims that make the writing flow round a placed object are not writing.
+   * Each is a float as tall as the object it stands for, put in the paragraph so
+   * the lines break round it -- and a range that reaches past one is handed the
+   * shim's whole rectangle by the browser, along with the rectangles of the
+   * lines. Counting it measures the paragraph as though it reached the foot of
+   * the object, so the paragraph was cut just before the shim and the rest of
+   * the page left blank: 17.5mm of the owner's own page one, and as much as the
+   * object is tall in any document that wraps writing round something.
+   */
+  /**
+   * Which way the writing runs. 縦書き runs it down the page and the pages right
+   * to left, so what is "the foot of the block" is the left edge of it, and what
+   * is "how far down" is how far to the left. Everything that measures a block
+   * along the direction the writing runs asks here first.
+   */
+  function isTate(el) {
+    return !!(el && el.closest && el.closest('.eb-tategaki'));
+  }
+  /** How deep into a box a rectangle reaches, along the writing's own direction. */
+  function depthIn(box, rect, tate) {
+    return tate ? (box.right - rect.left) : (rect.bottom - box.top);
+  }
+  /** Where a rectangle begins, along the same direction. */
+  function startIn(box, rect, tate) {
+    return tate ? (box.right - rect.right) : (rect.top - box.top);
+  }
+  /** A box's own size along that direction, at 100%. */
+  function sizeAlong(el, tate) {
+    return tate ? el.offsetWidth : el.offsetHeight;
+  }
+  /** How much the page is zoomed, measured on the box itself. */
+  function scaleOf(el, box, tate) {
+    return (tate ? box.width / (el.offsetWidth || 1) : box.height / (el.offsetHeight || 1)) || 1;
+  }
+  function shimRects(el) {
+    const shims = el.querySelectorAll ? el.querySelectorAll('.eb-flow') : [];
+    return Array.prototype.map.call(shims, (f) => f.getBoundingClientRect());
+  }
+  function isShimRect(rects, r) {
+    return rects.some((s) => Math.abs(s.top - r.top) < 0.5 && Math.abs(s.bottom - r.bottom) < 0.5
+      && Math.abs(s.left - r.left) < 0.5 && Math.abs(s.right - r.right) < 0.5);
+  }
   function rangeBottom(el, range) {
     const box = el.getBoundingClientRect();
-    const scale = box.height / (el.offsetHeight || 1) || 1;
-    let bottom = 0;
+    const tate = isTate(el);
+    const scale = scaleOf(el, box, tate);
+    const shims = shimRects(el);
+    let deep = 0;
     Array.from(range.getClientRects()).forEach((rect) => {
-      if (rect.height && rect.bottom - box.top > bottom) { bottom = rect.bottom - box.top; }
+      if (!rect.height || !rect.width || isShimRect(shims, rect)) { return; }
+      const d = depthIn(box, rect, tate);
+      if (d > deep) { deep = d; }
     });
-    return bottom / scale;
+    return deep / scale;
+  }
+  /** How far into an element the first line of a range begins, at 100%. */
+  function rangeTop(el, range) {
+    const box = el.getBoundingClientRect();
+    const tate = isTate(el);
+    const scale = scaleOf(el, box, tate);
+    const shims = shimRects(el);
+    let start = null;
+    Array.from(range.getClientRects()).forEach((rect) => {
+      if (!rect.height || !rect.width || isShimRect(shims, rect)) { return; }
+      const y = startIn(box, rect, tate);
+      if (start === null || y < start) { start = y; }
+    });
+    return (start === null ? 0 : start) / scale;
   }
   function lineOf(frame) {
     const st = window.getComputedStyle(frame);
@@ -5132,10 +6309,60 @@ ${insideObjects('.eb-paper.boxed')} {
       if (i > 0 && !sameShape(lead, frame)) { return false; }
       const limit = fillLimit(frame, i === 0 ? roomFor(lead, geom) : fitRoom(geom.usable));
       const bottom = writtenBottom(frame);
-      if (bottom > limit + 1) { return false; }
-      if (i < chain.length - 1 && limit - bottom >= lineOf(frame)) { return false; }
+      // The box of the last block may reach past the foot of the page by the
+      // leading under its last line -- a few pixels that print nothing. What is
+      // measured against the page is the writing, the same thing the cut looks
+      // at; otherwise the frame is called too full, laid out again, and comes
+      // out exactly as it was, for ever.
+      //
+      // A frame that is drawn, though -- one with a border or a colour of its own
+      // -- has no such slack: those few pixels are its own edge, and an edge that
+      // does not fit is printed on the next page while the editor draws it on
+      // this one. For those the box itself must fit.
+      const drawn = frameIsDrawn(frame);
+      if (bottom > limit + 1 && (drawn || inkBottom(frame) > limit + 1)) { return false; }
+      const spare = roomLeft(frame, limit, bottom);
+      if (i < chain.length - 1 && spare >= lineOf(frame) && wouldFitBack(chain[i + 1], spare)) { return false; }
     }
     return true;
+  }
+  /** The room left at the foot of a frame, with the space under its last block
+   *  counted in: that space is space again when something is put after it. */
+  function roomLeft(frame, limit, bottom) {
+    const last = frame.lastElementChild;
+    const under = last && !frame.matches(TEXT_BLOCKS)
+      ? (parseFloat(window.getComputedStyle(last).marginBottom) || 0) : 0;
+    return limit - bottom - under;
+  }
+  /**
+   * Whether the first thing in a carried-on frame would fit back into the room
+   * left at the foot of the frame before it. A paragraph always would -- it is
+   * cut at a line. A table row is not cut at all, so a frame that stops short
+   * because the next row is too tall for what is left is doing the right thing,
+   * and saying otherwise sent the layout round and round for ever.
+   */
+  function wouldFitBack(cont, gap) {
+    // 文字枠 holds lines, not blocks: a line always fits back.
+    if (cont.matches(TEXT_BLOCKS)) { return true; }
+    const first = cont.firstElementChild;
+    if (!first) { return true; }
+    if (first.matches(TEXT_BLOCKS)) {
+      // One line of it, and the space above the paragraph, which is space again
+      // at the top of a page. Answering "a paragraph always fits" for a gap too
+      // small to hold its first line had the frame laid out again and again.
+      const above = parseFloat(window.getComputedStyle(first).marginTop) || 0;
+      // The same allowance the cut makes: a line brought back has a box as well
+      // as ink, and asking for it without the box sent the frame round and round
+      // -- cut one line short, judged one line hungry, cut again.
+      return above + lineOf(first) + boxSlack(cont, first) <= gap + 0.5;
+    }
+    if (first.nodeName === 'TABLE') {
+      const head = first.querySelector(':scope > thead');
+      const row = tableRows(first).filter((r) => !head || !head.contains(r))[0];
+      if (!row) { return false; }
+      return row.getBoundingClientRect().height <= gap + 0.5;
+    }
+    return first.getBoundingClientRect().height <= gap + 0.5;
   }
   /**
    * Whether a carried-on frame still looks like the frame it carries on from.
@@ -5324,9 +6551,21 @@ ${insideObjects('.eb-paper.boxed')} {
         const last = lead.lastElementChild;
         // A block that was cut in the middle is put back as the one block the
         // writer wrote, not left as two paragraphs.
+        // A block cut across three frames or more is still cut when the second
+        // piece has been put back: the mark stays until the piece that carries
+        // nothing on is reached, or the third piece is left standing as a block
+        // of its own -- which is how a table grew a repeated head at every pass.
+        const goesOn = node.nodeType === 1 && node.getAttribute && node.getAttribute('data-split') === 'on';
+        if (node.nodeType === 1 && last && last.getAttribute && last.getAttribute('data-split') === 'on'
+          && last.nodeName === node.nodeName && node.nodeName === 'TABLE') {
+          mergeTableInto(last, node);
+          if (goesOn) { last.setAttribute('data-split', 'on'); }
+          frame.removeChild(node);
+          continue;
+        }
         if (node.nodeType === 1 && last && last.getAttribute && last.getAttribute('data-split') === 'on'
           && last.nodeName === node.nodeName) {
-          last.removeAttribute('data-split');
+          if (!goesOn) { last.removeAttribute('data-split'); }
           const stray = last.lastElementChild;
           if (stray && stray.nodeName === 'BR' && last.childNodes.length === 1) { stray.remove(); }
           while (node.firstChild) { last.appendChild(node.firstChild); }
@@ -5387,12 +6626,273 @@ ${insideObjects('.eb-paper.boxed')} {
     return lo;
   }
   /**
+   * A link or a span with nothing left inside it: what a cut at the very edge of
+   * one leaves behind. It draws nothing, but a cut at the same place on the next
+   * pass leaves another beside it, so a document that is opened and saved over
+   * and over grows a row of them. They go as soon as they are made.
+   */
+  const SHELL_TAGS = /^(A|SPAN|EM|STRONG|B|I|U|S|SMALL|SUB|SUP|CODE|MARK|ABBR|CITE|Q|FONT|BDI|BDO|VAR|SAMP|KBD|INS|DEL)$/;
+  function emptyShell(node, keep) {
+    if (!node || node.nodeType !== 1 || !SHELL_TAGS.test(node.nodeName)) { return false; }
+    if (String(node.textContent || '').length) { return false; }
+    if (node.querySelector('img, br, svg, table, figure, input, object, video, audio, iframe')) { return false; }
+    return !(keep && node.contains(keep));
+  }
+  /** Where the caret is, if the writing is being written in at all. Asking the
+   *  browser for the selection makes it settle everything it has been told to
+   *  change, which is dear in a long document -- so it is asked only when the
+   *  page being cut is the one the writer is in, and only once for each cut. */
+  function caretNode() {
+    const c = canvas();
+    if (!c || !c.contains(document.activeElement) && document.activeElement !== c) { return null; }
+    const r = getRange();
+    return r ? r.startContainer : null;
+  }
+  /** Those shells, taken off the cut edge of a block -- its start or its end. */
+  function trimShells(root, atStart, keep) {
+    for (let go = 0; go < 20; go += 1) {
+      let node = root;
+      while (node && node.nodeType === 1 && (atStart ? node.firstChild : node.lastChild)) {
+        node = atStart ? node.firstChild : node.lastChild;
+      }
+      let dead = null;
+      for (let up = node && node.nodeType === 1 ? node : (node && node.parentNode); up && up !== root; up = up.parentNode) {
+        if (!emptyShell(up, keep)) { break; }
+        dead = up;
+      }
+      if (!dead) { return; }
+      dead.remove();
+    }
+  }
+  /** An empty copy of a table to carry the rest of it: same tag, same class, and
+   *  the column widths and the head row repeated, as the printer repeats them. */
+  function tableShell(table, room) {
+    const rest = table.cloneNode(false);
+    rest.removeAttribute('id');
+    const cols = table.querySelector(':scope > colgroup');
+    if (cols) { const c = cols.cloneNode(true); c.setAttribute('data-eb-again', 'on'); rest.appendChild(c); }
+    const head = table.querySelector(':scope > thead');
+    // A head worth repeating is a line or two saying what the columns are. The
+    // banner across the top of a Wikipedia box of links is not that: repeating it
+    // on every page cost a third of each page and doubled the document.
+    const deep = head ? sizeAlong(head, isTate(table)) : 0;
+    if (head && deep <= Math.max(24, (room || 0) * 0.15)) {
+      const h = head.cloneNode(true);
+      h.setAttribute('data-eb-again', 'on');
+      rest.appendChild(h);
+    }
+    return rest;
+  }
+  /** Rows moved into a carrying table, each staying in a section of its own kind. */
+  function carryRows(rest, rows, table) {
+    let from = null;
+    let section = null;
+    rows.forEach((row) => {
+      const held = row.parentNode;
+      if (held !== from || !section) {
+        from = held;
+        if (held === table) { section = rest; } else { section = held.cloneNode(false); rest.appendChild(section); }
+      }
+      section.appendChild(row);
+    });
+    Array.from(table.querySelectorAll(':scope > tbody, :scope > tfoot')).forEach((sec) => {
+      if (!sec.children.length) { sec.remove(); }
+    });
+  }
+  /** Cut a list between two of its items, the second half a list of the same kind
+   *  going on from the number the first half reached. */
+  function splitListAt(list, room) {
+    const items = Array.from(list.children).filter((k) => k.nodeName === 'LI');
+    if (items.length < 2) { return null; }
+    const top = list.getBoundingClientRect().top;
+    let first = -1;
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i].getBoundingClientRect().bottom - top > room + 0.5) { first = i; break; }
+    }
+    if (first <= 0) { return null; }
+    const rest = list.cloneNode(false);
+    rest.removeAttribute('id');
+    if (list.nodeName === 'OL') {
+      rest.setAttribute('start', String((parseInt(list.getAttribute('start'), 10) || 1) + first));
+    }
+    items.slice(first).forEach((li) => rest.appendChild(li));
+    list.setAttribute('data-split', 'on');
+    return rest;
+  }
+
+  /**
+   * What has to be carried over from inside a cell, when the row holding it is
+   * taller than the page: the blocks that do not fit, with the first of them cut
+   * if it can be -- a table between its rows, a paragraph at a line. Returns the
+   * nodes to carry, or null if nothing can be.
+   */
+  function cutInsideCell(cell, room) {
+    const kids = Array.from(cell.children);
+    // Nothing but writing in it: cut at a line, as a paragraph is cut.
+    if (!kids.some((k) => isBlock(k))) {
+      if (room < 4) { return null; }
+      const cut = cutOffsetIn(cell, room);
+      if (cut <= 0) { return null; }
+      const tail = splitBlockAt(cell, cut);
+      return tail ? Array.from(tail.childNodes) : null;
+    }
+    if (!kids.length) { return null; }
+    const tate = isTate(cell);
+    const box = cell.getBoundingClientRect();
+    let first = -1;
+    for (let i = 0; i < kids.length; i += 1) {
+      if (depthIn(box, kids[i].getBoundingClientRect(), tate) > room + 0.5) { first = i; break; }
+    }
+    if (first < 0) { return null; }
+    if (first > 0) { return kids.slice(first); }
+    const el = kids[0];
+    const left = room - startIn(box, el.getBoundingClientRect(), tate);
+    let rest = null;
+    if (el.nodeName === 'TABLE') { rest = splitTableAt(el, left); }
+    else if (el.nodeName === 'UL' || el.nodeName === 'OL') { rest = splitListAt(el, left); }
+    else if (el.matches(TEXT_BLOCKS)) {
+      const cut = cutOffsetIn(el, left);
+      if (cut > 0) { rest = splitBlockAt(el, cut); }
+    }
+    if (!rest) { return null; }
+    return [rest].concat(kids.slice(1));
+  }
+
+  /**
+   * Cut a table between two of its rows. A row is never split -- no browser splits
+   * one when it prints -- so a table taller than the page is carried on row by
+   * row, and the head row, which the printer repeats at the top of every page, is
+   * repeated here too. Where a single row is itself taller than the page and holds
+   * nothing but another table -- the shape of a Wikipedia box -- that inner table
+   * is cut instead, and the outer row carries what is left of it.
+   * Without this a table taller than the page stayed whole in one frame: the
+   * editor drew eight sheets where the printer made thirteen pages.
+   * @param {HTMLElement} table
+   * @param {number} room  How much of the table, from its top, still fits.
+   * @returns {HTMLElement|null} The table carrying the rest, or null if not one
+   *   whole row fits and there is nothing to be gained by cutting.
+   */
+  function splitTableAt(table, room) {
+    const rows = tableRows(table);
+    const head = table.querySelector(':scope > thead');
+    const body = rows.filter((r) => !head || !head.contains(r));
+    if (!body.length) { return null; }
+    // In 縦書き the writing runs down the page and the rows of a table stack
+    // right to left, so "how far down" is "how far in from the right edge". The
+    // arithmetic is the same; only the axis it is read along changes. Left the
+    // other way round, a table in vertical writing was never cut at all: it ran
+    // straight off the paper, on the screen and on the page alike -- which is
+    // why a check that only compares the two never saw it.
+    const tate = isTate(table);
+    const box = table.getBoundingClientRect();
+    let first = -1;
+    for (let i = 0; i < body.length; i += 1) {
+      if (depthIn(box, body[i].getBoundingClientRect(), tate) > room + 0.5) { first = i; break; }
+    }
+    if (first < 0) { return null; }                 // all of it fits: nothing to do
+    if (first > 0) {
+      const rest = tableShell(table, room);
+      carryRows(rest, body.slice(first), table);
+      table.setAttribute('data-split', 'on');
+      return rest;
+    }
+    // Not even the first row fits. A row of one cell can be cut deeper -- that is
+    // the shape of a box within a box within a box, which is how Wikipedia builds
+    // its tables of links. Anything else is a row taller than the page, and a row
+    // is not cut: it has to run over.
+    const row = body[0];
+    const cells = Array.from(row.children);
+    if (!cells.length) { return null; }
+    // Each cell is cut at the same depth, and what comes off all of them together
+    // makes the row that carries on -- which is what a browser does with a row
+    // taller than the page when it prints one.
+    const carry = cells.map((cell) => cutInsideCell(cell, room - startIn(box, cell.getBoundingClientRect(), tate)));
+    if (!carry.some((got) => got && got.length)) { return null; }
+    const rest = tableShell(table, room);
+    const carrier = row.cloneNode(false);
+    carrier.setAttribute('data-eb-again', 'row');
+    cells.forEach((cell, i) => {
+      const box = cell.cloneNode(false);
+      (carry[i] || []).forEach((node) => box.appendChild(node));
+      if (!box.firstChild) { box.appendChild(document.createElement('br')); }
+      carrier.appendChild(box);
+    });
+    if (row.parentNode === table) { rest.appendChild(carrier); }
+    else { const sec = row.parentNode.cloneNode(false); sec.appendChild(carrier); rest.appendChild(sec); }
+    if (body.length > 1) { carryRows(rest, body.slice(1), table); }
+    table.setAttribute('data-split', 'on');
+    return rest;
+  }
+
+  /** What a carried-on cell holds, put back into the cell it was cut out of: a
+   *  table into its table, a list into its list, writing on to the end of the
+   *  writing. */
+  function mergeCellInto(into, from) {
+    while (from.firstChild) {
+      const node = from.firstChild;
+      const last = into.lastElementChild;
+      const goesOn = node.nodeType === 1 && node.getAttribute && node.getAttribute('data-split') === 'on';
+      if (node.nodeType === 1 && last && last.getAttribute && last.getAttribute('data-split') === 'on'
+        && last.nodeName === node.nodeName) {
+        if (node.nodeName === 'TABLE') { mergeTableInto(last, node); }
+        else { while (node.firstChild) { last.appendChild(node.firstChild); } }
+        from.removeChild(node);
+        if (goesOn) { last.setAttribute('data-split', 'on'); } else { last.removeAttribute('data-split'); }
+        continue;
+      }
+      // The line break a cell was left with when everything went out of it.
+      if (node.nodeName === 'BR' && !from.textContent.trim() && from.children.length === 1) { from.removeChild(node); continue; }
+      into.appendChild(node);
+    }
+  }
+
+  /** The rows of a carried-on table, put back into the table they came from. */
+  function mergeTableInto(into, tail) {
+    const lastRow = () => { const r = tableRows(into); return r.length ? r[r.length - 1] : null; };
+    Array.from(tail.children).forEach((part) => {
+      // The head and the column widths were repeated for the printer's sake, not
+      // written by anybody: they go rather than being doubled.
+      if (part.getAttribute && part.getAttribute('data-eb-again') === 'on') { part.remove(); return; }
+      if (/^(THEAD|TBODY|TFOOT)$/.test(part.nodeName) || part.nodeName === 'TR') {
+        const rows = part.nodeName === 'TR' ? [part] : Array.from(part.children);
+        rows.forEach((r) => {
+          if (!r.getAttribute || r.getAttribute('data-eb-again') !== 'row') { return; }
+          // A row that carries nothing but the rest of a nested table: the table
+          // goes back into the cell it was cut out of, and the carrier goes.
+          const home = lastRow();
+          if (home) {
+            Array.from(r.children).forEach((box, i) => {
+              const to = home.children[i];
+              if (to) { mergeCellInto(to, box); }
+            });
+          }
+          r.remove();
+        });
+        if (part.nodeName !== 'TR' && !part.children.length) { part.remove(); return; }
+      }
+      if (!part.parentNode) { return; }
+      if (/^(THEAD|TBODY|TFOOT)$/.test(part.nodeName)) {
+        const same = Array.from(into.children).filter((k) => k.nodeName === part.nodeName).pop();
+        if (same) { while (part.firstChild) { same.appendChild(part.firstChild); } part.remove(); return; }
+      }
+      into.appendChild(part);
+    });
+    into.removeAttribute('data-split');
+  }
+
+  /**
    * Cut a block in two at a character, the second half wearing the same tag,
    * class and style as the first. The cut never lands inside a reading, and in
    * writing that has spaces in it, it is walked back to one so that a word is not
    * left with its head on one page and its tail on the next.
    */
-  function splitBlockAt(block, chars) {
+  /**
+   * Everything in a block from a character onwards, as a range. The cut is walked
+   * back to a space in writing that has spaces, and never falls between a word
+   * and the reading written over it. Both the cutting and the planning of where
+   * to cut ask for it here, so that what is measured is what is moved.
+   */
+  function tailRange(block, chars) {
     const stops = caretStops(block);
     const text = stops.map((n) => n.textContent).join('');
     let where = chars;
@@ -5404,15 +6904,21 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!spot) { return null; }
     const tail = document.createRange();
     tail.setStart(spot.node, spot.offset);
-    // Never between a word and the reading written over it.
     for (let up = spot.node.parentNode; up && up !== block; up = up.parentNode) {
       if (up.nodeName === 'RUBY') { tail.setStartBefore(up); break; }
     }
     tail.setEnd(block, block.childNodes.length);
-    if (tail.collapsed) { return null; }
+    return tail.collapsed ? null : tail;
+  }
+  function splitBlockAt(block, chars) {
+    const tail = tailRange(block, chars);
+    if (!tail) { return null; }
     const rest = block.cloneNode(false);
     rest.removeAttribute('id');
     rest.appendChild(tail.extractContents());
+    const keep = caretNode();
+    trimShells(rest, true, keep);
+    trimShells(block, false, keep);
     if (!String(rest.textContent || '').length && !rest.querySelector('img, figure, table, br')) { return null; }
     block.setAttribute('data-split', 'on');
     if (!block.firstChild) { block.appendChild(document.createElement('br')); }
@@ -5448,6 +6954,9 @@ ${insideObjects('.eb-paper.boxed')} {
     tail.setEnd(frame, frame.childNodes.length);
     if (tail.collapsed) { return false; }
     next.appendChild(tail.extractContents());
+    const keep = caretNode();
+    trimShells(next, true, keep);
+    trimShells(frame, false, keep);
     frame.setAttribute('data-split', 'on');
     if (!frame.firstChild) { frame.appendChild(document.createElement('br')); }
     return true;
@@ -5460,6 +6969,10 @@ ${insideObjects('.eb-paper.boxed')} {
     next.removeAttribute('data-frame-height');
     next.removeAttribute('data-split');
     next.removeAttribute('data-free-top');
+    // A name of its own. Sharing the lead's name made the co-writing merge take a
+    // carried-on frame for the frame itself: it wrote the whole frame over the
+    // last link of the chain, and the document came back twice as long.
+    next.removeAttribute('data-eb-id');
     next.classList.add('eb-cont');
     next.style.removeProperty('min-height');
     next.style.removeProperty('height');
@@ -5496,7 +7009,38 @@ ${insideObjects('.eb-paper.boxed')} {
       ? lead.getAttribute('data-frame-height') : lead.style.minHeight);
     let frame = lead;
     let room = roomFor(lead, geom);
-    for (let guard = 0; guard < 60; guard += 1) {
+    // Everything far below the page being filled is lifted out of the frame while
+    // that page is measured, and brought back as it is wanted. A browser lays out
+    // everything a frame holds after every move, so a story of a hundred and
+    // twenty pages was laid out again at every cut: half a minute of waiting,
+    // with the keyboard dead throughout. The heights are taken once, before
+    // anything is lifted, and they are what decides how much to bring back.
+    const tall = new WeakMap();
+    const heightOf = (el) => {
+      let h = tall.get(el);
+      if (h == null) { h = el.offsetHeight; tall.set(el, h); }
+      return h;
+    };
+    Array.from(lead.children).forEach(heightOf);
+    const need = Math.max(geom.usable * 2, 200);
+    let parked = document.createDocumentFragment();
+    const stow = (box) => {
+      let sum = 0;
+      let el = box.firstElementChild;
+      while (el && sum <= need) { sum += heightOf(el); el = el.nextElementSibling; }
+      while (el) { const next = el.nextElementSibling; parked.appendChild(el); el = next; }
+    };
+    const bring = (box) => {
+      let sum = 0;
+      Array.from(box.children).forEach((el) => { sum += heightOf(el); });
+      while (parked.firstChild && sum <= need) {
+        const el = parked.firstChild;
+        sum += heightOf(el);
+        box.appendChild(el);
+      }
+    };
+    const putBack = () => { if (parked.firstChild) { frame.appendChild(parked); } };
+    for (let guard = 0; guard < 400; guard += 1) {
       const limit = fillLimit(frame, room);
       // 文字枠 holds lines, not blocks: it is cut at the line the page ends on.
       if (frame.matches(TEXT_BLOCKS)) {
@@ -5516,25 +7060,48 @@ ${insideObjects('.eb-paper.boxed')} {
         room = fitRoom(geom.usable);
         continue;
       }
+      if (!parked.firstChild && frame === lead) { stow(frame); }
       const kids = Array.from(frame.children);
+      // Which of them is the first to run past the foot of the page. Found
+      // before anything is cut: a block is only ever cut when the half taken off
+      // it has somewhere to go. Cutting first and deciding afterwards is how
+      // eight thousand characters of a story went missing -- the tail had been
+      // taken out of the paragraph and the decision then said "carry nothing".
+      let first = -1;
+      for (let i = 0; i < kids.length; i += 1) {
+        if (insideFrame(frame, kids[i]).foot > limit + 0.5) { first = i; break; }
+      }
       let carry = null;
-      for (let i = 0; i < kids.length && !carry; i += 1) {
-        const el = kids[i];
+      if (first >= 0) {
+        const el = kids[first];
         const at = insideFrame(frame, el);
-        if (at.foot <= limit + 0.5) { continue; }
-        // The first thing that runs past the foot of the page. Standing wholly
-        // below the fold, it goes over whole; straddling it, and being writing
-        // rather than a picture or a table, it is cut at the line.
+        let rest = null;
         if (at.top < limit - 2 && el.matches(TEXT_BLOCKS)) {
-          const cut = cutOffsetIn(el, limit - at.top);
-          if (cut > 0) {
-            const rest = splitBlockAt(el, cut);
-            if (rest) { carry = [rest].concat(kids.slice(i + 1)); break; }
-          }
+          const cut = cutOffsetIn(el, limit - at.top - boxSlack(frame, el));
+          if (cut > 0) { rest = splitBlockAt(el, cut); }
         }
-        carry = kids.slice(i);
+        // A table is cut between its rows instead, so that what the editor draws
+        // and what the printer makes are the same number of pages.
+        if (!rest && at.top < limit - 2 && el.nodeName === 'TABLE') {
+          rest = splitTableAt(el, limit - at.top);
+        }
+        // Nothing of it fits and it cannot be cut -- a table taller than the
+        // page -- and this frame already has a whole page to itself: another
+        // page would be no better, and the one after that no better again. It
+        // stays where it is and runs over, as an oversized table must. A page
+        // from the web with one tall box in it made a hundred and twenty empty
+        // pages before this.
+        if (!rest && first === 0 && room >= fitRoom(geom.usable) - 1) {
+          if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+          putBack();
+          return;
+        }
+        carry = rest ? [rest].concat(kids.slice(first + 1)) : kids.slice(first);
       }
       if (!carry) {
+        // Nothing here runs past the foot of the page -- but there may be more
+        // waiting to be brought back in.
+        if (parked.firstChild) { bring(frame); continue; }
         // The last frame of the chain keeps whatever is left of the height the
         // writer gave it, so a box drawn three pages deep is still three pages
         // deep once it has been carried over.
@@ -5549,6 +7116,8 @@ ${insideObjects('.eb-paper.boxed')} {
       const next = continuationOf(frame, geom);
       carry.forEach((el) => next.appendChild(el));
       frame = next;
+      bring(frame);
+      stow(frame);
       room = fitRoom(geom.usable);
     }
   }
@@ -5559,6 +7128,11 @@ ${insideObjects('.eb-paper.boxed')} {
    * everything below it, so the page has to be counted afresh before the next
    * frame can be measured. Returns whether anything was moved.
    */
+  /** What a chain looks like, closely enough to know it has not moved. */
+  const chainTried = new WeakMap();
+  function chainMark(chain) {
+    return chain.map((f) => Math.round(writtenBottom(f)) + '/' + Math.round(f.offsetHeight)).join(' ');
+  }
   function reflowFrames() {
     const c = canvas();
     const geom = c ? pageGeometry() : null;
@@ -5569,6 +7143,14 @@ ${insideObjects('.eb-paper.boxed')} {
       if (!el || isCont(el) || !chainable(el)) { continue; }
       const chain = chainOf(el);
       if (chainSettled(chain, geom)) { continue; }
+      // Some documents hold a frame that cannot be made to fit -- a picture or a
+      // table that will not be cut. Laying the chain out again then produces the
+      // very same chain, and doing it over and over was half a minute of a big
+      // document's opening, with the keyboard dead throughout. What came out
+      // once is remembered: if the chain looks like that again, it is left alone
+      // until something is written.
+      const mark = chainMark(chain);
+      if (chainTried.get(el) === mark) { continue; }
       const at = chainCaret(chain);
       // What is held is the frame itself, and the frames carrying it on are
       // about to be made again from scratch. Hold the first of them instead.
@@ -5579,7 +7161,26 @@ ${insideObjects('.eb-paper.boxed')} {
       // the frame was cut at the wrong line, and the next turn cut it again
       // somewhere else, round and round.
       paginate();
+      // Everything below the frame is lifted off the page while the frame is
+      // laid out, and put back exactly as it was. Nothing below a frame changes
+      // what happens inside it, but leaving it there made the browser lay out
+      // the whole document again at every cut: half a minute of waiting on a
+      // long story, with the keyboard dead throughout.
+      const host = chainHost(el);
+      const r = getRange();
+      const below = r && host.parentNode === c && !host.contains(r.startContainer)
+        && (host.compareDocumentPosition(r.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING);
+      const caretHome = below ? caretMark(c) : null;
+      const parked = document.createDocumentFragment();
+      if (host.parentNode === c) {
+        let after = host.nextSibling;
+        while (after) { const next = after.nextSibling; parked.appendChild(after); after = next; }
+      }
       splitChain(el, geom);
+      if (parked.firstChild) { c.appendChild(parked); }
+      nameBlocks(c);
+      if (caretHome) { putCaretBack(c, caretHome); }
+      chainTried.set(el, chainMark(chainOf(el)));
       if (at != null) { placeChainCaret(chainOf(el), at); }
       return true;
     }
@@ -5616,7 +7217,7 @@ ${insideObjects('.eb-paper.boxed')} {
     'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
     'eb-cap-t', 'eb-cap-in', 'eb-cap-none',
     'eb-math-block', 'eb-embed', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
-    'eb-pagebreak', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
+    'eb-pagebreak', 'eb-blankpage', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
     // not part of a document, but the editor's own page spacer lives in the canvas
     'eb-pagespacer',
   ]);
@@ -5696,6 +7297,49 @@ ${insideObjects('.eb-paper.boxed')} {
       });
       if (!moved) { break; }
     }
+    // A picture, a table or a list inside a run of inline markup -- a <ruby>, a
+    // link, a bit of bold -- is not something HTML allows, and a web page is full
+    // of it. It comes out and stands after the block it was buried in. Done here
+    // rather than left to the next pass, or the same document is written one way
+    // today and another way tomorrow.
+    const INLINE_HOSTS = /^(RUBY|RT|RP|SPAN|A|EM|STRONG|B|I|U|S|MARK|CODE|SMALL|SUB|SUP|INS|DEL|ABBR|BDI|BDO|TIME|FONT)$/;
+    Array.from(c.querySelectorAll('figure, table, hr, ul, ol, blockquote, pre, .eb-math-block, .eb-frame, .eb-box, .eb-note'))
+      .forEach((el) => {
+        if (!el.parentNode || !INLINE_HOSTS.test(el.parentNode.nodeName)) { return; }
+        // An anchor is the peg a placed thing hangs from, and an inline one is a
+        // span on purpose: what hangs from it belongs there, and lifting it out
+        // would break the line in two -- which is the very thing the inline
+        // anchor exists to avoid.
+        if (el.parentNode.classList && el.parentNode.classList.contains('eb-anchor')) { return; }
+        if (el.nodeName === 'SPAN') { return; }
+        let up = el.parentNode;
+        while (up.parentNode && up.parentNode !== c && INLINE_HOSTS.test(up.parentNode.nodeName)) { up = up.parentNode; }
+        const block = up.parentNode;
+        if (!block || !block.parentNode || block === c) {
+          if (block === c) { c.insertBefore(el, up.nextSibling); }
+          return;
+        }
+        // Never between the parts of a table: a <table> standing between two
+        // cells is markup no browser will keep, and the parser rearranges it on
+        // the next opening -- so the document is written one way and read back
+        // another, for ever. Inside a cell it stays in the cell; anywhere else in
+        // a table it goes after the whole table.
+        if (/^(TD|TH)$/.test(block.nodeName)) { block.appendChild(el); return; }
+        if (/^(TR|THEAD|TBODY|TFOOT|TABLE)$/.test(block.nodeName)) {
+          const table = block.closest('table');
+          if (table && table.parentNode) { table.parentNode.insertBefore(el, table.nextSibling); }
+          return;
+        }
+        block.parentNode.insertBefore(el, block.nextSibling);
+      });
+    // A reading with nothing left to read: lifting a picture out of the middle of
+    // a <ruby> leaves the ruby standing there empty, and the next pass writes the
+    // document differently again -- a file that changes every time it is opened.
+    Array.from(c.querySelectorAll('ruby')).forEach((r) => {
+      if (String(r.textContent || '').trim()) { return; }
+      if (r.querySelector('img, figure, table')) { return; }
+      r.remove();
+    });
     // An anchor holds exactly one frame. Anything else that ends up inside one --
     // a paragraph the browser put there during a drag, say -- goes back to the flow,
     // where it can be read, and an anchor with nothing left in it goes entirely.
@@ -5859,6 +7503,19 @@ ${insideObjects('.eb-paper.boxed')} {
     c.querySelectorAll('.eb-pagebreak').forEach((el) => {
       el.setAttribute('contenteditable', 'false');
       if (pageBreakLabel) { el.setAttribute('data-label', pageBreakLabel); }
+    });
+    // Nothing is DRAWN on a page the writer asked for -- no label, no mark. But it
+    // is a page, and a page is written on: it keeps one empty line, so the writer
+    // can click it and type. Without the line the click landed elsewhere and the
+    // words went on to another page.
+    c.querySelectorAll('.eb-blankpage').forEach((el) => {
+      el.removeAttribute('contenteditable');
+      el.removeAttribute('data-label');
+      if (!el.firstElementChild) {
+        const line = document.createElement('p');
+        line.appendChild(document.createElement('br'));
+        el.appendChild(line);
+      }
     });
     if (captionLabel) {
       c.querySelectorAll('figure.eb-img figcaption').forEach((el) => el.setAttribute('data-ph', captionLabel));
@@ -6161,9 +7818,13 @@ ${insideObjects('.eb-paper.boxed')} {
   function tidyMarks() {
     const c = canvas();
     if (!c) { return; }
-    const at = getRange();
-    const here = at ? at.startContainer : null;
-    Array.from(c.querySelectorAll('ins.eb-ins, del.eb-del')).forEach((el) => {
+    // Nothing marked, nothing to tidy -- and no reason to ask the browser where
+    // the caret is, which makes it settle the whole document first: two seconds
+    // and a half of a long story's opening went on that question alone.
+    const marks = Array.from(c.querySelectorAll('ins.eb-ins, del.eb-del'));
+    if (!marks.length) { return; }
+    const here = caretNode();
+    marks.forEach((el) => {
       if (el.textContent.replace(/​/g, '')) { return; }
       if (here && el.contains(here)) { return; }
       el.remove();
@@ -6310,6 +7971,85 @@ ${insideObjects('.eb-paper.boxed')} {
       run.appendChild(n);
     });
   }
+  /**
+   * How a pasted table divides itself, as shares that add to one.
+   *
+   * Read from whatever the other program wrote -- a colgroup, or the widths on
+   * the cells of the first full row. Returns null when it said nothing, and
+   * null when it said the same thing about every column, because "all equal"
+   * is what a table does anyway and writing it down would only freeze it.
+   */
+  function columnShares(table) {
+    const num = (v) => {
+      const m = /(-?[\d.]+)\s*(px|pt|%)?/.exec(String(v == null ? '' : v));
+      return m ? Math.abs(parseFloat(m[1])) || 0 : 0;
+    };
+    const widthOf = (c) => num(c.getAttribute('width'))
+      || num((/width\s*:\s*([^;]+)/i.exec(c.getAttribute('style') || '') || [])[1]);
+    // The two ways of covering more than one column do NOT mean the same thing,
+    // and reading them the same way is how the real thing was missed. On a col,
+    // span="3" says "three columns, each this wide"; on a cell, colspan="3" says
+    // "one cell as wide as three". Excel writes the first:
+    //     <col width=165 style='width:124pt'>
+    //     <col width=69 span=3 style='width:52pt'>
+    // -- two col elements for a table of four columns, and no colgroup at all.
+    // Read as cells, that gave two shares for four columns, applyColumnShares
+    // found the count did not match and wrote nothing, and every pasted
+    // spreadsheet came in with all its columns the same width. Measured on the
+    // owner's own machine, 2026-09-09, from a real clipboard.
+    const fromCols = (cols) => {
+      const out = [];
+      Array.prototype.forEach.call(cols, (c) => {
+        const w = widthOf(c);
+        const n = Math.max(1, Number(c.getAttribute('span') || 1));
+        for (let i = 0; i < n; i += 1) { out.push(w); }
+      });
+      return out;
+    };
+    const fromCells = (cells) => {
+      const out = [];
+      Array.prototype.forEach.call(cells, (c) => {
+        const w = widthOf(c);
+        const n = Math.max(1, Number(c.getAttribute('colspan') || 1));
+        for (let i = 0; i < n; i += 1) { out.push(w / n); }
+      });
+      return out;
+    };
+    let flat = null;
+    const cols = table.querySelectorAll('colgroup > col, col');
+    if (cols.length) { flat = fromCols(cols); }
+    if (!flat || !flat.some((w) => w > 0)) {
+      const rows = table.querySelectorAll('tr');
+      for (let i = 0; i < rows.length; i += 1) {
+        const cand = fromCells(rows[i].children);
+        if (cand.length > 1 && cand.every((w) => w > 0)) { flat = cand; break; }
+      }
+    }
+    if (!flat || flat.length < 2 || !flat.every((w) => w > 0)) { return null; }
+    const total = flat.reduce((a, b) => a + b, 0);
+    if (!(total > 0)) { return null; }
+    const share = flat.map((w) => w / total);
+    const even = 1 / share.length;
+    if (share.every((s) => Math.abs(s - even) < 0.02)) { return null; }
+    return share;
+  }
+
+  /**
+   * Write the shares back the one way this editor states column widths: a
+   * colgroup built by tableColumns, a width on each col, and table-layout
+   * fixed. The unit is the only difference from setColumnWidths -- per cent,
+   * because at this moment nobody has said yet how wide the paper is.
+   */
+  function applyColumnShares(table, share) {
+    const cg = tableColumns(table);
+    if (!cg) { return false; }
+    const kids = Array.from(cg.children);
+    if (kids.length !== share.length) { return false; }
+    kids.forEach((col, i) => { col.style.width = (Math.round(share[i] * 1000) / 10) + '%'; });
+    table.style.tableLayout = 'fixed';
+    return true;
+  }
+
   function webToDocument(root, base) {
     root.querySelectorAll(WEB_DROP).forEach((el) => el.remove());
     root.querySelectorAll('a[href]').forEach((a) => {
@@ -6334,7 +8074,43 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     root.querySelectorAll('table').forEach((t) => {
       t.className = 'eb-table';
+      // One col element per column, inside a colgroup, before anything counts
+      // them. Excel writes <col width=69 span=3> and no colgroup at all, and
+      // everything downstream -- tableColumns, the width write-back, the editor's
+      // own column grips -- counts col elements. Left as it came, a table of four
+      // columns carried cols describing six. Measured on the owner's own machine,
+      // 2026-09-09: <colgroup><col><col span="3"><col><col></colgroup>.
+      const loose = Array.from(t.children).filter((k) => k.nodeName === 'COL');
+      let cg = t.querySelector('colgroup');
+      if (loose.length && !cg) { cg = document.createElement('colgroup'); t.insertBefore(cg, t.firstChild); }
+      loose.forEach((c) => cg.appendChild(c));
+      if (cg) {
+        Array.from(cg.querySelectorAll('col')).forEach((c) => {
+          const n = Math.max(1, Number(c.getAttribute('span') || 1));
+          c.removeAttribute('span');
+          for (let i = 1; i < n; i += 1) { cg.insertBefore(c.cloneNode(true), c.nextSibling); }
+        });
+      }
       ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align', 'id'].forEach((a) => t.removeAttribute(a));
+      // The sizes a spreadsheet writes are the sizes of its own window, in its
+      // own pixels, and they are wider than this paper. Left on the rows and
+      // the cells they still win, and the table arrives the width of somebody
+      // else's screen.
+      //
+      // But the widths are not nothing: they say which column is the wide one.
+      // So read the proportions first, throw the pixels away, and give them
+      // back as shares of the table -- the paper decides how wide, the
+      // spreadsheet decides how it is divided.
+      const shares = columnShares(t);
+      t.querySelectorAll('tr, td, th, col, colgroup, thead, tbody, tfoot').forEach((k) => {
+        ['width', 'height', 'bgcolor', 'align', 'valign', 'id', 'class'].forEach((a) => k.removeAttribute(a));
+        const st = k.getAttribute('style');
+        if (st) {
+          const keep = st.split(';').filter((d) => !/^\s*(width|height|min-width|max-width|min-height|max-height)\s*:/i.test(d)).join(';').trim();
+          if (keep) { k.setAttribute('style', keep); } else { k.removeAttribute('style'); }
+        }
+      });
+      if (shares) { applyColumnShares(t, shares); }
       // A table holding one cell is a page's scaffolding, not a table of anything.
       if (t.querySelectorAll('tr').length <= 1 && t.querySelectorAll('td, th').length <= 1) {
         const cell = t.querySelector('td, th');
@@ -6363,8 +8139,20 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     wrapLoose(root);
     // Anything left holding neither words nor a picture was scaffolding.
-    root.querySelectorAll('p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, figcaption')
+    //
+    // A cell is not scaffolding. It is a place in a grid, and the grid is the
+    // meaning of a table: take the empty one out and every cell after it slides
+    // a column to the left, so a spreadsheet's 金額 lands under 数量. An empty
+    // cell says "nothing here", which is something a table has to be able to
+    // say. So td and th are not in this list, and never should be.
+    root.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, figcaption')
       .forEach((el) => { if (!el.textContent.trim() && !el.querySelector('img')) { el.remove(); } });
+    root.querySelectorAll('td, th').forEach((c) => {
+      if (!c.textContent.trim() && !c.querySelector('img, br')) { c.appendChild(document.createElement('br')); }
+      // A tint behind a cell is written the one way this editor writes it, so the
+      // cell dialogue and the paste agree: setCellFill does exactly this.
+      if (c.style && c.style.backgroundColor) { c.classList.add('eb-ink'); }
+    });
     root.querySelectorAll('ul, ol').forEach((l) => { if (!l.querySelector('li')) { l.remove(); } });
     return root;
   }
@@ -6378,9 +8166,118 @@ ${insideObjects('.eb-paper.boxed')} {
    * What cannot be made into either is not thrown away quietly: it is handed back
    * so the writer can be asked whether to keep it as an inline frame.
    */
+  /**
+   * A spreadsheet does not put its formatting on the cells. It puts it in a
+   * stylesheet, in classes -- .xl65 { font-weight:700; background:#D9E1F2 } --
+   * and the stylesheet is furniture this editor throws away. So everything the
+   * writer had set was thrown away with it: the heading row came in unshaded and
+   * not bold, and every number came in ranged left. Writer keeps them, so this
+   * has to. Measured off a real clipboard, 2026-09-09.
+   *
+   * Only the handful of things a document can say are copied across, and only
+   * where the thing does not already say it itself. Bold becomes what bold is in
+   * this document -- a strong -- rather than a weight nobody else writes.
+   */
+  const CLASS_KEEP = ['text-align', 'background-color', 'background', 'color', 'font-weight', 'font-style'];
+  function inlineClassStyles(root) {
+    const sheets = root.querySelectorAll('style');
+    if (!sheets.length) { return; }
+    const rules = [];
+    Array.prototype.forEach.call(sheets, (s) => {
+      const text = String(s.textContent || '').replace(/<!--|-->/g, '');
+      const re = /([^{}]+)\{([^{}]*)\}/g;
+      let m;
+      while ((m = re.exec(text))) {
+        const body = m[2];
+        m[1].split(',').forEach((sel) => {
+          const one = sel.trim();
+          // Only a plain class, or a tag and a class. Anything cleverer is the
+          // other program's business, not this document's.
+          if (!/^[a-z0-9]*\.[A-Za-z_][\w-]*$/.test(one)) { return; }
+          rules.push({ sel: one, body: body });
+        });
+      }
+    });
+    if (!rules.length) { return; }
+    // Looked up by the class, not searched for. Asking the page for every rule's
+    // selector walks the whole fragment once per rule: on a page with two
+    // thousand rules and a thousand blocks that was 2.0 seconds, and a page like
+    // that is an ordinary news article. Keyed by class name and walked once, the
+    // same paste is a fraction of it.
+    const byClass = new Map();
+    rules.forEach((r) => {
+      const cut = r.sel.indexOf('.');
+      const cls = r.sel.slice(cut + 1);
+      const tag = r.sel.slice(0, cut).toUpperCase();
+      if (!byClass.has(cls)) { byClass.set(cls, []); }
+      byClass.get(cls).push({ tag: tag, body: r.body });
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('[class]'), (el) => {
+      const names = String(el.className || '').trim().split(/\s+/);
+      // Every rule that applies to this thing, in the order they were written --
+      // because that is the order that decides, the last one winning.
+      const want = {};
+      let any = false;
+      names.forEach((n) => {
+        const list = byClass.get(n);
+        if (!list) { return; }
+        list.forEach((r) => {
+          if (r.tag && r.tag !== el.nodeName) { return; }
+          r.body.split(';').forEach((d) => {
+            const c = d.indexOf(':');
+            if (c < 0) { return; }
+            let prop = d.slice(0, c).trim().toLowerCase();
+            const val = d.slice(c + 1).trim();
+            if (CLASS_KEEP.indexOf(prop) < 0 || !val) { return; }
+            // A spreadsheet writes the tint as the shorthand -- background:#D9E1F2 --
+            // and the list of things a document may say names background-color. Said
+            // the short way it was dropped, and the heading row came in white.
+            if (prop === 'background') {
+              if (!/^(#[0-9a-f]{3,8}|rgba?\(|[a-z]+$)/i.test(val) || /url\(/i.test(val)) { return; }
+              prop = 'background-color';
+            }
+            want[prop] = val;
+            any = true;
+          });
+        });
+      });
+      if (!any) { return; }
+      const own = el.getAttribute('style') || '';
+      const add = [];
+      Object.keys(want).forEach((prop) => {
+        // What the thing says for itself wins over what a class says about it.
+        if (new RegExp('(^|;)\\s*' + prop + '\\s*:', 'i').test(own)) { return; }
+        add.push(prop + ': ' + want[prop]);
+      });
+      if (add.length) { el.setAttribute('style', (own ? own.replace(/;\s*$/, '') + '; ' : '') + add.join('; ')); }
+    });
+    // Bold is a strong in this document, not a weight on a box.
+    Array.prototype.forEach.call(root.querySelectorAll('[style*="font-weight"]'), (el) => {
+      const w = (/font-weight\s*:\s*([^;]+)/i.exec(el.getAttribute('style')) || [])[1] || '';
+      el.style.removeProperty('font-weight');
+      if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+      if (!(/^(bold|[6-9]00)$/i.test(w.trim())) || !el.firstChild) { return; }
+      if (el.querySelector('b, strong') || /^(B|STRONG|H[1-6])$/.test(el.nodeName)) { return; }
+      const b = document.createElement('strong');
+      while (el.firstChild) { b.appendChild(el.firstChild); }
+      el.appendChild(b);
+    });
+  }
   function adoptContent(html, base) {
     const holder = document.createElement('div');
     holder.innerHTML = String(html == null ? '' : html);
+    // The marks the other program left for itself. Excel brackets what it put on
+    // the clipboard with <!--StartFragment--> and <!--EndFragment-->, and they
+    // came through into the writer's saved file -- inside the table, between the
+    // rows. Nobody sees them on the screen, which is why they lasted: they were
+    // in the owner's own document, read off the real machine on 2026-09-09.
+    const comments = document.createTreeWalker(holder, NodeFilter.SHOW_COMMENT);
+    const dead = [];
+    let cm; while ((cm = comments.nextNode())) { dead.push(cm); }
+    dead.forEach((c) => { if (c.parentNode) { c.parentNode.removeChild(c); } });
+    // What the other program said in its own stylesheet, written on to the things
+    // it applies to -- because the stylesheet itself is about to be thrown away.
+    inlineClassStyles(holder);
     // A drawing is a picture: it can be carried in the file as one, so it never
     // reaches the list of things that cannot be kept.
     svgToPictures(holder);
@@ -6396,8 +8293,63 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     webToDocument(holder, base || baseFromHtml(html));
     stripFurniture(holder, true);
+    dropInvisibleInk(holder);
     toObjects(holder);
     return { holder: holder, foreign: dedupeForeign(foreign) };
+  }
+
+  /**
+   * Ink nobody can read does not come in.
+   *
+   * The paper is white. A page written for a dark screen says color:#fff, and
+   * where its ground comes with it that is a black block on the paper and it
+   * reads -- the writer copied it, and Writer keeps it too. Where the ground does
+   * NOT come with it, the words arrive white on white: they are in the file, they
+   * print as nothing, and the writer cannot see that anything is wrong. That is
+   * the one case with no argument for it, and it is the one this takes out.
+   *
+   * The ground is worked out the way a browser works it out -- the nearest thing
+   * above that has one -- and the paper, which is white, when nothing does.
+   */
+  function dropInvisibleInk(root) {
+    const lum = (css) => {
+      const m = /^rgba?\(([^)]+)\)/i.exec(css || '');
+      let r; let g; let b;
+      if (m) {
+        const parts = m[1].split(',').map((v) => parseFloat(v));
+        if (parts.length > 3 && parts[3] < 0.5) { return null; }
+        r = parts[0]; g = parts[1]; b = parts[2];
+      } else {
+        const h = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(css || '').trim());
+        if (!h) { return null; }
+        const s = h[1].length === 3 ? h[1].replace(/./g, (c) => c + c) : h[1];
+        r = parseInt(s.slice(0, 2), 16); g = parseInt(s.slice(2, 4), 16); b = parseInt(s.slice(4, 6), 16);
+      }
+      const f = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const groundOf = (el) => {
+      let n = el;
+      while (n && n !== root) {
+        const g = n.style && n.style.backgroundColor;
+        const v = g ? lum(g) : null;
+        if (v !== null) { return v; }
+        n = n.parentElement;
+      }
+      return 1;   // the paper
+    };
+    Array.prototype.forEach.call(root.querySelectorAll('[style*="color"]'), (el) => {
+      const ink = el.style && el.style.color ? lum(el.style.color) : null;
+      if (ink === null) { return; }
+      const ground = groundOf(el);
+      // The contrast rule browsers and printers are judged by, at the loosest
+      // setting there is: below this the words are not readable, they are a
+      // stain the colour of the paper.
+      const ratio = (Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05);
+      if (ratio >= 2) { return; }
+      el.style.removeProperty('color');
+      if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+    });
   }
 
   /** The same picture, twice over, is one thing to ask about. */
@@ -6896,12 +8848,24 @@ ${insideObjects('.eb-paper.boxed')} {
       const imgs = Array.from(win.document.images || []);
       imgs.forEach((img) => { img.loading = 'eager'; img.decoding = 'sync'; });
       const waiting = imgs.filter((img) => !img.complete);
-      const go = () => {
+      const printNow = () => {
         try {
           win.focus();
           win.print();
         } catch (e) { /* the user can still print from the browser menu */ }
         done();
+      };
+      // And the typefaces. The document says which faces it is written in and
+      // fetches them; printing before they arrive lays the whole page out in
+      // whatever the browser had to hand, and every line breaks somewhere else --
+      // which is why the print came out unlike the screen, line for line.
+      const go = () => {
+        const faces = win.document.fonts;
+        if (!faces || !faces.ready) { printNow(); return; }
+        let went = false;
+        const fire = () => { if (!went) { went = true; printNow(); } };
+        try { faces.ready.then(fire, fire); } catch (e) { fire(); return; }
+        window.setTimeout(fire, 6000);
       };
       if (!waiting.length) { go(); return; }
       let left = waiting.length;
@@ -6979,6 +8943,7 @@ ${insideObjects('.eb-paper.boxed')} {
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
+    printView: I('<rect x="2.5" y="1.6" width="11" height="12.8" rx="1"/><path d="M5 5.4h6M5 8h6M5 10.6h3.4"/>'),
     pages: I('<rect x="2.4" y="1.8" width="7.6" height="9.6" rx=".6"/><rect x="5.4" y="4.4" width="7.6" height="9.6" rx=".6"/>'),
     layers: I('<path d="M8 1.8 14 5 8 8.2 2 5z"/><path d="M2 8l6 3.2L14 8"/><path d="M2 11l6 3.2L14 11"/>'),
     header: I('<rect x="2" y="2.6" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/><path d="M2.6 8.6h10.8M2.6 11h10.8M2.6 13.2h7"/>'),
@@ -7409,9 +9374,15 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
       <button class="eb-tb" :class="{ on: previewOpen }" @mousedown.prevent @click="previewOpen = !previewOpen" :title="t('Pages')"><span v-html="icons.pages"></span></button>
       <button class="eb-tb" :class="{ on: layersOpen }" @mousedown.prevent @click="layersOpen = !layersOpen" :title="t('Layers')"><span v-html="icons.layers"></span></button>
-      <button class="eb-tb" :class="{ on: doc.paper.headerOn }" @mousedown.prevent @click="toggleRegion('header')" :title="t('Header')"><span v-html="icons.header"></span></button>
-      <button class="eb-tb" :class="{ on: doc.paper.footerOn }" @mousedown.prevent @click="toggleRegion('footer')" :title="t('Footer')"><span v-html="icons.footer"></span></button>
+      <button class="eb-tb" :class="{ on: runBandOn || hasBand('header') }" @mousedown.prevent @click="editBand('header')" :title="t('Header')"><span v-html="icons.header"></span></button>
+      <button class="eb-tb" :class="{ on: runBandOn || hasBand('footer') }" @mousedown.prevent @click="editBand('footer')" :title="t('Footer')"><span v-html="icons.footer"></span></button>
       <button class="eb-tb" :class="{ on: boxes }" v-if="!flow" @mousedown.prevent @click="boxes = !boxes" :title="boxes ? t('Hide the box round every object') : t('Show the box round every object')"><span v-html="icons.boxes"></span></button>
+      <!-- The page with nothing of the editor's on it: no margin boundaries, no
+           boxes round the objects, no grid or ruler, no placeholder under a
+           picture with no caption yet. What is left is what comes out of the
+           printer, which is the only way to see that it does. -->
+      <button class="eb-tb" :class="{ on: asPrinted }" v-if="!flow" @mousedown.prevent @click="showAsPrinted()"
+        :title="asPrinted ? t('Show the editor’s marks again') : t('Show the page exactly as it prints')"><span v-html="icons.printView"></span></button>
       <button class="eb-tb" :class="{ on: !flow }" @mousedown.prevent @click="toggleFlow"
         :title="flow ? t('Show the page as it prints') : t('Fit the text to the screen')">
         <span v-html="flow ? icons.screenView : icons.pageView"></span>
@@ -7443,13 +9414,31 @@ ${insideObjects('.eb-paper.boxed')} {
           <span class="ind il" :style="{ left: (rulerMm.ml + ind.left) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'left')" :title="t('Indent left')"></span>
           <span class="ind ir" :style="{ left: (rulerMm.w - rulerMm.mr - ind.right) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'right')" :title="t('Indent right')"></span>
         </div>
-        <div class="eb-sheets" aria-hidden="true" v-if="!flow">
+        <!-- The sheets themselves, and the running bands standing in their
+             margins. The first sheet's bands are the ones the writer types in:
+             what is written there is written on every page, so the header and
+             the footer are edited once, as one page. -->
+        <div class="eb-sheets" v-if="!flow">
           <div class="eb-sheet" v-for="n in pageCount" :key="n">
-            <div class="run head" v-if="hasRunning">
-              <span class="l">{{ runSay('header', 'l') }}</span><span class="c">{{ runSay('header', 'c') }}</span><span class="r">{{ runSay('header', 'r') }}</span>
+            <!-- The band being written in. Its words are put there when it opens
+                 and are not written back into it while it is being typed: a box
+                 whose text is redrawn under the caret takes every letter to the
+                 front, and the writing came out backwards. -->
+            <div class="run head live" v-if="n === 1 && runBandOn" :class="{ empty: !hasBand('header') }">
+              <span class="l" contenteditable="true" @focus="runAt = ['header','l']" @input="runTyped('header','l',$event)" @blur="runLeft('header','l',$event)" @keydown.enter.prevent></span>
+              <span class="c" contenteditable="true" @focus="runAt = ['header','c']" @input="runTyped('header','c',$event)" @blur="runLeft('header','c',$event)" @keydown.enter.prevent></span>
+              <span class="r" contenteditable="true" @focus="runAt = ['header','r']" @input="runTyped('header','r',$event)" @blur="runLeft('header','r',$event)" @keydown.enter.prevent></span>
             </div>
-            <div class="run foot" v-if="hasRunning">
-              <span class="l">{{ runSay('footer', 'l') }}</span><span class="c">{{ runSay('footer', 'c') }}</span><span class="r">{{ runSay('footer', 'r') }}</span>
+            <div class="run head" v-else-if="showsRun('header', n)">
+              <span class="l">{{ runSay('header', 'l', n) }}</span><span class="c">{{ runSay('header', 'c', n) }}</span><span class="r">{{ runSay('header', 'r', n) }}</span>
+            </div>
+            <div class="run foot live" v-if="n === 1 && runBandOn" :class="{ empty: !hasBand('footer') }">
+              <span class="l" contenteditable="true" @focus="runAt = ['footer','l']" @input="runTyped('footer','l',$event)" @blur="runLeft('footer','l',$event)" @keydown.enter.prevent></span>
+              <span class="c" contenteditable="true" @focus="runAt = ['footer','c']" @input="runTyped('footer','c',$event)" @blur="runLeft('footer','c',$event)" @keydown.enter.prevent></span>
+              <span class="r" contenteditable="true" @focus="runAt = ['footer','r']" @input="runTyped('footer','r',$event)" @blur="runLeft('footer','r',$event)" @keydown.enter.prevent></span>
+            </div>
+            <div class="run foot" v-else-if="showsRun('footer', n)">
+              <span class="l">{{ runSay('footer', 'l', n) }}</span><span class="c">{{ runSay('footer', 'c', n) }}</span><span class="r">{{ runSay('footer', 'r', n) }}</span>
             </div>
           </div>
         </div>
@@ -7561,33 +9550,58 @@ ${insideObjects('.eb-paper.boxed')} {
     </aside>
 
     <!-- The pile, down the right. What is on top of what decides which words move
-         out of whose way, so it has to be something a writer can see and change. -->
+         out of whose way, so it has to be something a writer can see and change.
+
+         Every place a row can be dropped is a thing on the screen, not a sum: the
+         line between two layers, the layer itself, and the two ends of the pile.
+         A row dropped on a line stands there in the order; dropped on a layer it
+         joins it. Nothing is worked out from where in a row the pointer happens
+         to be, so what the writer aims at is what happens. -->
     <aside class="eb-layers" v-if="doc.id && layersOpen">
       <div class="head">
         <span>{{ t('Layers') }}</span>
+        <span class="grow"></span>
+        <button class="eb-tb" @click="addLayer" :title="t('New layer')"><span v-html="icons.plus"></span></button>
         <button class="eb-tb" @click="layersOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
       </div>
       <p class="none" v-if="!layers.length">{{ t('Nothing is standing on the page yet.') }}</p>
-      <div class="group" v-for="(g, gi) in layers" :key="g.level">
-        <div class="glabel">{{ t('Layer {n}', { n: g.level }) }}</div>
-        <ol class="list">
-          <li v-for="it in g.items" :key="it.id" draggable="true"
-            @contextmenu.prevent.stop="layerCtx($event, it.id)"
-            :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
-            @dragstart="layerDragStart(it.id, $event)" @dragend="layerDragEnd"
-            @dragover.prevent="layerDragOver(it.id, $event)" @dragleave="dropLayer = -1"
-            @drop.prevent="layerDrop(it.id)">
-            <button class="pick" draggable="true" @click="chooseLayer(it.id)" :title="it.text">
-              <span class="ic" v-html="it.icon"></span>
-              <span class="nm">{{ it.name }}</span>
-              <span class="tx">{{ it.text }}</span>
-            </button>
-            <span class="acts">
-              <button class="eb-tb" :disabled="gi === 0 || !it.movable" @click="raiseLayer(it.id, 1)" :title="t('Bring forward')">↑</button>
-              <button class="eb-tb" :disabled="gi === layers.length - 1 || !it.movable" @click="raiseLayer(it.id, -1)" :title="t('Send backward')">↓</button>
-            </span>
-          </li>
-        </ol>
+      <div class="body" :class="{ dragging: dragLayer >= 0 }">
+        <template v-for="(g, gi) in layers" :key="g.level">
+          <!-- the line above this layer: dropped here, the thing stands between
+               this layer and the one over it -->
+          <div class="gap" :data-gap-level="g.level" data-gap-side="above"
+            :class="{ over: dropGap && dropGap.level === g.level && dropGap.side === 'above' }">
+            <span>{{ gi === 0 ? t('A new layer above them all') : t('A new layer here') }}</span>
+          </div>
+          <div class="group">
+            <div class="glabel band" :data-layer-level="g.level"
+              :class="{ over: dropLevel === g.level, dragging: dragBand !== null && dragBand === g.level }"
+              @pointerdown="bandGrab(g.level, $event)">
+              {{ t('Layer {n}', { n: g.n }) }}
+              <span class="empty" v-if="g.writing">{{ t('the writing') }}</span>
+              <span class="empty" v-else-if="!g.items.length">{{ t('empty') }}</span>
+            </div>
+            <ol class="list">
+              <li v-for="it in g.items" :key="it.id" :data-layer-row="it.id"
+                @contextmenu.prevent.stop="layerCtx($event, it.id)"
+                :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
+                @pointerdown="layerGrab(it.id, $event)">
+                <button class="pick" @click="layerPick(it.id)" :title="it.text">
+                  <span class="ic" v-html="it.icon"></span>
+                  <span class="nm">{{ it.name }}</span>
+                  <span class="tx">{{ it.text }}</span>
+                </button>
+              </li>
+            </ol>
+          </div>
+          <!-- and the line under the lowest layer there is: dropped there, a
+               thing stands behind the writing itself -->
+          <div class="gap" v-if="gi === layers.length - 1"
+            :data-gap-level="g.level" data-gap-side="below"
+            :class="{ over: dropGap && dropGap.level === g.level && dropGap.side === 'below' }">
+            <span>{{ t('A new layer below them all') }}</span>
+          </div>
+        </template>
       </div>
     </aside>
     </div>
@@ -7605,7 +9619,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </section>
 
   <!-- paper setup -->
-  <div v-if="paperOpen" class="eb-modal-back" @click="paperOpen = false">
+  <div v-if="paperOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>🖹 {{ t('Paper setup') }}</h3>
       <div class="body">
@@ -7752,7 +9766,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- insert table -->
-  <div v-if="tableOpen" class="eb-modal-back" @click="tableOpen = false">
+  <div v-if="tableOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>▦ {{ t('Insert table') }}</h3>
       <div class="body">
@@ -7778,7 +9792,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- formula -->
-  <div v-if="mathOpen" class="eb-modal-back" @click="mathOpen = false">
+  <div v-if="mathOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>∑ {{ t('Insert formula (MathML)') }}</h3>
       <div class="body">
@@ -7804,7 +9818,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- the other apps on this server -->
-  <div v-if="sourceOpen" class="eb-modal-back" @click="sourceOpen = false">
+  <div v-if="sourceOpen" class="eb-modal-back">
     <div class="eb-modal tall" @click.stop>
       <h3><span v-html="icons.link"></span> {{ sourceLabel(source) }}</h3>
       <div class="body">
@@ -7936,7 +9950,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- mail merge -->
-  <div v-if="mergeOpen" class="eb-modal-back" @click="mergeOpen = false">
+  <div v-if="mergeOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>{{ t('Mail merge') }}</h3>
       <div class="body">
@@ -7986,7 +10000,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- typeface picker -->
-  <div v-if="fontsOpen" class="eb-modal-back" @click="closeFonts">
+  <div v-if="fontsOpen" class="eb-modal-back">
     <div class="eb-modal tall" @click.stop>
       <h3><span v-html="icons.text"></span> {{ t('Typeface') }} — {{ fontRoleLabel }}</h3>
       <div class="body">
@@ -8028,7 +10042,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- settings -->
-  <div v-if="settingsOpen" class="eb-modal-back" @click="settingsOpen = false">
+  <div v-if="settingsOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>⚙ {{ t('Settings') }}</h3>
       <div class="body">
@@ -8098,7 +10112,7 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <!-- the right button, as a word processor uses it -->
   <!-- the styles of the document: one rule per kind of paragraph -->
-  <div v-if="stylesOpen" class="eb-modal-back" @click="closeStyles">
+  <div v-if="stylesOpen" class="eb-modal-back">
     <div class="eb-modal wide" @click.stop>
       <h3>{{ t('Styles of this document') }}</h3>
       <div class="body">
@@ -8265,7 +10279,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- Who else on this server may read or write in this document. -->
-  <div v-if="share.open" class="eb-modal-back" @click="share.open = false">
+  <div v-if="share.open" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ share.category ? t('Share the category “{name}”', { name: share.title }) : t('Share “{name}”', { name: share.title }) }}</h3>
       <div class="body">
@@ -8342,7 +10356,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- cropping a picture: a shape for the frame and a place to look at -->
-  <div v-if="cropOpen" class="eb-modal-back" @click="cropOpen = false">
+  <div v-if="cropOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ t('Crop') }}</h3>
       <div class="body">
@@ -8373,7 +10387,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- a rule round the chosen cells -->
-  <div v-if="cellBorderOpen" class="eb-modal-back" @click="cellBorderOpen = false">
+  <div v-if="cellBorderOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
       <h3>{{ t('Rule round the cells') }}</h3>
       <div class="body">
@@ -8412,7 +10426,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- a reading over a word -->
-  <div v-if="rubyOpen" class="eb-modal-back" @click="rubyOpen = false">
+  <div v-if="rubyOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(420px,100%)" @click.stop>
       <h3>{{ t('Reading') }}</h3>
       <div class="body">
@@ -8429,7 +10443,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- a note -->
-  <div v-if="noteOpen" class="eb-modal-back" @click="noteOpen = false">
+  <div v-if="noteOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ t('Note') }}</h3>
       <div class="body">
@@ -8444,7 +10458,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- columns -->
-  <div v-if="colsOpen" class="eb-modal-back" @click="colsOpen = false">
+  <div v-if="colsOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(460px,100%)" @click.stop>
       <h3>{{ t('Columns') }}</h3>
       <div class="body">
@@ -8470,7 +10484,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- the running header and footer -->
-  <div v-if="runOpen" class="eb-modal-back" @click="runOpen = false">
+  <div v-if="runOpen" class="eb-modal-back">
     <div class="eb-modal" @click.stop>
       <h3>{{ t('Header and footer') }}</h3>
       <div class="body">
@@ -8486,11 +10500,38 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="eb-field"><label>{{ t('Centre') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.c" @focus="runAt = ['footer','c']" @input="touch"></div>
           <div class="eb-field"><label>{{ t('Right') }}</label><input type="text" maxlength="120" v-model="doc.paper.footer.r" @focus="runAt = ['footer','r']" @input="touch"></div>
         </div>
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Show on') }}</label>
+            <select v-model="doc.paper.header.on" @change="touch">
+              <option value="all">{{ t('Every page (header)') }}</option>
+              <option value="first">{{ t('The first page only (header)') }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Show on') }}</label>
+            <select v-model="doc.paper.footer.on" @change="touch">
+              <option value="all">{{ t('Every page (footer)') }}</option>
+              <option value="first">{{ t('The first page only (footer)') }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="eb-row">
+          <div class="eb-field">
+            <label>{{ t('Header depth (mm)') }}</label>
+            <input type="number" min="3" :max="runMax('header')" step="1" v-model.number="doc.paper.header.height" @input="touch">
+          </div>
+          <div class="eb-field">
+            <label>{{ t('Footer depth (mm)') }}</label>
+            <input type="number" min="3" :max="runMax('footer')" step="1" v-model.number="doc.paper.footer.height" @input="touch">
+          </div>
+        </div>
+        <p class="eb-tip">{{ t('The band stands in the paper’s own margin and may be as deep as that margin less 3mm: at most {h}mm at the top and {f}mm at the foot with the margins this document has. The writing does not move.', { h: runMax('header'), f: runMax('footer') }) }}</p>
         <h4 class="eb-sect">{{ t('The parts that change') }}</h4>
         <div class="eb-chips">
           <button class="eb-btn ghost" v-for="k in runTokens" :key="k.tag" @click="putRunToken(k.tag)" :title="k.what">{{ k.tag }}</button>
         </div>
-        <p class="eb-tip">{{ t('These repeat in the margin of every printed page. Anything in braces is filled in as the page is written: {page} is the number of the page it stands on, {pages} how many there are in all, {title} the title of the document, {name} its file name, {date} and {time} when it was saved.') }}</p>
+        <p class="eb-tip">{{ t('Anything in braces is filled in as the page is printed: {page} is the number of the page it stands on and {pages} how many there are in all -- both counted by the printer itself -- while {title} is the title of the document, {name} its file name, and {date} and {time} the day and hour it was printed.') }}</p>
         <div class="eb-runpreview" v-if="hasRunning">
           <span class="cap">{{ t('On every page') }}</span>
           <span class="row"><span class="l">{{ runSay('header', 'l') }}</span><span class="c">{{ runSay('header', 'c') }}</span><span class="r">{{ runSay('header', 'r') }}</span></span>
@@ -8506,7 +10547,7 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <!-- frame properties: everything here is written on the object as inline CSS,
        so the saved file carries its own layout and needs nothing to read it -->
-  <div v-if="fpropsOpen" class="eb-modal-back" @click="fpropsOpen = false">
+  <div v-if="fpropsOpen" class="eb-modal-back">
     <div class="eb-modal tall" @click.stop>
       <h3>{{ t('{name} properties', { name: frameLabel }) }}</h3>
       <div class="body">
@@ -8723,13 +10764,13 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="hd">{{ t('Page {n}', { n: ctx.page }) }}</div>
       <button class="ci" @click="goToPage(ctx.page); closeCtx()">{{ t('Go to this page') }}</button>
       <div class="sep"></div>
-      <button class="ci" @click="breakBeforePage(ctx.page)">{{ t('Start this page on a sheet of its own') }}</button>
-      <button class="ci" @click="duplicatePage(ctx.page)">{{ t('Duplicate this page') }}</button>
+      <button class="ci" @click="closeCtx(); breakBeforePage(ctx.page)">{{ t('Start this page on a sheet of its own') }}</button>
+      <button class="ci" @click="closeCtx(); duplicatePage(ctx.page)">{{ t('Duplicate this page') }}</button>
       <div class="sep"></div>
-      <button class="ci" @click="addPage(ctx.page, false)">{{ t('Add a page above') }}</button>
-      <button class="ci" @click="addPage(ctx.page, true)">{{ t('Add a page below') }}</button>
+      <button class="ci" @click="closeCtx(); addPage(ctx.page, false)">{{ t('Add a page above') }}</button>
+      <button class="ci" @click="closeCtx(); addPage(ctx.page, true)">{{ t('Add a page below') }}</button>
       <div class="sep"></div>
-      <button class="ci danger" @click="deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
+      <button class="ci danger" @click="closeCtx(); deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
     </template>
     <template v-else>
     <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
@@ -8737,6 +10778,50 @@ ${insideObjects('.eb-paper.boxed')} {
     <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s k">Ctrl+V</span></button>
     <button class="ci" @click="ctxDo('pasteText')"><span>{{ t('Paste as plain text') }}</span><span class="s k">Ctrl+Shift+V</span></button>
     <div class="sep"></div>
+    <!-- What was clicked, and what a writer who knows LibreOffice reaches for when
+         they right-click a thing on the page: the wrap, the arrangement, the
+         anchor, the size. It stands first, because it is what was clicked. -->
+    <template v-if="(ctx.frame || ctx.text) && !ctx.writingRow">
+      <div class="hd">{{ frameLabel }}</div>
+      <button class="ci strong" @click="ctxDo('frameProps')">{{ t('Object properties…') }}</button>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Wrap') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('Above and below') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Words to its left') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Words to its right') }}</button>
+          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Words underneath it') }}</button>
+        </div>
+      </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Arrange') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
+          <button class="ci" @click="ctxDo('stackStep',1)">{{ t('Forward one') }}</button>
+          <button class="ci" @click="ctxDo('stackStep',-1)">{{ t('Back one') }}</button>
+          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
+        </div>
+      </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Align') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-l')">{{ t('Put the frame at the left margin') }}</button>
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-c')">{{ t('Centre the frame in the column') }}</button>
+          <button class="ci" @click="ctxDo('frameAlign','eb-al-r')">{{ t('Put the frame at the right margin') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('frameFit')">{{ t('Make the frame the width of the column') }}</button>
+        </div>
+      </div>
+      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+        <span>{{ t('Anchor') }}</span><span class="s">›</span>
+        <div class="fly">
+          <button class="ci" :class="{ on: !frame.free }" @click="ctxDo('frameInFlow')">{{ t('As character') }}</button>
+          <button class="ci" :class="{ on: frame.free }" @click="ctxDo('frameToPage')">{{ t('To paragraph') }}</button>
+        </div>
+      </div>
+      <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+      <div class="sep"></div>
+    </template>
 
     <template v-if="ctx.link">
       <button class="ci" @click="ctxDo('linkOpen')">{{ t('Open the link') }}</button>
@@ -8850,66 +10935,30 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </template>
 
-    <!-- What a writer who knows LibreOffice reaches for when they right-click a
-         thing on the page: the wrap, the arrangement, the anchor, the size. -->
-    <template v-if="ctx.frame || ctx.text">
-      <div class="sep"></div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Wrap') }}</span><span class="s">›</span>
-        <div class="fly">
-          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('Above and below') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Words to its left') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Words to its right') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Words underneath it') }}</button>
-        </div>
-      </div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Arrange') }}</span><span class="s">›</span>
-        <div class="fly">
-          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
-          <button class="ci" @click="ctxDo('stackStep',1)">{{ t('Forward one') }}</button>
-          <button class="ci" @click="ctxDo('stackStep',-1)">{{ t('Back one') }}</button>
-          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
-        </div>
-      </div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Align') }}</span><span class="s">›</span>
-        <div class="fly">
-          <button class="ci" @click="ctxDo('frameAlign','eb-al-l')">{{ t('Put the frame at the left margin') }}</button>
-          <button class="ci" @click="ctxDo('frameAlign','eb-al-c')">{{ t('Centre the frame in the column') }}</button>
-          <button class="ci" @click="ctxDo('frameAlign','eb-al-r')">{{ t('Put the frame at the right margin') }}</button>
-          <div class="sep"></div>
-          <button class="ci" @click="ctxDo('frameFit')">{{ t('Make the frame the width of the column') }}</button>
-        </div>
-      </div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Anchor') }}</span><span class="s">›</span>
-        <div class="fly">
-          <button class="ci" :class="{ on: !frame.free }" @click="ctxDo('frameInFlow')">{{ t('As character') }}</button>
-          <button class="ci" :class="{ on: frame.free }" @click="ctxDo('frameToPage')">{{ t('To paragraph') }}</button>
-        </div>
-      </div>
-      <div class="sep"></div>
-      <button class="ci strong" @click="ctxDo('frameProps')">{{ t('Object properties…') }}</button>
-      <button class="ci" v-if="ctx.frame" @click="ctxDo('framePlain')">{{ t('Clear the formatting inside') }}</button>
-      <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
-    </template>
-
     <template v-if="ctx.selection">
       <div class="sep"></div>
       <button class="ci strong" @click="ctxDo('runProps')">{{ t('Properties of the chosen words…') }}</button>
     </template>
 
     <div class="sep"></div>
-    <button class="ci" v-if="!flow" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
-    <button class="ci" v-if="!flow" @click="ctxDo('boxes')">{{ boxes ? t('Hide the box round every object') : t('Show the box round every object') }}</button>
-    <button class="ci" @click="ctxDo('clear')">{{ t('Clear formatting') }}</button>
+    <!-- One command, named for what it will actually clear: the words that are
+         chosen, or everything inside the thing that was clicked. Two commands
+         called "clear formatting" and "clear the formatting inside" left the
+         writer guessing which was which. -->
+    <button class="ci" v-if="clearWhat.how" @click="ctxDo(clearWhat.how)">{{ clearWhat.label }}</button>
+    <div class="ci has-sub" v-if="!flow" @mouseenter="placeFly" @click="toggleFly">
+      <span>{{ t('View') }}</span><span class="s">›</span>
+      <div class="fly">
+        <button class="ci" @click="ctxDo('guides')">{{ guides ? t('Hide the margin boundaries') : t('Show the margin boundaries') }}</button>
+        <button class="ci" @click="ctxDo('boxes')">{{ boxes ? t('Hide the box round every object') : t('Show the box round every object') }}</button>
+      </div>
+    </div>
     </template>
   </div>
 
   <!-- The properties of a chosen run of words. Everything here is written on the
        words themselves, so one letter can be dressed differently from the next. -->
-  <div v-if="wordsOpen" class="eb-modal-back" @click="wordsOpen = false">
+  <div v-if="wordsOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(720px,100%)" @click.stop>
       <h3>{{ t('Properties of the chosen words…') }}</h3>
       <div class="body">
@@ -8968,7 +11017,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- paragraph properties, written as inline styles so the file carries them -->
-  <div v-if="paraOpen" class="eb-modal-back" @click="paraOpen = false">
+  <div v-if="paraOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(580px,100%)" @click.stop>
       <h3>{{ t('Paragraph settings…') }}</h3>
       <div class="body">
@@ -9042,7 +11091,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- a table of contents, as links rather than page numbers -->
-  <div v-if="tocOpen" class="eb-modal-back" @click="tocOpen = false">
+  <div v-if="tocOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ t('Table of contents…') }}</h3>
       <div class="body">
@@ -9095,7 +11144,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- a hyperlink -->
-  <div v-if="webOpen" class="eb-modal-back" @click="webOpen = false">
+  <div v-if="webOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
       <h3>{{ t('Bring in a web page…') }}</h3>
       <div class="body">
@@ -9110,7 +11159,7 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </div>
   </div>
-  <div v-if="linkOpen" class="eb-modal-back" @click="linkOpen = false">
+  <div v-if="linkOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ link.editing ? t('Edit the link…') : t('Hyperlink…') }}</h3>
       <div class="body">
@@ -9127,7 +11176,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <!-- what a reader hears in place of the picture -->
-  <div v-if="altOpen" class="eb-modal-back" @click="altOpen = false">
+  <div v-if="altOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(520px,100%)" @click.stop>
       <h3>{{ t('Alternative text…') }}</h3>
       <div class="body">
@@ -9189,6 +11238,11 @@ ${insideObjects('.eb-paper.boxed')} {
         lately: new Map(),
         dirty: false,
         saving: false,
+        opening: false,
+        // Writing in the running header and footer: the bands on the first sheet
+        // are open to the caret, and what is written in them is written on every
+        // page. Off again as soon as the writer is done with them.
+        runBandOn: false,
         savedAt: 0,
         settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual' },
         autosave: true,
@@ -9205,7 +11259,8 @@ ${insideObjects('.eb-paper.boxed')} {
         build: '', newBuild: false,
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
-        dragLayer: -1, dropLayer: -1, dragPage: 0, dropPage: 0,
+        dragLayer: -1, dropLayer: -1, dropLevel: null, dropGap: null, dragBand: null, extraLayers: [],
+        dragPage: 0, dropPage: 0,
         placing: '', placeBox: null, railWatch: null, railWatched: null, railPending: false,
         _pageThen: null, _barTimer: null, lightening: false, composing: false,
         wordsOpen: false, wordsSample: '',
@@ -9221,7 +11276,7 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, text: false, page: 0, doc: null, cat: null },
+        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, frameWords: false, text: false, writingRow: false, page: 0, doc: null, cat: null },
         // The categories the documents are kept in: which one is open (one at a
         // time, as a drawer), what each is called, and the colour it is drawn in.
         folders: [], openCat: '', naming: false, catNew: '', catColours: {},
@@ -9254,6 +11309,9 @@ ${insideObjects('.eb-paper.boxed')} {
         // is why the status line still said "A4 Portrait" in a Japanese window.
         // Every computed that speaks to the reader reads this counter.
         i18nTick: 0,
+        saidAboutRunning: false,
+        asPrinted: false,
+        wasShowing: null,
         charsOpen: false,
         charSets: CHAR_SETS,
         charSet: 'Punctuation',
@@ -9309,17 +11367,18 @@ ${insideObjects('.eb-paper.boxed')} {
         return {
           '--eb-paper-w': s.w + 'mm',
           '--eb-paper-h': s.h + 'mm',
-          // The running header and footer stand in bands of their own, and the
-          // writing begins below the one and ends above the other -- on paper it
-          // is the table's head and foot that take the room, and here it is the
-          // page's own padding, so that both come to the same place.
-          '--eb-mt': (p.margin.top + band.top) + 'mm',
+          // The running header and footer stand in the paper's own margin, three
+          // millimetres clear of the writing. The writing itself begins where the
+          // margin says it does and is not moved by them at all -- on paper the
+          // page's margin boxes hold them, and here the sheet draws them in the
+          // same place, so the two agree.
+          '--eb-mt': p.margin.top + 'mm',
           '--eb-mr': p.margin.right + 'mm',
-          '--eb-mb': (p.margin.bottom + band.bottom) + 'mm',
+          '--eb-mb': p.margin.bottom + 'mm',
           '--eb-ml': p.margin.left + 'mm',
           '--eb-band-t': band.top + 'mm',
           '--eb-band-b': band.bottom + 'mm',
-          '--eb-pageh': (s.h - p.margin.top - p.margin.bottom - band.top - band.bottom) + 'mm',
+          '--eb-pageh': (s.h - p.margin.top - p.margin.bottom) + 'mm',
           '--eb-pageart': art.any ? 'url("' + art.url + '")' : 'none',
           '--eb-font-body': fontStack(f.body, 'serif'),
           '--eb-font-head': fontStack(f.head, 'sans'),
@@ -9594,13 +11653,33 @@ ${insideObjects('.eb-paper.boxed')} {
         return out;
       },
       /** The parts of a running header that are filled in, and what each says. */
+      /**
+       * The one command that takes formatting off, and what it will take it off:
+       * the words that are chosen, or everything inside the thing that was
+       * clicked. Saying which in the name is the whole point -- "clear
+       * formatting" beside "clear the formatting inside" told nobody anything.
+       */
+      clearWhat() {
+        this.i18nTick;   // read, so a change of language works it out again
+        if (this.ctx.selection) { return { how: 'clear', label: this.t('Clear the formatting on the chosen words') }; }
+        if (this.ctx.frame) {
+          // Nothing written in it -- a picture, a rule, a shape -- has no
+          // formatting to take off, and an item that does nothing is worse than
+          // no item at all.
+          if (!this.ctx.frameWords) { return { how: '', label: '' }; }
+          return { how: 'framePlain', label: this.t('Clear all the formatting inside {what}', { what: this.frameLabel }) };
+        }
+        return { how: 'clear', label: this.t('Clear the formatting of this paragraph') };
+      },
       runTokens() {
         this.i18nTick;   // read, so a change of language works it out again
         const what = {
+          page: this.t('The number of the page it stands on'),
+          pages: this.t('How many pages there are'),
           title: this.t('The title of the document'),
           name: this.t('The name of the file'),
-          date: this.t('The day it was saved'),
-          time: this.t('The time it was saved'),
+          date: this.t('The day it was printed'),
+          time: this.t('The time it was printed'),
         };
         return RUN_TOKENS.map((k) => ({ tag: '{' + k + '}', what: what[k] || k }));
       },
@@ -9844,6 +11923,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.link = false;
         this.ctx.list = false;
         this.ctx.selection = false;
+        this.ctx.writingRow = false;
         this.placeCtx(e.clientX, e.clientY);
       },
       /** The colour a category is drawn in, kept with the writer's own settings. */
@@ -9903,6 +11983,11 @@ ${insideObjects('.eb-paper.boxed')} {
       async openDoc(id) {
         if (this.narrow) { this.sideOpen = false; }
         if (this.dirty && this.doc.id && this.doc.id !== id) { await this.save(true); }
+        // Opening is not writing. Setting the paper of the document being opened
+        // used to count as a change made by the writer: the file was saved a
+        // couple of seconds later and a version kept of it, so a document nobody
+        // had touched grew a snapshot every time it was looked at.
+        this.opening = true;
         try {
           const d = await api('documents/' + id);
           const parsed = parseHtml(d.content);
@@ -9913,11 +11998,6 @@ ${insideObjects('.eb-paper.boxed')} {
             id: d.id, name: d.name, title: parsed.title || d.title, etag: d.etag || '',
             paper: parsed.paper, styles: parsed.styles, css: parsed.css, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
           };
-          // What the file itself carries decides whether the two switches are on:
-          // the page's own header and footer are part of the document, not a
-          // setting that could disagree with it.
-          this.doc.paper.headerOn = parsed.hasHeader;
-          this.doc.paper.footerOn = parsed.hasFooter;
           canvas().innerHTML = parsed.body || '<p><br></p>';
           normaliseCanvas(this.t('Page break'), this.t('Caption'));
           // A family the built-in list does not know needs the catalogue, or the
@@ -9945,13 +12025,17 @@ ${insideObjects('.eb-paper.boxed')} {
             this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); });
           });
           if (window.innerWidth < 860) { this.sideOpen = false; }
+          this.$nextTick(() => { this.opening = false; this.dirty = false; });
           // From here on, this copy listens: who else has it open, and whether
           // they have written anything.
           this.startWatching();
           if (parsed.foreign) {
             this.notify(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
           }
-        } catch (e) { this.notify(this.t('Could not open the document: {msg}', { msg: e.message })); }
+        } catch (e) {
+          this.opening = false;
+          this.notify(this.t('Could not open the document: {msg}', { msg: e.message }));
+        }
       },
       /** The body as it goes into the file: editor-only marks taken back out. */
       exportBody() {
@@ -9969,9 +12053,14 @@ ${insideObjects('.eb-paper.boxed')} {
           el.removeAttribute('data-eb-who');
           if (!el.getAttribute('class')) { el.removeAttribute('class'); }
         });
-        clone.querySelectorAll('.eb-pagebreak').forEach((el) => el.removeAttribute('data-label'));
+        clone.querySelectorAll('.eb-pagebreak, .eb-blankpage').forEach((el) => el.removeAttribute('data-label'));
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+        // A paragraph the editor cut at the foot of a page is one paragraph, and
+        // that is what is written to the file. The browser cuts it again in the
+        // same place when it prints it, because it is the same writing at the
+        // same width on the same paper -- which is the whole point.
+        joinFlowCuts(clone);
         // The gaps between the sheets are the editor's, not the document's.
         clone.querySelectorAll('.eb-anchor > *').forEach((el) => {
           el.style.removeProperty('--eb-shift');
@@ -10398,8 +12487,16 @@ ${insideObjects('.eb-paper.boxed')} {
         // that was decorated comes out of the printer plain white.
         if (pageArt(paper).any) {
           this.notify(this.t('Turn on “Background graphics” in the print dialogue, or the page’s colour and frame will not be printed.'));
+        } else if (!this.saidAboutRunning) {
+          // The browser writes the date, the title, the address of the file and
+          // the page number into the margins of its own accord, and they are not
+          // in the document -- so the preview shows lines the editor never drew,
+          // which reads as the screen and the printout disagreeing. The box is in
+          // the browser's own dialogue, where we cannot reach it; said once.
+          this.saidAboutRunning = true;
+          this.notify(this.t('The browser adds the date and the address of the file in the margins. Turn “Headers and footers” off in the print dialogue to print the page as it stands.'));
         }
-        printHtml(this.currentHtml(!this.showChanges), pageRule(paper));
+        printHtml(this.currentHtml(!this.showChanges), pageRule(paper, runAbout(this.doc)));
       },
       showSource() {
         this.menuOpen = false;
@@ -10408,6 +12505,73 @@ ${insideObjects('.eb-paper.boxed')} {
       },
 
       // ---- editing ----
+
+      /**
+       * With changes being recorded, typing goes into a run marked as added and a
+       * deletion strikes the text out instead of taking it away. The browser tells
+       * us exactly what it is about to remove, which is what makes this workable:
+       * getTargetRanges is the whole trick.
+       */
+      onBeforeInput(e) {
+        frameTaken = false;
+        history.push(false);
+        if (!this.review || !this.doc.id) { return; }
+        const type = String(e.inputType || '');
+        if (/^delete/.test(type)) {
+          const ranges = (e.getTargetRanges && e.getTargetRanges()) || [];
+          const target = ranges.length ? ranges[0] : null;
+          const range = target ? (function () {
+            const r = document.createRange();
+            r.setStart(target.startContainer, target.startOffset);
+            r.setEnd(target.endContainer, target.endOffset);
+            return r;
+          }()) : null;
+          if (!range || range.collapsed || !inCanvas(range.startContainer)) { return; }
+          e.preventDefault();
+          history.push(true);
+          const back = /Backward|ByCut|SoftLineBackward|WordBackward/.test(type);
+          const at = document.createRange();
+          at.setStart(back ? range.startContainer : range.endContainer, back ? range.startOffset : range.endOffset);
+          at.collapse(true);
+          markDeleted(range);
+          try { selectRange(at); } catch (err) { /* the text moved under us */ }
+          this.settleReview();
+          return;
+        }
+        if (/^insert/.test(type) && type !== 'insertCompositionText') {
+          const sel = getRange();
+          if (sel && !sel.collapsed) {
+            e.preventDefault();
+            history.push(true);
+            const end = document.createRange();
+            end.setStart(sel.endContainer, sel.endOffset);
+            end.collapse(true);
+            markDeleted(sel);
+            try { selectRange(end); } catch (err) { /* the text moved under us */ }
+            ensureIns();
+            if (type === 'insertText' && e.data) { insertText(e.data); }
+            this.settleReview();
+            return;
+          }
+          ensureIns();
+        }
+      },
+      /** The block the caret is in is being written in here: it is not replaced. */
+      markMine() {
+        const c = canvas();
+        const r = getRange();
+        if (!c || !r || !c.contains(r.startContainer)) { return; }
+        let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
+        while (block && block.parentNode !== c) { block = block.parentNode; }
+        const id = block && block.getAttribute && block.getAttribute('data-eb-id');
+        if (id) { this.mine.add(id); this.lately.set(id, Date.now()); }
+        this.typedAt = Date.now();
+      },
+      settleReview() {
+        this.touch();
+        this.recount();
+        this.$nextTick(() => this.refreshState());
+      },
       touch() {
         this.dirty = true;
         this.markMine();
@@ -10451,6 +12615,12 @@ ${insideObjects('.eb-paper.boxed')} {
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
           const was = this.pageCount;
+          // The paragraphs the editor cut at a page foot are put back together
+          // and cut again from scratch, the way the frame chain is: a given
+          // amount of writing then has exactly one arrangement, and there is no
+          // state left over to go stale. Never in the middle of a conversion --
+          // rewriting the markup under a half-finished word throws it away.
+          if (!this.composing) { recutFlow(); }
           let pages = paginate();
           // A frame too tall for its page carries its writing on into a fresh
           // frame on the next one. Moving the writing moves everything below it,
@@ -10464,7 +12634,11 @@ ${insideObjects('.eb-paper.boxed')} {
               // is drawn, so it has to be standing on the right sheet before
               // there is any sense in measuring what fits inside it.
               const moved = settleFreeObjects();
-              if (!reflowFrames() && !moved) { break; }
+              // Making room for an object moves the writing, and the writing is
+              // what the page feet fall inside: the cuts are made again every
+              // time anything moves.
+              const cut = recutFlow();
+              if (!reflowFrames() && !moved && !cut) { break; }
               pages = paginate();
             }
             // And the room the objects take out of the writing last of all. It is
@@ -10718,6 +12892,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** Load the families this document uses, for the editor's own canvas. */
       /** The document's own styles, in a sheet of their own after the built-in one. */
       applyDocStyles() {
+        this.applyPrintPage();
         const css = stylesCss(normaliseStyles(this.doc.styles), '#editbase-root ');
         let el = document.getElementById('eb-doc-styles');
         if (!el) {
@@ -10773,13 +12948,51 @@ ${insideObjects('.eb-paper.boxed')} {
         clearTimeout(this._cssTimer);
         this._cssTimer = setTimeout(() => this.repaginate(), 300);
       },
+      /**
+       * The page rule kept on the editor's own page, so that Ctrl+P -- the print
+       * the browser offers, not the app's button -- comes out on the same paper
+       * with the same margins as the file. Without it the browser used its own
+       * default page: the writing ran to the edges of the paper and the whole
+       * layout was unlike the screen.
+       */
+      applyPrintPage() {
+        const paper = normalisePaper(this.doc.paper);
+        let tag = document.getElementById('eb-print-page');
+        if (!tag) {
+          tag = document.createElement('style');
+          tag.id = 'eb-print-page';
+          tag.media = 'print';
+          document.head.appendChild(tag);
+        }
+        tag.textContent = this.doc.id ? pageRule(paper, runAbout(this.doc)) : '';
+      },
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
         const c = canvas();
         const named = c ? familiesInBody(c.innerHTML) : [];
         linkStylesheet('eb-doc-fonts', fontsUrl([f.body, f.head, f.mono].concat(named).concat(stylesFamilies(normaliseStyles(this.doc.styles)))));
-        // Text set in the real typeface is a different height, so the pages have to
-        // be laid out again once the fonts have actually loaded.
+        // Text set in the real typeface is a different width, so the pages have to
+        // be laid out again once the fonts have actually arrived. document.fonts
+        // .ready is a promise about the loads already in flight: asked for right
+        // after the stylesheet is linked, it can answer before the browser has so
+        // much as started fetching, and the page was then left measured in
+        // whatever face was to hand. The faces themselves are asked for by name,
+        // and the page is laid out again when each of them answers -- and again
+        // whenever the browser finishes loading anything else.
+        const size = (normalisePaper(this.doc.paper).fontSize || 10.5) + 'pt';
+        const want = [f.body, f.head, f.mono].concat(named).filter(Boolean);
+        if (document.fonts && document.fonts.load) {
+          Promise.all(want.map((fam) => document.fonts.load(size + ' "' + fam + '"').catch(() => null)))
+            .then(() => this.repaginate())
+            .catch(() => { /* nothing to redo */ });
+        }
+        if (document.fonts && document.fonts.addEventListener && !this._fontsWatched) {
+          this._fontsWatched = true;
+          document.fonts.addEventListener('loadingdone', () => {
+            clearTimeout(this._fontTimer);
+            this._fontTimer = setTimeout(() => this.repaginate(), 120);
+          });
+        }
         if (document.fonts && document.fonts.ready) {
           document.fonts.ready.then(() => this.repaginate()).catch(() => { /* nothing to redo */ });
         }
@@ -10795,6 +13008,7 @@ ${insideObjects('.eb-paper.boxed')} {
       toggleMenu(key) { this.menu = this.menu === key ? '' : key; },
       /** The toolbar's size box: the selection, or the block the caret is in. */
       setSize(pt) {
+        takeHeldRange();
         if (pt === '' || pt == null) { this.run(() => styleTextOrBlock('fontSize', '')); return; }
         const v = Number(pt);
         if (!(v >= 4 && v <= 200)) { this.refreshState(); return; }
@@ -10806,6 +13020,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The toolbar's typeface box, on the same terms. */
       setFamily(family) {
+        takeHeldRange();
         this.run(() => styleTextOrBlock('fontFamily', family ? fontStack(family, 'sans') : ''));
         this.applyDocFonts();
       },
@@ -11711,8 +13926,12 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!ranges.length) { this.tsel.on = false; return; }
         // No layout to measure (a document not yet shown, or the test harness).
         if (typeof ranges[0].getClientRects !== 'function') { this.tsel.on = false; return; }
+        // The wrap shims are not writing: a selection reaching past one is handed
+        // the shim's rectangle, as tall as the object it stands for, and the box
+        // drawn round the selection then swallowed the object as well.
+        const shims = shimRects(canvas());
         const rects = ranges.reduce((all, r2) => all.concat(Array.from(r2.getClientRects())), [])
-          .filter((r2) => r2.width > 0.5 && r2.height > 0.5);
+          .filter((r2) => r2.width > 0.5 && r2.height > 0.5 && !isShimRect(shims, r2));
         if (!rects.length) { this.tsel.on = false; return; }
         const z = this.frameZoom() || 1;
         const b = wrap.getBoundingClientRect();
@@ -11753,7 +13972,13 @@ ${insideObjects('.eb-paper.boxed')} {
         if (frameDrag) { return; }
         // The hand is armed with something to put down: this press draws it.
         if (this.placing) { e.preventDefault(); this.placeStart(e); return; }
-        const at = objectAt(e.target) || thinObjectNear(e.clientX, e.clientY);
+        // What was pressed on, and what stands on the paper under the pointer. The
+        // second wins when it is inside the first or drawn above it: pressing a
+        // picture inside a frame takes the picture, not the frame it sits in.
+        const up = objectAt(e.target);
+        const hit = placedAt(e.clientX, e.clientY);
+        const at = (hit && (!up || up === hit || up.contains(hit) || stackRank(hit) > stackRank(up)))
+          ? hit : (up || thinObjectNear(e.clientX, e.clientY));
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
         if (e.shiftKey && at && frameEl && at !== frameEl) {
@@ -11918,7 +14143,8 @@ ${insideObjects('.eb-paper.boxed')} {
         if (d.mode !== 'n' && d.mode !== 's') { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
         // A picture keeps its proportions: its height follows its width.
         if (d.mode !== 'e' && d.mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
-          if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; } else { s.minHeight = round1(h) + 'mm'; }
+          if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; }
+          else if (!strokeShape(frameEl)) { s.minHeight = round1(h) + 'mm'; }
           declareFrameHeight(frameEl);
         }
         if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; this.keepOnPaper(frameEl); }
@@ -12215,14 +14441,37 @@ ${insideObjects('.eb-paper.boxed')} {
         // And it stays on the paper the other way too: dragged up hard, a shape
         // used to sit above the top edge of the first sheet, where it is drawn on
         // the desk rather than on the page and prints nowhere at all.
+        //
+        // The FOOT of the paper is not settled here. Which page a placed thing
+        // belongs to, and whether it lies across the fold between two, is worked
+        // out by settleFree in the paper's own coordinates -- a column with no
+        // folds in it -- and it remembers where the writer put it so it can go
+        // back there when the page has room again. A second guess at it in screen
+        // coordinates, made here, only rewrites the offset settleFree is about to
+        // read, and the wrap goes in at the wrong place or not at all. Measured.
         const c = canvas();
         if (!c || !c.getBoundingClientRect) { return; }
+        // Not while the hand is still moving. Measured, writing down every set of
+        // the offset with the call that made it: frameDragMove wrote 22.6mm and
+        // keepOnPaper put -19.7mm back, wrote 27.9mm and got -19.7mm back, twelve
+        // times over -- so the thing could not be dragged down the page at all.
+        // Where it ends up on the paper is settled once, at the end of the drag,
+        // by settlePlaced. That is what the comment above settlePlaced says, and
+        // this was the one place still guessing at it mid-drag.
+        if (this.frame && this.frame.dragging) { return; }
         const paper = c.getBoundingClientRect();
         const now = el.getBoundingClientRect();
         const z = this.frameZoom() || 1;
         let dy = 0;
+        // A thing taller than the writing itself can be inside it at the top or at
+        // the foot but never at both, and asking for both freezes it: dragged down,
+        // its foot goes past the end and it is lifted back by the same amount, so
+        // it only ever slides sideways. Measured on a placed paragraph 291.7mm tall
+        // -- cut to 80mm the same drag moved it the full 120px. Held to the top
+        // edge alone, its foot is allowed to hang.
+        const tall = now.height > (paper.bottom - paper.top);
         if (now.top < paper.top) { dy = paper.top - now.top; }
-        else if (now.bottom > paper.bottom) { dy = Math.min(0, paper.bottom - now.bottom); }
+        else if (!tall && now.bottom > paper.bottom) { dy = Math.min(0, paper.bottom - now.bottom); }
         if (dy) { el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm'; }
       },
       /**
@@ -12440,9 +14689,10 @@ ${insideObjects('.eb-paper.boxed')} {
           if (!el.getAttribute('style')) { el.removeAttribute('style'); }
         } else if (kind === 'stack') {
           if (!objectFree(el)) { this.freeInPlace(el); }
-          restack(el, arg);
+          this.moveInPile(el, arg);
         } else if (kind === 'delete') {
           deleteObject(el);
+          this.tidyLayers();
           this.clearFrame();
           this.settleFrame();
           return;
@@ -12536,7 +14786,7 @@ ${insideObjects('.eb-paper.boxed')} {
         framePinned = true;
         history.push(true);
         setObjectProps(frameEl, v);
-        restack(frameEl, where);
+        this.moveInPile(frameEl, where);
         this.fprops.z = Number(frameEl.style.zIndex) || '';
         this.settleFrame();
       },
@@ -12634,28 +14884,52 @@ ${insideObjects('.eb-paper.boxed')} {
        * on puts it on the page ready to be written in; turning it off takes it
        * away, and what was in it goes with it.
        */
-      toggleRegion(which) {
-        const c = canvas();
-        if (!c) { return; }
-        const on = which === 'header' ? !this.doc.paper.headerOn : !this.doc.paper.footerOn;
-        this.run(() => {
-          const sel = which === 'header' ? ':scope > header.eb-header' : ':scope > footer.eb-footer';
-          const had = c.querySelector(sel);
-          if (!on) {
-            if (had) { had.remove(); }
-          } else if (!had) {
-            const el = document.createElement(which === 'header' ? 'header' : 'footer');
-            el.className = which === 'header' ? 'eb-header' : 'eb-footer';
-            const p = document.createElement('p');
-            p.appendChild(document.createElement('br'));
-            el.appendChild(p);
-            if (which === 'header') { c.insertBefore(el, c.firstChild); } else { c.appendChild(el); }
-            placeCaretIn(p);
-          }
+      /**
+       * The running header or footer, opened for writing. The band stands in the
+       * paper's own margin on the first sheet, with the caret in it; what is
+       * written there is written on every page (or on the first only, as the
+       * writer chooses). Pressing the button again closes it, and a band left
+       * empty goes away with it.
+       */
+      editBand(which) {
+        if (this.runBandOn) {
+          this.runBandOn = false;
+          this.$nextTick(() => this.repaginate());
+          return;
+        }
+        this.runBandOn = true;
+        this.$nextTick(() => {
+          this.fillBands();
+          this.repaginate();
+          this.$nextTick(() => this.focusBand(which, which === 'header' ? 'c' : 'r'));
         });
-        if (which === 'header') { this.doc.paper.headerOn = on; } else { this.doc.paper.footerOn = on; }
-        this.touch();
-        this.$nextTick(() => { this.repaginate(); this.syncFrame(); });
+      },
+      /** The words as they were typed, put into the bands that are open. */
+      fillBands() {
+        const sheet = document.querySelector('.eb-sheets > .eb-sheet');
+        if (!sheet) { return; }
+        [['header', '.run.head.live'], ['footer', '.run.foot.live']].forEach(([which, sel]) => {
+          const row = sheet.querySelector(sel);
+          if (!row) { return; }
+          ['l', 'c', 'r'].forEach((k) => {
+            const cell = row.querySelector('.' + k);
+            if (cell) { cell.textContent = (this.doc.paper[which] || {})[k] || ''; }
+          });
+        });
+      },
+      /** The caret into one zone of a band on the first sheet. */
+      focusBand(which, slot) {
+        const wrap = document.querySelector('.eb-sheets > .eb-sheet');
+        const row = wrap ? wrap.querySelector('.run.' + (which === 'footer' ? 'foot' : 'head')) : null;
+        const cell = row ? row.querySelector('.' + slot) : null;
+        if (!cell) { return; }
+        cell.focus();
+        const r = document.createRange();
+        r.selectNodeContents(cell);
+        r.collapse(false);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
       },
       addShape(kind) {
         let made = null;
@@ -12974,8 +15248,12 @@ ${insideObjects('.eb-paper.boxed')} {
             && !el.classList.contains('eb-footer')
             && !el.classList.contains('eb-cont'));        // the same frame, carried on
         const groups = new Map();
+        const pile = this.pileLevels();
+        // A layer made but not yet used stands in the bar with nothing in it, so
+        // there is somewhere to drop the first thing.
+        this.extraLayers.forEach((n) => { if (!groups.has(n)) { groups.set(n, []); } });
         placed.forEach((el, i) => {
-          const level = Number(el.style.zIndex) || 0;
+          const level = pile.has(el) ? pile.get(el) : 0;
           if (!groups.has(level)) { groups.set(level, []); }
           const kind = objectKind(el);
           groups.get(level).push({
@@ -12983,15 +15261,26 @@ ${insideObjects('.eb-paper.boxed')} {
             // Only a thing standing on the paper has a place in the pile. Writing
             // in the flow is listed -- it is on the page -- but there is nothing
             // above or below it to swap with, so it is not dragged or raised.
-            movable: !!el.closest('.eb-anchor'),
+            movable: !!el.closest('.eb-anchor') || liftable(el),
             name: this.nameOfKind(kind),
             icon: this.iconOfKind(kind),
             text: (el.textContent || '').trim().slice(0, 24),
             chosen: el === frameEl,
           });
         });
-        this.layers = Array.from(groups.keys()).sort((a, b) => b - a)
-          .map((level) => ({ level: level, items: groups.get(level) }));
+        // The numbers shown are counted from the bottom of the pile, starting at
+        // nought, with the writing counted among them: put something behind the
+        // writing and the writing becomes layer 1, as a writer would expect. They
+        // are only what is shown -- rewriting the levels in the document itself
+        // just to look at it would change where things stand in the pile, and
+        // with them which of two overlapping things the writing flows around.
+        const levels = Array.from(groups.keys()).sort((a, b) => b - a);
+        const shown = new Map();
+        levels.slice().reverse().forEach((level, i) => { shown.set(level, i); });
+        this.layers = levels.map((level) => ({
+          level: level, n: shown.get(level), items: groups.get(level),
+          writing: level === 0,
+        }));
         layerEls = placed;
       },
       nameOfKind(kind) {
@@ -13012,13 +15301,429 @@ ${insideObjects('.eb-paper.boxed')} {
        * Dragging a row in the layer bar moves that object through the pile. The
        * whole pile is renumbered from the bottom afterwards, so the levels stay
        * one apart and the list means what it shows.
+       *
+       * Done with the pointer itself rather than with the browser's own drag: a
+       * dragged row changes what the bar shows as it moves, and a list that is
+       * redrawn under a native drag drops it. Held, moved, let go -- and the row
+       * lands where it is pointing.
        */
-      layerDragStart(id, e) {
-        this.dragLayer = id;
-        if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'layer'); }
+      layerGrab(id, e) {
+        if (e.button !== 0) { return; }
+        const x0 = e.clientX;
+        const y0 = e.clientY;
+        let moved = false;
+        const row = e.currentTarget;
+        const held = { x: x0, y: y0 };
+        // Held near the top or the bottom of the list, the list carries itself
+        // along, on a clock rather than on the pointer: a hand that has reached
+        // the edge stops moving, and a list that only scrolls when the pointer
+        // moves stops with it, a few rows short of where it was going.
+        const roll = window.setInterval(() => {
+          if (!moved) { return; }
+          const body = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-layers .body') : null;
+          if (!body) { return; }
+          const r = body.getBoundingClientRect();
+          if (held.x < r.left || held.x > r.right) { return; }
+          let by = 0;
+          if (held.y < r.top + 34) { by = -14; } else if (held.y > r.bottom - 34) { by = 14; }
+          if (!by) { return; }
+          const was = body.scrollTop;
+          body.scrollTop = was + by;
+          if (body.scrollTop !== was) { this.layerAim(held.x, held.y); }
+        }, 30);
+        const move = (ev) => {
+          held.x = ev.clientX;
+          held.y = ev.clientY;
+          if (!moved) {
+            if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 5) { return; }
+            moved = true;
+            this.dragLayer = id;
+            layerGhost = liftRow(row);
+            // From here on the row keeps the pointer, finger and pen as well as
+            // mouse: without it a touch that wanders off the row stops being
+            // sent here and the drag dies halfway. Taken only once the drag has
+            // really started -- held from the press itself, it swallows the
+            // plain click that chooses a row.
+            try { if (ev.pointerId !== undefined && row.setPointerCapture) { row.setPointerCapture(ev.pointerId); } } catch (err) { /* older browsers */ }
+          }
+          if (layerGhost) {
+            // Kept on the screen: the bar is at the right edge, so a copy placed
+            // to the right of the pointer would hang off the window.
+            const w = layerGhost.offsetWidth || 160;
+            layerGhost.style.left = Math.max(4, Math.min(ev.clientX + 12, window.innerWidth - w - 8)) + 'px';
+            layerGhost.style.top = Math.max(4, ev.clientY - 14) + 'px';
+          }
+          this.layerAim(ev.clientX, ev.clientY);
+        };
+        const up = (ev) => {
+          window.clearInterval(roll);
+          window.removeEventListener('pointermove', move, true);
+          window.removeEventListener('pointerup', up, true);
+          window.removeEventListener('pointercancel', up, true);
+          if (layerGhost) { layerGhost.remove(); layerGhost = null; }
+          if (!moved) { return; }
+          this.layerAim(ev.clientX, ev.clientY);
+          layerDropped = Date.now();
+          this.layerLet();
+        };
+        window.addEventListener('pointermove', move, true);
+        window.addEventListener('pointerup', up, true);
+        window.addEventListener('pointercancel', up, true);
       },
-      layerDragOver(id) { if (this.dragLayer >= 0) { this.dropLayer = id; } },
-      layerDragEnd() { this.dragLayer = -1; this.dropLayer = -1; },
+      /**
+       * Where the row would land if it were let go here. Whatever is under the
+       * pointer decides it -- a line between two layers, a layer's heading, or
+       * another thing's row -- so what the writer aims at is what happens. There
+       * is no working out from where in a row the pointer fell.
+       */
+      layerAim(x, y) {
+        this.dropLayer = -1;
+        this.dropLevel = null;
+        this.dropGap = null;
+        const at = document.elementFromPoint(x, y);
+        if (!at || !at.closest) { return; }
+        const line = at.closest('.eb-layers .gap');
+        if (line) {
+          this.dropGap = { level: Number(line.getAttribute('data-gap-level')), side: line.getAttribute('data-gap-side') };
+          return;
+        }
+        const band = at.closest('.eb-layers .glabel');
+        if (band) { this.dropLevel = Number(band.getAttribute('data-layer-level')); return; }
+        const row = at.closest('.eb-layers li[data-layer-row]');
+        if (!row) { return; }
+        const on = Number(row.getAttribute('data-layer-row'));
+        if (on !== this.dragLayer) { this.dropLayer = on; }
+      },
+      /**
+       * A layer itself picked up by its heading, with everything in it. Moving
+       * one thing through the pile is not the same as moving a layer: a writer
+       * who has put three things on one layer means to move the three together.
+       */
+      bandGrab(level, e) {
+        // The writing is a layer like any other and can be moved through the
+        // pile with them, so nought is a level, not a way of saying "none".
+        if (e.button !== 0 || !isFinite(Number(level))) { return; }
+        const x0 = e.clientX;
+        const y0 = e.clientY;
+        const band = e.currentTarget;
+        let moved = false;
+        const held = { x: x0, y: y0 };
+        const roll = window.setInterval(() => {
+          if (!moved) { return; }
+          const body = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-layers .body') : null;
+          if (!body) { return; }
+          const r = body.getBoundingClientRect();
+          if (held.x < r.left || held.x > r.right) { return; }
+          let by = 0;
+          if (held.y < r.top + 34) { by = -14; } else if (held.y > r.bottom - 34) { by = 14; }
+          if (!by) { return; }
+          const was = body.scrollTop;
+          body.scrollTop = was + by;
+          if (body.scrollTop !== was) { this.bandAim(held.x, held.y); }
+        }, 30);
+        const move = (ev) => {
+          held.x = ev.clientX;
+          held.y = ev.clientY;
+          if (!moved) {
+            if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 5) { return; }
+            moved = true;
+            this.dragBand = Number(level);
+            layerGhost = liftRow(band);
+            try { if (ev.pointerId !== undefined && band.setPointerCapture) { band.setPointerCapture(ev.pointerId); } } catch (err) { /* older browsers */ }
+          }
+          if (layerGhost) {
+            const w = layerGhost.offsetWidth || 160;
+            layerGhost.style.left = Math.max(4, Math.min(ev.clientX + 12, window.innerWidth - w - 8)) + 'px';
+            layerGhost.style.top = Math.max(4, ev.clientY - 14) + 'px';
+          }
+          this.bandAim(ev.clientX, ev.clientY);
+        };
+        const up = (ev) => {
+          window.clearInterval(roll);
+          window.removeEventListener('pointermove', move, true);
+          window.removeEventListener('pointerup', up, true);
+          window.removeEventListener('pointercancel', up, true);
+          if (layerGhost) { layerGhost.remove(); layerGhost = null; }
+          if (!moved) { return; }
+          this.bandAim(ev.clientX, ev.clientY);
+          layerDropped = Date.now();
+          const gap = this.dropGap;
+          if (gap) { this.moveBand(this.dragBand, gap.level, gap.side); }
+          this.layerDragEnd();
+        };
+        window.addEventListener('pointermove', move, true);
+        window.addEventListener('pointerup', up, true);
+        window.addEventListener('pointercancel', up, true);
+      },
+      /** A layer can only be dropped on a line between layers. */
+      bandAim(x, y) {
+        this.dropGap = null;
+        const at = document.elementFromPoint(x, y);
+        if (!at || !at.closest) { return; }
+        const line = at.closest('.eb-layers .gap');
+        if (!line) { return; }
+        this.dropGap = { level: Number(line.getAttribute('data-gap-level')), side: line.getAttribute('data-gap-side') };
+      },
+      /** A whole layer moved to the line it was dropped on, with all it holds. */
+      moveBand(band, level, side) {
+        this.dragBand = null;
+        this.dropGap = null;
+        if (band === null || Number(band) === Number(level)) { return; }
+        const list = this.slots();
+        const at = list.findIndex((sl) => sl.level === Number(band));
+        if (at < 0) { return; }
+        const moving = list.splice(at, 1)[0];
+        const mark = list.findIndex((sl) => sl.level === Number(level));
+        if (mark < 0) { return; }
+        list.splice(side === 'above' ? mark + 1 : mark, 0, moving);
+        history.push(true);
+        this.seat(list);
+        this.touch();
+        this.after();
+      },
+      /**
+       * A layer with nothing in it yet, above them all. It is only a place to
+       * put things until something is put in it -- there is nothing to write
+       * into the document until then -- so it is remembered here and not saved.
+       */
+      addLayer() {
+        const list = this.slots();
+        this.extraLayers.push((list.length ? list[list.length - 1].level : 0) + 1);
+        this.refreshLayers();
+      },
+      /** Everything that has to be redrawn once the pile has changed. */
+      after() {
+        // recount, not reflowWrap alone: moving a thing through the pile changes
+        // what the words run round, the words move the pages, and the pages move
+        // the thing -- so the placed objects have to be settled back on to their
+        // sheets afterwards. Without it, a thing dropped on the top line or on a
+        // heading was left lying across the fold between two pages. settleFrame
+        // does this; after() did not, and every drop in the layer bar came
+        // through here. Measured: 7 of 25 drops left something across a page.
+        this.recount();
+        this.$nextTick(() => { this.reflowWrap(); this.syncFrame(); this.refreshLayers(); this.refreshPreview(); });
+      },
+      /** Let go: whatever the row was pointing at is what happens. */
+      layerLet() {
+        const gap = this.dropGap;
+        const level = this.dropLevel;
+        const onto = this.dropLayer;
+        if (gap) { this.layerDropBetween(gap.level, gap.side); } else if (level !== null) { this.layerDropOnLevel(level); } else if (onto >= 0) { this.layerDrop(onto); }
+        this.layerDragEnd();
+      },
+      /** The thing taken out of the layer it is in, wherever that was. */
+      liftFrom(list, el) {
+        list.forEach((sl) => { sl.els = sl.els.filter((n) => n !== el); });
+        return list;
+      },
+      /**
+       * Dropped on the line between two layers: the thing stands there in the
+       * pile from then on. Dropped below the writing, it stands behind the words
+       * -- which is a layer under the text, and what a negative level is for.
+       */
+      layerDropBetween(level, side) {
+        const from = layerEls[this.dragLayer];
+        this.dragLayer = -1;
+        this.dropLayer = -1;
+        this.dropLevel = null;
+        this.dropGap = null;
+        if (!from || !from.closest) { return; }
+        // A thing standing in the run of the writing has no place in the pile
+        // yet. Dropped on a line between layers, it is lifted out of the text
+        // first -- being put on a layer is exactly what that means -- and it is
+        // lifted where it stands, so nothing moves on the page but its level.
+        // Only the writing itself is refused: a paragraph has nowhere else to be.
+        const flow = !from.closest('.eb-anchor');
+        if (flow && !liftable(from)) { return; }
+        if (this.slots().findIndex((sl) => sl.level === Number(level)) < 0) { return; }
+        history.push(true);
+        if (flow) {
+          this.freeInPlace(from);
+          // Given a level of its own at once, so lifting it does not renumber
+          // everything else while the drop is still being worked out.
+          from.style.zIndex = '1';
+        }
+        const list = this.liftFrom(this.slots(), from);
+        const mark = list.findIndex((sl) => sl.level === Number(level));
+        if (mark < 0) { return; }
+        list.splice(side === 'above' ? mark + 1 : mark, 0, { level: null, els: [from] });
+        this.seat(list);
+        this.touch();
+        this.after();
+      },
+      /** Dropped on a layer's heading: the thing joins that layer. */
+      layerDropOnLevel(level) {
+        const from = layerEls[this.dragLayer];
+        this.dragLayer = -1;
+        this.dropLayer = -1;
+        this.dropLevel = null;
+        if (!from || !from.closest) { return; }
+        const flow = !from.closest('.eb-anchor');
+        // Dropped on the writing's own heading, a thing goes back into the run of
+        // the words, where its peg stood. That is the way back: without it, a
+        // thing once lifted onto a layer could never be put in the text again.
+        if (Number(level) === 0) {
+          if (flow) { return; }
+          history.push(true);
+          from.style.removeProperty('z-index');
+          setObjectFree(from, false);
+          this.touch();
+          this.after();
+          return;
+        }
+        if (flow && !liftable(from)) { return; }
+        if (this.slots().findIndex((sl) => sl.level === Number(level)) < 0) { return; }
+        history.push(true);
+        if (flow) { this.freeInPlace(from); from.style.zIndex = '1'; }
+        const list = this.slots();
+        const seat = list.find((sl) => sl.level === Number(level));
+        if (!seat) { return; }
+        this.liftFrom(list, from);
+        seat.els.push(from);
+        seat.made = true;
+        this.seat(list);
+        this.touch();
+        this.after();
+      },
+      /**
+       * A click on a row chooses the thing -- unless the click is the end of a
+       * drag that finished on the row it started on, which is not a choice.
+       */
+      layerPick(id) {
+        if (Date.now() - layerDropped < 400) { return; }
+        this.chooseLayer(id);
+      },
+      /**
+       * The levels kept in order and without gaps: delete the only thing in layer
+       * 2 and what was layer 3 becomes layer 2, rather than leaving a number with
+       * nothing under it. Done after a change to the pile, never while a document
+       * is merely being looked at -- rewriting the levels on opening would mark
+       * the document as written in and save it.
+       */
+      tidyLayers() {
+        const c = canvas();
+        if (!c) { return; }
+        this.seat(this.slots());
+      },
+      /**
+       * What level each thing standing on the paper is really at. A thing drawn
+       * on the page has no level of its own until it is given one -- the browser
+       * paints those in the order they were written, underneath anything that
+       * does have one. So they are each a layer, counted from the bottom in that
+       * order, with the numbered ones lifted to sit above them. Read only: this
+       * says what the pile already looks like, it does not change it.
+       */
+      pileLevels() {
+        const c = canvas();
+        const pile = c ? Array.from(c.querySelectorAll('.eb-anchor > *')) : [];
+        const zOf = (n) => Number(n.style.zIndex) || 0;
+        const bare = pile.filter((n) => zOf(n) === 0);
+        const lift = bare.length;
+        const map = new Map();
+        // Below the writing, the writing itself, then the things drawn on the
+        // page in the order they were written, then the ones with a level of
+        // their own -- which is the order a browser paints them in.
+        bare.forEach((n, i) => { map.set(n, i + 1); });
+        pile.forEach((n) => {
+          const z = zOf(n);
+          if (z > 0) { map.set(n, z + lift); } else if (z < 0) { map.set(n, z); }
+        });
+        return map;
+      },
+      /**
+       * The pile as a row of layers from the bottom up, the writing among them.
+       * The writing is a layer like any other -- things can stand behind it as
+       * well as in front of it -- and it is the one that is numbered 0 until
+       * something is put below it.
+       */
+      slots() {
+        const lv = this.pileLevels();
+        const by = new Map();
+        lv.forEach((level, el) => {
+          if (!by.has(level)) { by.set(level, []); }
+          by.get(level).push(el);
+        });
+        this.extraLayers.forEach((n) => { if (!by.has(n)) { by.set(n, []); } });
+        if (!by.has(0)) { by.set(0, []); }
+        return Array.from(by.keys()).sort((a, b) => a - b)
+          .map((level) => ({ level: level, els: by.get(level) }));
+      },
+      /**
+       * The layers written down in the order given: the writing keeps 0, what is
+       * over it counts up and what is under it counts down. Nothing is left with
+       * a number that has nothing in it, except a layer the writer has just made
+       * and not yet used.
+       */
+      seat(list) {
+        const rest = list.filter((s) => s.els.length || s.level === 0 || s.made);
+        const flow = rest.findIndex((s) => s.level === 0 && !s.els.length);
+        const kept = [];
+        rest.forEach((s, i) => {
+          const level = i - (flow < 0 ? 0 : flow);
+          s.els.forEach((el) => { this.putInLayer(el, level); });
+          if (!s.els.length && level !== 0) { kept.push(level); }
+        });
+        this.extraLayers = kept;
+      },
+      /**
+       * The same levels, written down. Done at the moment the writer moves
+       * something through the pile -- never merely for looking at it -- so that
+       * from then on every thing on the paper has a level that can be moved.
+       */
+      settlePile() {
+        this.seat(this.slots());
+      },
+      /**
+       * Move a thing through the pile -- to the front, to the back, or a layer at
+       * a time -- through the same row of layers the layer bar works in.
+       *
+       * Writing the levels by hand, which is what this did, made room underneath
+       * by adding one to everything else. That left things sharing a level and
+       * lost the order between them: measured on three objects drawn with the
+       * tools, sending one to the back gave the other two level 2 apiece, and
+       * which of those two came out on top was from then on the browser's
+       * business -- for the painting AND for the wrap, which reads the same
+       * numbers. slots()/seat() keep every layer to itself.
+       */
+      moveInPile(el, where) {
+        if (!el) { return; }
+        const list = this.slots();
+        const at = list.findIndex((s) => s.els.indexOf(el) >= 0);
+        if (at < 0) { return; }
+        const flow = list.findIndex((s) => s.level === 0 && !s.els.length);
+        const alone = list[at].els.length === 1;
+        list[at].els = list[at].els.filter((n) => n !== el);
+        if (where === 'front') {
+          list.push({ level: 0, els: [el], made: true });
+        } else if (where === 'back') {
+          // Behind every other object, but still in front of the writing: that
+          // is what the button has always meant here. Going behind the writing
+          // is what the layer bar is for.
+          list.splice(flow < 0 ? 0 : flow + 1, 0, { level: 0, els: [el], made: true });
+        } else {
+          // A step. Alone in its layer, it changes places with the layer next
+          // door; sharing one, it joins the layer next door instead.
+          const to = at + (where > 0 ? 1 : -1);
+          const floor = flow < 0 ? 0 : flow + 1;
+          if (to < floor || to >= list.length) { list[at].els.push(el); return; }
+          if (alone) {
+            const mine = list[at];
+            mine.els = [el];
+            list[at] = list[to];
+            list[to] = mine;
+          } else {
+            list[to].els.push(el);
+          }
+        }
+        this.seat(list);
+      },
+      /** Put a thing standing on the page into a layer of a given level. */
+      putInLayer(el, level) {
+        if (!el) { return; }
+        if (level) { el.style.zIndex = String(level); } else { el.style.removeProperty('z-index'); }
+        if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+      },
+      layerDragEnd() { this.dragLayer = -1; this.dropLayer = -1; this.dropLevel = null; this.dropGap = null; this.dragBand = null; },
       layerDrop(id) {
         const from = layerEls[this.dragLayer];
         const onto = layerEls[id];
@@ -13031,6 +15736,27 @@ ${insideObjects('.eb-paper.boxed')} {
         // through the document, which is the other thing the bar shows: the page
         // in the order it is written. Dragging a row used to do nothing at all
         // unless both ends of it were placed by hand, which is most of the bar.
+        // Dropped on the row of a thing that stands on the paper, something from
+        // the run of the writing joins that thing's layer: it is lifted out of
+        // the text where it stands, and the two are at one level from then on.
+        // Without this, dropping a row on a row could only shuffle the writing
+        // about -- the one gesture a writer reaches for first, doing nothing.
+        const standing = (el) => !!(el && el.closest && el.closest('.eb-anchor'));
+        if (!standing(from) && standing(onto) && liftable(from)) {
+          history.push(true);
+          this.freeInPlace(from);
+          from.style.zIndex = '1';
+          const lifted = this.slots();
+          const room = lifted.find((sl) => sl.els.indexOf(onto) >= 0);
+          if (room) {
+            this.liftFrom(lifted, from);
+            room.els.push(from);
+            this.seat(lifted);
+          }
+          this.touch();
+          this.after();
+          return;
+        }
         const pile = layerEls.filter((el) => el && el.closest('.eb-anchor'));
         if (pile.indexOf(from) < 0 || pile.indexOf(onto) < 0) {
           const fromHost = objectFree(from) ? from.parentNode : from;
@@ -13048,20 +15774,18 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settleFrame();
           return;
         }
+        // Dropped on another thing's row, it joins that thing's layer: the two
+        // stand at the same level from then on. The order in the pile is changed
+        // by dropping on a line between layers instead.
+        const list = this.slots();
+        const seat = list.find((sl) => sl.els.indexOf(onto) >= 0);
+        if (!seat) { return; }
         history.push(true);
-        // Work in the order the list shows -- top of the pile first -- so that
-        // dropping a row on to the top row puts it on top, and on to the bottom
-        // row puts it at the bottom, which is what the hand meant either way.
-        const top = pile.slice().sort((a, b) => stackRank(b) - stackRank(a));
-        const wasAt = top.indexOf(from);
-        const ontoAt = top.indexOf(onto);
-        top.splice(wasAt, 1);
-        const nowAt = top.indexOf(onto);
-        top.splice(wasAt < ontoAt ? nowAt + 1 : nowAt, 0, from);
-        // Renumbered from the bottom, so the levels stay one apart.
-        top.slice().reverse().forEach((el, i) => { el.style.zIndex = String(i + 1); });
+        this.liftFrom(list, from);
+        seat.els.push(from);
+        this.seat(list);
         this.touch();
-        this.$nextTick(() => { this.reflowWrap(); this.syncFrame(); this.refreshLayers(); this.refreshPreview(); });
+        this.after();
       },
       /**
        * Dragging a page in the page bar moves everything that stands on it --
@@ -13121,14 +15845,6 @@ ${insideObjects('.eb-paper.boxed')} {
         el.scrollIntoView({ block: 'center' });
         this.$nextTick(() => { this.syncFrame(); this.refreshLayers(); });
       },
-      raiseLayer(id, dir) {
-        const el = layerEls[id];
-        if (!el || !el.parentNode || !el.closest('.eb-anchor')) { return; }
-        history.push(true);
-        restack(el, dir);
-        this.touch();
-        this.$nextTick(() => { this.reflowWrap(); this.syncFrame(); this.refreshLayers(); });
-      },
       /**
        * A plan of each page: the writing as grey bars, the objects as outlines,
        * placed from their own measurements. Redrawn whenever the page settles.
@@ -13143,6 +15859,31 @@ ${insideObjects('.eb-paper.boxed')} {
        * copies of a hundred-page document is not a preview, it is a stall.
        */
       /** Painted a moment after the scrolling stops, not on every pixel of it. */
+      /**
+       * Everything the editor draws on top of the page, off at once -- and back
+       * on again as it was. A writer asked to believe that the screen is the
+       * paper has to be able to SEE the paper, with no boundaries, no boxes, no
+       * grid and no placeholders in the way.
+       */
+      showAsPrinted() {
+        if (this.asPrinted) {
+          const was = this.wasShowing || {};
+          this.guides = !!was.guides;
+          this.boxes = !!was.boxes;
+          this.grid = !!was.grid;
+          this.ruler = !!was.ruler;
+          this.asPrinted = false;
+          return;
+        }
+        this.wasShowing = { guides: this.guides, boxes: this.boxes, grid: this.grid, ruler: this.ruler };
+        this.guides = false;
+        this.boxes = false;
+        this.grid = false;
+        this.ruler = false;
+        this.asPrinted = true;
+        this.frame.on = false;
+        this.frame.bar = false;
+      },
       paintSoon() {
         clearTimeout(this._miniTimer);
         this._miniTimer = setTimeout(() => this.paintPreview(), 120);
@@ -13372,11 +16113,14 @@ ${insideObjects('.eb-paper.boxed')} {
           this.frame.bar = true;
         } else if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
         this.ctx.frame = !!obj;
+        // Whether there is any writing in it: what can be cleared depends on it.
+        this.ctx.frameWords = !!(obj && String(obj.textContent || '').trim());
         this.syncFrame();
         this.ctx.text = !obj && !!textRange;
         this.ctx.link = !!linkAt(at);
         this.ctx.list = !!(topBlockOf(at) && closestMatching(at, { tag: 'LI' }));
         this.ctx.selection = !!(range && !range.collapsed);
+        this.ctx.writingRow = false;
         this.placeCtx(e.clientX, e.clientY);
       },
       /** Put the menu on the screen where the pointer is, and keep it on it. */
@@ -13421,11 +16165,18 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.table = !!(el.nodeName === 'TABLE');
         this.ctx.image = !!img;
         this.ctx.captionPlace = img ? captionPlace(img) : '';
-        this.ctx.frame = true;
-        this.ctx.text = false;
+        // The menu has to match the row. A paragraph in the run of the writing is
+        // not a frame: offering it 枠を削除, 折り返し, 重ね順 and アンカー gave a
+        // writer four commands that mean nothing on a paragraph and one that
+        // deletes it through the door meant for objects.
+        const placed = !!(el.closest && el.closest('.eb-anchor'))
+          || !!(el.matches && el.matches(OBJECT_SEL));
+        this.ctx.frame = placed;
+        this.ctx.text = !placed;
         this.ctx.link = false;
         this.ctx.list = false;
         this.ctx.selection = false;
+        this.ctx.writingRow = !placed;
         this.placeCtx(e.clientX, e.clientY);
       },
       /**
@@ -13446,6 +16197,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.link = false;
         this.ctx.list = false;
         this.ctx.selection = false;
+        this.ctx.writingRow = false;
         this.placeCtx(e.clientX, e.clientY);
       },
       pageCtx(e, n) {
@@ -13462,16 +16214,91 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.link = false;
         this.ctx.list = false;
         this.ctx.selection = false;
+        this.ctx.writingRow = false;
         this.placeCtx(e.clientX, e.clientY);
       },
       /** Everything standing on a page, taken away. */
+      /**
+       * The things DRAWN on this page and pegged outside any frame. A page can be
+       * made by a picture or a shape standing on it and have no writing that
+       * BEGINS on it -- measured, a document of 34 sheets with all 37 of its
+       * blocks beginning on the first -- and then blocksOfPage finds nothing and
+       * every command on the page bar goes quiet. On such a page these are what
+       * "this page" means. Blocks that merely reach across the page are left
+       * alone: they belong to the pages they began on.
+       */
+      /**
+       * The pegs whose things are drawn on this page.
+       *
+       * Every peg in the document, not only the ones standing at the top of it:
+       * a thing dropped over a frame is pegged inside that frame, and it stands
+       * on a page exactly like any other. Asked only about the top level, this
+       * answered "nothing is on page three" about the page the owner's ellipse
+       * was drawn on, and "duplicate this page" did nothing at all -- silently.
+       * And every one of a peg's things, not only the first: one peg can carry
+       * more than one.
+       */
+      objectsOnPage(n) {
+        const c = canvas();
+        const sheets = sheetsOnScreen();
+        const sheet = sheets[n - 1];
+        if (!c || !sheet || !sheet.getBoundingClientRect) { return []; }
+        const sr = sheet.getBoundingClientRect();
+        return Array.from(c.querySelectorAll('.eb-anchor')).filter((el) => {
+          return Array.from(el.children).some((kid) => {
+            if (!kid.getBoundingClientRect) { return false; }
+            const r = kid.getBoundingClientRect();
+            if (!r.height && !r.width) { return false; }
+            return r.top >= sr.top - 2 && r.top <= sr.bottom + 2;
+          });
+        });
+      },
       deletePage(n) {
-        const blocks = this.blocksOfPage(n);
+        let blocks = this.blocksOfPage(n);
+        if (!blocks.length) { blocks = this.objectsOnPage(n); }
+        // "Delete everything ON this page" -- the writing that fell here, not the
+        // page. A fold is the EDGE of a page, not a thing standing on it, and the
+        // folds that come after the last thing on this page are what BEGIN the
+        // pages after it. Taking them away takes those pages with them: measured
+        // on a four-page document, emptying page two left two pages, because
+        // blocksOfPage(2) came back as [the writing, fold, fold] and both folds
+        // belonged to the pages that follow.
+        blocks = blocks.filter((el) => !(el.classList
+          && (el.classList.contains('eb-pagebreak') || el.classList.contains('eb-blankpage'))));
         if (!blocks.length) { return; }
         this.closeCtx();
         const c = canvas();
         history.push(true);
-        blocks.forEach((el) => { if (el.parentNode) { el.parentNode.removeChild(el); } });
+        // "Everything ON this page" is what is ON it -- not a whole block that
+        // happens to begin here and run past the foot. A frame that starts on
+        // page one and carries on to page two is one block: taking it away to
+        // empty page one took page two's half with it, and the writer, who had
+        // only asked for a page to be emptied, lost writing that was never on it.
+        // Measured on the owner's own document, 2026-09-08: emptying page one
+        // took all 1305 characters, the whole document.
+        //
+        // So a block that spills past the foot is cut at the foot first, and only
+        // the part that was on this page goes. One that cannot be cut there --
+        // a picture, a thing with nothing to cut between -- is left alone: doing
+        // nothing is a great deal better than taking away what was not asked for.
+        const sheet0 = sheetsOnScreen()[0];
+        const z = this.frameZoom() || 1;
+        const pageH = sheet0 ? sheet0.getBoundingClientRect().height / z : 0;
+        const top0 = sheet0 ? sheet0.getBoundingClientRect().top : 0;
+        const foot = top0 + (n * pageH * z);
+        const kept = [];
+        blocks.forEach((el) => {
+          if (!el.parentNode) { return; }
+          const r = el.getBoundingClientRect();
+          if (!pageH || r.bottom <= foot + 1) { el.parentNode.removeChild(el); return; }
+          const tail = carveAt(el, (foot - r.top) / z);
+          if (tail) { el.parentNode.removeChild(el); return; }
+          kept.push(el);
+        });
+        if (kept.length) {
+          this.notify(this.t('{n} of them run on past this page, so they were left as they are',
+            { n: kept.length }));
+        }
         // A document with nothing in it cannot be written in: leave a line.
         if (!c.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre')) {
           const p = document.createElement('p');
@@ -13485,17 +16312,54 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The same page again, put after it. */
       duplicatePage(n) {
-        const blocks = this.blocksOfPage(n);
+        let blocks = this.blocksOfPage(n);
+        // A page whose whole content is things STANDING on it: nothing in the
+        // writing begins there, so nothing pushes a new sheet open, and the
+        // copies carry the very coordinates of the things they were copied from.
+        // Measured on a copy of the owner's document: page three duplicated,
+        // three sheets before and three after, with two rectangles in one spot.
+        // Such a page needs a fold of its own, and the copies moved down by a
+        // sheet, to become a page of its own.
+        if (!blocks.length) { blocks = this.objectsOnPage(n); }
         if (!blocks.length) { return; }
-        this.closeCtx();
+        // Nothing but pegs: every block on this page is a thing standing on it.
+        const standing = blocks.every((el) => el.classList && el.classList.contains('eb-anchor'));
         history.push(true);
         const last = blocks[blocks.length - 1];
         let after = last;
+        // A page of nothing but placed things used to be given a fold of its own,
+        // because a thing could not open the next page by standing on it. It can
+        // now (O8: a thing may stand one sheet past the last sheet that holds
+        // anything, and that sheet then exists), so the fold is not needed -- and
+        // the owner, 2026-09-08, on marks appearing from a page command he did
+        // not ask for one with: 「ページを挿入しただけなのに、なぜ、改ページになる？」
+        // The copies are moved down a sheet below; the paper follows them.
+        const copies = [];
         blocks.forEach((el) => {
           const copy = el.cloneNode(true);
           after.parentNode.insertBefore(copy, after.nextSibling);
           after = copy;
+          copies.push(copy);
         });
+        if (standing) {
+          const g = pageGeometry();
+          // Only a thing that already carries an offset of its own is moved by
+          // it: writing one on a thing that had none tore a picture out of the
+          // writing it belonged to, once before.
+          if (g) {
+            // Every thing on the peg, not only the first: one peg can carry more
+            // than one, and the ones after the first were left where they were --
+            // sitting exactly on top of the things they were copied from.
+            copies.forEach((an) => {
+              Array.from(an.children).forEach((kid) => {
+                if (!kid.style || !kid.style.top) { return; }
+                kid.style.top = round1((lengthPx(kid.style.top) + g.usable) * MM) + 'mm';
+                kid.removeAttribute('data-free-top');
+                kid.removeAttribute('data-free-peg');
+              });
+            });
+          }
+        }
         this.touch();
         this.settleFrame();
       },
@@ -13505,37 +16369,214 @@ ${insideObjects('.eb-paper.boxed')} {
        * empty line with a fold on either side of it: the line has a sheet to
        * itself, and whatever came after it starts on the sheet after that.
        */
+      /**
+       * A sheet is added by folding the writing, so the fold has to go somewhere in
+       * the writing. Asking only for the blocks that BEGIN on this page was too
+       * narrow: a page made by a picture or a carried-on frame standing over it has
+       * none, and both commands returned without a word. Measured, a document of 34
+       * sheets with all 37 of its blocks beginning on the first: every page but the
+       * first was deaf to "add a page above" and "add a page below".
+       *
+       * So the fold is put against the nearest block instead -- the last one at or
+       * before this page for a sheet below, the first one at or after it for a sheet
+       * above -- and at the end of the writing when there is nothing after it.
+       */
       addPage(n, below) {
         const c = canvas();
-        const blocks = this.blocksOfPage(n);
-        if (!c || !blocks.length) { return; }
+        if (!c) { return; }
+        // "A page above this one" is the same thing as "a page below the one
+        // before it": a blank sheet goes in between the two, and the pages before
+        // it do not move. Said as "above", the fold was put in front of whatever
+        // stands on this page -- and when that is a frame carried on from the page
+        // before, the front of it is on the EARLIER page, so page one shifted.
+        // Measured on test.html: page 2's "add a page above" moved page 1.
+        if (!below && n > 1) { n -= 1; below = true; }
+        const skip = (el) => el.classList && (el.classList.contains('eb-pagespacer')
+          || el.classList.contains('eb-header') || el.classList.contains('eb-footer'));
+        const flow = Array.from(c.children).filter((el) => !skip(el));
+        if (!flow.length) { return; }
+        const sheet = sheetsOnScreen()[0];
+        const z = this.frameZoom() || 1;
+        const pageH = sheet ? sheet.getBoundingClientRect().height / z : 0;
+        const top0 = sheet ? sheet.getBoundingClientRect().top : 0;
+        const pageOf = (el) => {
+          if (!pageH) { return 1; }
+          let r = el.getBoundingClientRect();
+          if (!r.height && !r.width) {
+            const kid = el.firstElementChild;
+            if (!kid) { return 1; }
+            r = kid.getBoundingClientRect();
+          }
+          return Math.floor(((r.top - top0) / z) / pageH) + 1;
+        };
+        // A frame carried on to the next page is ONE frame in two pieces. A fold
+        // dropped between them tears it apart: measured on test.html, the summary
+        // frame came out as frame / blank page / continuation, with the writing
+        // cut in half. So the fold is moved outside the whole chain, never into
+        // the middle of one.
+        const outside = (el, forward) => {
+          if (!el) { return el; }
+          let frame = null;
+          try { frame = hungOn(el) || el; } catch (e) { frame = el; }
+          if (!frame || (!isCont(frame) && !chainable(frame))) { return el; }
+          let lead = frame;
+          try { lead = chainLead(frame) || frame; } catch (e) { lead = frame; }
+          let all = [lead];
+          try { all = chainOf(lead) || [lead]; } catch (e) { all = [lead]; }
+          const edge = forward ? all[all.length - 1] : all[0];
+          let host = edge;
+          try { host = chainHost(edge) || edge; } catch (e) { host = edge; }
+          return (host && host.parentNode === c) ? host : el;
+        };
+        let ref = null;
+        if (below) {
+          let last = null;
+          flow.forEach((el) => { if (pageOf(el) <= n) { last = el; } });
+          ref = last ? outside(last, true).nextSibling : flow[0];
+        } else {
+          const first = flow.find((el) => pageOf(el) >= n) || null;
+          ref = first ? outside(first, false) : null;
+        }
         this.closeCtx();
         history.push(true);
-        const ref = below ? blocks[blocks.length - 1].nextSibling : blocks[0];
-        const fold = () => {
-          const d = document.createElement('div');
-          d.className = 'eb-pagebreak';
-          d.setAttribute('data-label', this.t('Page break'));
-          return d;
-        };
+        // One page asked for, one thing put in the document, and that thing IS a
+        // page -- it breaks on both sides, so it stands on a sheet of its own
+        // wherever it is put, the very front included.
+        //
+        // Before this, a page was asked for with TWO page breaks, and the writer
+        // -- who had asked for a page -- found two marks he had never written.
+        // The owner said so: "adding a page should not put a page break in".
+        // They did not work either. Measured on a plain two-page document, one
+        // press of each command:
+        //   page 1, above:  editor 3 sheets, printer 2   (the blank front page
+        //                   never printed: a break BEFORE the first thing in a
+        //                   document has nothing to break from)
+        //   page 2, above:  editor 4 sheets, printer 3
+        //   page 1, below:  editor 4 sheets, printer 3
+        //   page 2, below:  editor 4 sheets, printer 3
+        // -- one press, two sheets, and the screen and the paper never agreeing.
+        //
+        // Nothing is written on it. The owner's decision, in his words: "do not
+        // make a paragraph on a new page".
+        // 足したページには、書くための行を1つ置く。Word も Writer も、白紙のページに
+        // 段落を1つ持たせる。持たせないと、そのページをクリックしても書けない ――
+        // 実測で、足したページの真ん中をクリックして打った5文字が、別のページの段落に
+        // 入った。
+        //
+        // オーナーの 2026-09-04 のご指示は「**既に画像があるのに**勝手に段落が作られている」
+        // に続く「勝手に新しいページに段落を作るな」だった。**中身のあるページに勝手に足すな**
+        // という意味であって、書き手が自分で頼んだ白紙のページの話ではない。
+        // 私はこれを「白紙には何も置くな」と読み替え、その読み替えを根拠に作りを決めていた。
+        const blank = document.createElement('div');
+        blank.className = 'eb-blankpage';
         const line = document.createElement('p');
         line.appendChild(document.createElement('br'));
-        [fold(), line, fold()].forEach((el) => { c.insertBefore(el, ref); });
-        placeCaretIn(line);
+        blank.appendChild(line);
+        c.insertBefore(blank, ref);
+        // A thing standing on the page OUTSIDE any frame goes down with the page.
+        // One inside a frame is carried by the frame and must not be touched: the
+        // frame does not move, so neither does it. And only a thing that already
+        // carries an offset of its own is moved by its offset -- writing one on a
+        // thing that had none tore a picture out of the writing it belonged to.
+        // Measured on test.html, both ways.
+        const pageOfNow = (r) => {
+          let pg = 0;
+          sheetsOnScreen().forEach((sh, i) => {
+            const sr = sh.getBoundingClientRect();
+            if (r.top >= sr.top - 2 && r.top <= sr.bottom + 2) { pg = i + 1; }
+          });
+          return pg;
+        };
+        const boxes = Array.from(c.querySelectorAll('div.eb-frame, aside.eb-box'))
+          .map((f) => f.getBoundingClientRect());
+        const inABox = (r) => boxes.some((f) => r.top >= f.top - 1 && r.bottom <= f.bottom + 1
+          && r.left >= f.left - 1 && r.right <= f.right + 1);
+        const target = n + 1;
+        // A sheet put in at the very START carries the whole of the writing down
+        // with it -- pegs and all -- so nothing needs moving by hand. Moving them
+        // anyway sent them down TWICE: the shape standing outside the frame went
+        // from page 2 to page 4 and the document grew a sheet to hold it.
+        // Measured on a copy of test.html.
+        // A thing whose PEG stands after the fold goes down with the writing of
+        // its own accord -- the peg is in the flow, and the fold pushed the flow.
+        // Adding a page to its offset as well sends it down twice. This was
+        // guarded by measuring the page again afterwards and letting off anything
+        // that had already moved, but the measuring was done before the sheets
+        // had been laid out again, so it saw the old page and shifted anyway.
+        // Measured on a copy of the owner's document: "add a page above" twice on
+        // page three, and the things from pages two and three came out together
+        // on page five. Where the peg stands is a question about the document,
+        // not about the screen, so it is asked of the document.
+        const movesItself = (peg) => {
+          if (!ref || !peg || !peg.compareDocumentPosition) { return false; }
+          if (peg === ref) { return true; }
+          return !!(peg.compareDocumentPosition(ref) & 2);
+        };
+        const movers = !below ? [] : Array.from(c.querySelectorAll('.eb-anchor > *')).filter((el) => {
+          if (!el.style || !el.style.top) { return false; }
+          const r = el.getBoundingClientRect();
+          if (inABox(r)) { return false; }
+          if (movesItself(el.parentNode)) { return false; }
+          return pageOfNow(r) >= target;
+        });
         this.touch();
         this.settleFrame();
-        this.$nextTick(() => this.goToPage(below ? n + 1 : n));
+        this.$nextTick(() => {
+          const g = pageGeometry();
+          let shifted = false;
+          if (g) {
+            movers.forEach((el) => {
+              if (!el.parentNode || !el.style.top) { return; }
+              el.style.top = round1((lengthPx(el.style.top) + g.usable) * MM) + 'mm';
+              el.removeAttribute('data-free-top');
+              shifted = true;
+            });
+          }
+          if (shifted) { this.touch(); this.settleFrame(); }
+          this.$nextTick(() => this.goToPage(target));
+        });
       },
       /** A fold put in front of the page, so it starts on a sheet of its own. */
       breakBeforePage(n) {
-        const blocks = this.blocksOfPage(n);
-        if (!blocks.length) { return; }
-        this.closeCtx();
+        const c = canvas();
+        if (!c) { return; }
+        let first = this.blocksOfPage(n)[0] || null;
+        if (!first) {
+          // Nothing BEGINS on this page. The fold goes in front of the first thing
+          // that stands on it or on any page after it -- the same "nearest block"
+          // rule that made "add a page" work again.
+          const sheets = sheetsOnScreen();
+          const sheet = sheets[n - 1];
+          if (sheet && sheet.getBoundingClientRect) {
+            const sr = sheet.getBoundingClientRect();
+            first = Array.from(c.children).find((el) => {
+              if (el.classList && (el.classList.contains('eb-pagespacer')
+                || el.classList.contains('eb-header') || el.classList.contains('eb-footer'))) { return false; }
+              let r = el.getBoundingClientRect();
+              // An anchor is a peg of no HEIGHT, but it is as wide as the column,
+              // so a test for "no size at all" never fires on one and it is read
+              // at the top of the document instead of where the thing hanging off
+              // it is drawn. Measured: five anchors, every one of them counted as
+              // page 1, on a document of five sheets.
+              if (el.classList && el.classList.contains('eb-anchor')) {
+                const kid = el.firstElementChild;
+                if (!kid) { return false; }
+                r = kid.getBoundingClientRect();
+              } else if (!r.height && !r.width) {
+                const kid = el.firstElementChild;
+                if (!kid) { return false; }
+                r = kid.getBoundingClientRect();
+              }
+              return r.top >= sr.top - 2;
+            }) || null;
+          }
+        }
+        if (!first || !first.parentNode) { return; }
         history.push(true);
         const br = document.createElement('div');
         br.className = 'eb-pagebreak';
         br.setAttribute('data-label', this.t('Page break'));
-        blocks[0].parentNode.insertBefore(br, blocks[0]);
+        first.parentNode.insertBefore(br, first);
         this.touch();
         this.settleFrame();
       },
@@ -13732,10 +16773,39 @@ ${insideObjects('.eb-paper.boxed')} {
         };
         return names[kind] || this.t('Frame');
       },
-      /** What a slot of the running header says, as the file will have it. */
-      runSay(which, slot) {
+      /** What a slot of the running header says on a given sheet -- the page's own
+       *  number included, which is what the printer's counter will say there. */
+      runSay(which, slot, page) {
         const paper = normalisePaper(this.doc.paper);
-        return runText((paper[which] || {})[slot] || '', runAbout(this.doc));
+        const about = runAbout(this.doc);
+        about.page = page || 1;
+        about.pages = this.pageCount || 1;
+        return runText((paper[which] || {})[slot] || '', about);
+      },
+      hasBand(which) {
+        const b = (this.doc.paper || {})[which] || {};
+        return !!(b.l || b.c || b.r);
+      },
+      /** Typed into a band: it is the paper's setting that is being written. */
+      runTyped(which, slot, ev) {
+        const text = String(ev.target.textContent || '').replace(/[\r\n<>]/g, '').slice(0, 120);
+        this.doc.paper[which][slot] = text;
+        this.touch();
+      },
+      runLeft(which, slot, ev) {
+        this.runTyped(which, slot, ev);
+        this.$nextTick(() => this.repaginate());
+      },
+      /** The deepest band this document's margins allow, in millimetres. */
+      runMax(which) {
+        const m = (this.doc.paper && this.doc.paper.margin) || {};
+        return Math.max(3, Math.round(((which === 'footer' ? m.bottom : m.top) || 0) - 3));
+      },
+      /** Whether the band is drawn on that sheet: every page, or the first only. */
+      showsRun(which, page) {
+        const band = (this.doc.paper || {})[which] || {};
+        if (!(band.l || band.c || band.r)) { return false; }
+        return band.on === 'first' ? page === 1 : true;
       },
       /** Put one of those parts into the box the writer was last typing in. */
       putRunToken(tag) {
@@ -13746,8 +16816,8 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       clearRunning() {
         history.pushPrev(this.prevSettings);
-        this.doc.paper.header = { l: '', c: '', r: '' };
-        this.doc.paper.footer = { l: '', c: '', r: '' };
+        this.doc.paper.header = { l: '', c: '', r: '', on: this.doc.paper.header.on || 'all', height: this.doc.paper.header.height || 8 };
+        this.doc.paper.footer = { l: '', c: '', r: '', on: this.doc.paper.footer.on || 'all', height: this.doc.paper.footer.height || 8 };
         this.prevSettings = history.state();
         this.touch();
       },
@@ -14202,66 +17272,12 @@ ${insideObjects('.eb-paper.boxed')} {
        * us exactly what it is about to remove, which is what makes this workable:
        * getTargetRanges is the whole trick.
        */
-      onBeforeInput(e) {
-        frameTaken = false;
-        history.push(false);
-        if (!this.review || !this.doc.id) { return; }
-        const type = String(e.inputType || '');
-        if (/^delete/.test(type)) {
-          const ranges = (e.getTargetRanges && e.getTargetRanges()) || [];
-          const target = ranges.length ? ranges[0] : null;
-          const range = target ? (function () {
-            const r = document.createRange();
-            r.setStart(target.startContainer, target.startOffset);
-            r.setEnd(target.endContainer, target.endOffset);
-            return r;
-          }()) : null;
-          if (!range || range.collapsed || !inCanvas(range.startContainer)) { return; }
-          e.preventDefault();
-          history.push(true);
-          const back = /Backward|ByCut|SoftLineBackward|WordBackward/.test(type);
-          const at = document.createRange();
-          at.setStart(back ? range.startContainer : range.endContainer, back ? range.startOffset : range.endOffset);
-          at.collapse(true);
-          markDeleted(range);
-          try { selectRange(at); } catch (err) { /* the text moved under us */ }
-          this.settleReview();
-          return;
-        }
-        if (/^insert/.test(type) && type !== 'insertCompositionText') {
-          const sel = getRange();
-          if (sel && !sel.collapsed) {
-            e.preventDefault();
-            history.push(true);
-            const end = document.createRange();
-            end.setStart(sel.endContainer, sel.endOffset);
-            end.collapse(true);
-            markDeleted(sel);
-            try { selectRange(end); } catch (err) { /* the text moved under us */ }
-            ensureIns();
-            if (type === 'insertText' && e.data) { insertText(e.data); }
-            this.settleReview();
-            return;
-          }
-          ensureIns();
-        }
-      },
-      /** The block the caret is in is being written in here: it is not replaced. */
-      markMine() {
-        const c = canvas();
-        const r = getRange();
-        if (!c || !r || !c.contains(r.startContainer)) { return; }
-        let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
-        while (block && block.parentNode !== c) { block = block.parentNode; }
-        const id = block && block.getAttribute && block.getAttribute('data-eb-id');
-        if (id) { this.mine.add(id); this.lately.set(id, Date.now()); }
-        this.typedAt = Date.now();
-      },
-      settleReview() {
-        this.touch();
-        this.recount();
-        this.$nextTick(() => this.refreshState());
-      },
+      /**
+       * Somebody is typing and the caret is not in any block: they are on a page
+       * that was added and left blank. A line is made on that page, and only then.
+       * If it cannot be told which blank page they are on, nothing is written --
+       * a wrong guess would put their words on somebody else's page.
+       */
       onKey(e) {
         const meta = e.ctrlKey || e.metaKey;
         // A paste event carries no keys of its own -- it is not a keyboard event --
@@ -14402,7 +17418,7 @@ ${insideObjects('.eb-paper.boxed')} {
       fontPageItems() { this.loadPreviewFonts(); },
       zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); this.$nextTick(() => this.syncFrame()); },
       flow() { this.$nextTick(() => this.syncFrame()); },
-      'doc.paper': { deep: true, handler() { if (this.doc.id) { this.dirty = true; this.scheduleAutosave(); } } },
+      'doc.paper': { deep: true, handler() { if (this.doc.id && !this.opening) { this.dirty = true; this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
@@ -14640,8 +17656,28 @@ ${insideObjects('.eb-paper.boxed')} {
         window.visualViewport.addEventListener('resize', () => this.keepCaretVisible());
       }
       this.measureWidth();
-      document.addEventListener('scroll', () => this.closeCtx(), true);
-      document.addEventListener('selectionchange', () => { if (getRange()) { this.refreshState(); } });
+      // The menu is put where the pointer is and stays there, so a scroll would
+      // leave it stranded: any scroll shuts it. But the scroll that the browser
+      // makes to bring the thing clicked into view arrives AFTER the click that
+      // opened the menu, and shut it again -- measured on the page bar, where
+      // the right button on a sheet below the fold gave no menu at all, every
+      // time. An event within a tenth of a second of the menu opening is that
+      // scroll, not the writer's; nobody reaches the wheel that fast.
+      document.addEventListener('scroll', () => {
+        const now = window.performance ? window.performance.now() : 0;
+        if (now - ctxAt < 150) { return; }
+        this.closeCtx();
+      }, true);
+      document.addEventListener('selectionchange', () => {
+        const r = getRange();
+        // The last run of words the writer actually chose. Clicking into a box on
+        // the toolbar -- the size, the typeface -- takes the selection away
+        // before the value is read, and what was chosen was then styled as if
+        // nothing had been: the size went on the whole paragraph, or on the whole
+        // 文字枠, instead of on the words.
+        if (r && !r.collapsed) { heldRange = r.cloneRange(); }
+        if (r) { this.refreshState(); }
+      });
       window.addEventListener('beforeunload', (e) => {
         // Say we have gone, so the other people writing in it stop being told
         // that somebody is here who is not.
@@ -14831,8 +17867,16 @@ ${insideObjects('.eb-paper.boxed')} {
 
   // The page planner is pure arithmetic and is unit-tested on its own.
   window.__eb_planPages = planPages;
+  window.__eb_pagelog = {
+    on() { planLog = []; return true; },
+    off() { const out = planLog; planLog = null; return out || []; },
+    read() { return planLog || []; },
+    runs() { return planRuns; },
+  };
+  window.__eb_splitBlockAt = splitBlockAt;
   // the paste path, so the tests can drive it without a clipboard event
   window.__eb_pasteHtmlAt = pasteHtmlAt;
+  window.__eb_webToDocument = webToDocument;
   // moving a frame is driven by the pointer, which jsdom has no layout for
   window.__eb_moveObjectTo = moveObjectTo;
   // dragging within the document: jsdom has no drag and no caretRangeFromPoint,
@@ -14851,8 +17895,25 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     return out.filter((x) => x !== '');
   };
+  // The frame chain, opened up so it can be measured from outside. Every one of
+  // these is read-only but for the last three; the tests drive those directly.
+  window.__eb_frames = { chainOf, chainLead, chainSettled, chainable, isCont,
+    roomFor, fitRoom, fillLimit, writtenBottom, roomLeft, wouldFitBack, lineOf,
+    inkBottom, frameIsDrawn, insideFrame, cutOffsetIn, pageGeometry,
+    joinChain, splitChain, reflowFrames };
+  // Which object the click took hold of. The tests ask; nothing else does.
+  window.__eb_held = () => frameEl;
+  // Where a placed thing is worked out to stand. The tests ask; nothing else does.
+  window.__eb_place = { settleFree, reanchor, placeFreeAsDrawn, placeFreeAt, pageGeometry, topOnPaper,
+    filledLast: filledLast, flowPages: () => flowPages, objectFree: objectFree, chainable: chainable };
+  // The page-foot cut, opened up so it can be measured from outside.
+  window.__eb_flow = { cutFlowAtFolds, joinFlowCuts, carveAt, flowCuttable, keepsWithNext, recutFlow };
+  // The chain, opened up so it can be measured without a browser: chainOf and
+  // chainLead are walks over the markup and need no layout at all, so a
+  // disagreement about what carries what can be settled in jsdom in a second
+  // rather than in Chrome in ten minutes.
+  window.__eb_chain = { chainOf, chainLead, chainKind, chainable, continuationOf, isCont };
   window.__eb_frameText = frameText;
-  window.__eb_restack = restack;
   window.__eb_familiesInBody = familiesInBody;
   window.__eb_stylesCss = stylesCss;
   window.__eb_setColumnWidths = setColumnWidths;

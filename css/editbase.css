@@ -224,6 +224,9 @@
 .eb-paper,
 #editbase-root div.eb-paper[contenteditable="true"],
 #editbase-root div.eb-paper[contenteditable="false"] {
+  /* The sheet is a box of its own, so a thing put behind the writing stops at
+     the paper instead of disappearing behind it. */
+  isolation: isolate;
   position: absolute; top: 0; left: 0; right: 0;
   width: auto; height: auto; margin: 0;
   color: #111111; background: transparent;
@@ -378,11 +381,31 @@
 /* Printing is done from a self-contained iframe holding the exported file, so
    the app itself never has to be printable. This is only the safety net for
    Ctrl+P pressed on the page. */
+/* Printing the editor's own page -- what Ctrl+P does. It must come out as the
+   document, not as a picture of the editor: the paper and its margins come from
+   the page rule the app keeps in the head, and everything the editor draws for
+   its own sake is left off. */
 @media print {
   #header, #app-navigation, .eb-side, .eb-topbar, .eb-toolbar { display: none !important; }
   #editbase-root, #editbase, .eb-shell, .eb-main { display: block !important; height: auto !important; overflow: visible !important; }
   .eb-desk { display: block !important; background: none !important; padding: 0 !important; overflow: visible !important; }
   .eb-paper { box-shadow: none !important; background-image: none !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
+  /* the sheets themselves, the folds between them, and every mark of the editor's */
+  .eb-sheets, .eb-pagespacer, .eb-fsel, .eb-mate, .eb-snap, .eb-placeband, .eb-fdrop,
+  .eb-ruler, .eb-preview, .eb-layers, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
+  .eb-ctxmenu, .eb-modal-back, .eb-fbar { display: none !important; }
+  /* Nothing may hold the writing to one screenful: the page break has to be free
+     to fall where it falls, or only the first page comes out. */
+  .eb-paperwrap, .eb-desk, .eb-main, .eb-shell, #editbase, #editbase-root, #app-content,
+  #app-content-vue, #content, #content-vue, body, html {
+    height: auto !important; max-height: none !important; min-height: 0 !important;
+    overflow: visible !important; position: static !important; display: block !important;
+  }
+  .eb-paperwrap { width: auto !important; }
+  /* A thing placed by hand is nudged on the screen so that it stands on the sheet
+     it belongs to; on paper the page break does that, so the nudge goes. */
+  .eb-paper.eb-doc .eb-anchor > * { translate: none !important; }
+  .eb-paper.eb-doc.boxed *, .eb-paper.eb-doc * { outline: none !important; }
 }
 
 /* ---------- toolbar controls ---------- */
@@ -693,14 +716,24 @@
   position: absolute; left: var(--eb-ml); right: var(--eb-mr);
   display: flex; gap: 1em; font-size: 9pt; color: #666; pointer-events: none;
 }
+/* The band on the first sheet while it is being written in: it takes the caret,
+   and it is drawn as a place to write rather than as a picture of one. */
+.eb-sheet .run.live { pointer-events: auto; outline: 1px dashed var(--primary, #2563eb); outline-offset: 2px; }
+.eb-sheet .run.live > span { outline: none; min-height: 1.2em; }
+.eb-sheet .run.live > span:focus { background: rgba(37, 99, 235, .07); }
+.eb-sheet .run.live.empty > span:empty::before { content: "…"; color: #9aa3af; }
 .eb-sheet .run .l, .eb-sheet .run .c, .eb-sheet .run .r { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
 .eb-sheet .run .c { text-align: center; }
 .eb-sheet .run .r { text-align: right; }
-/* The band each one stands in is taken off the writing area, as the table's head
-   and foot take it on paper: the header sits at the top of its band, the footer
-   at the bottom of its own. */
-.eb-sheet .run.head { top: calc(var(--eb-mt) - var(--eb-band-t, 0mm)); height: var(--eb-band-t, 0mm); }
-.eb-sheet .run.foot { top: calc(var(--eb-paper-h) - var(--eb-mb)); height: var(--eb-band-b, 0mm); align-items: flex-end; }
+/* The band stands in the paper's own margin, three millimetres clear of the
+   writing -- the header above it, the footer below -- exactly where the page's
+   margin boxes put them on paper. The writing is not moved by either. */
+.eb-sheet .run.head {
+  top: calc(var(--eb-mt) - 3mm - var(--eb-band-t, 0mm)); height: var(--eb-band-t, 0mm); align-items: flex-end;
+}
+.eb-sheet .run.foot {
+  top: calc(var(--eb-paper-h) - var(--eb-mb) + 3mm); height: var(--eb-band-b, 0mm); align-items: flex-start;
+}
 
 /* the line between two columns of a table, as something to take hold of */
 .eb-fsel .cg {
@@ -956,6 +989,12 @@
   flex: 0 0 auto; overflow-y: auto; background: var(--surface);
   border-left: 1px solid var(--border); font-size: 12.5px;
 }
+/* The bar itself does not scroll: its heading stays at the top, the two places
+   to drop stay at the bottom and the top of the list, and only the list between
+   them moves. */
+.eb-layers { display: flex; flex-direction: column; overflow: hidden; }
+.eb-layers > .body { flex: 1 1 auto; overflow-y: auto; }
+.eb-layers > .head, .eb-layers > .none { flex: 0 0 auto; }
 .eb-preview { width: 132px; }
 .eb-layers { width: 210px; }
 .eb-layers .head, .eb-preview .head {
@@ -965,6 +1004,13 @@
 }
 .eb-layers .none { padding: 10px; color: var(--muted); }
 .eb-layers .glabel { padding: 8px 10px 2px; font-size: 11px; font-weight: 700; color: var(--muted); }
+/* The heading is the layer itself: dragged, the whole layer moves with
+   everything on it. */
+.eb-layers .glabel.band { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.eb-layers .glabel.band:active { cursor: grabbing; }
+.eb-layers .glabel.dragging { opacity: .45; }
+.eb-layers .glabel .empty { font-weight: 400; opacity: .7; margin-left: .4em; }
+.eb-layers .head .grow { flex: 1 1 auto; }
 .eb-layers .list { list-style: none; margin: 0; padding: 0 6px; }
 .eb-layers .list li { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
 .eb-layers .list li.on { background: var(--surface-2); outline: 1.5px solid var(--primary); }
@@ -974,8 +1020,6 @@
 }
 #editbase-root .eb-layers .pick .nm { font-weight: 600; white-space: nowrap; }
 #editbase-root .eb-layers .pick .tx { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.eb-layers .acts { display: flex; }
-#editbase-root .eb-layers .acts .eb-tb { min-width: 22px; width: 22px; height: 22px; padding: 0; }
 
 /* A plan of the page rather than a picture of it: cheap to draw, and it says
    what is where and what overlaps what, which is what the eye wants here. */
@@ -1032,9 +1076,13 @@
 }
 
 /* Dragging a row or a page: what is being carried, and where it would land. */
-.eb-layers .list li { cursor: grab; }
+/* The row is dragged by the pointer itself, so the browser must not take the
+   press for a scroll of the list: on a touch screen that is what it does, and
+   the row never moves at all. */
+.eb-layers .list li { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.eb-layers .list li.dragging { cursor: grabbing; }
 .eb-layers .list li.dragging { opacity: .45; }
-.eb-layers .list li.over { box-shadow: inset 0 2px 0 var(--primary); }
+.eb-layers .list li.over { outline: 2px solid var(--primary); outline-offset: -1px; background: rgba(37, 99, 235, .1); }
 #editbase-root .eb-preview .pg { cursor: grab; }
 #editbase-root .eb-preview .pg.dragging { opacity: .45; }
 #editbase-root .eb-preview .pg.over .sheet { outline: 2px dashed var(--primary); }
@@ -1312,3 +1360,34 @@
   position: absolute; inset: 0; overflow: hidden; pointer-events: none; user-select: none;
 }
 #editbase-root .eb-preview .mini > * { position: absolute; left: 0; top: 0; }
+
+
+/* The line between two layers: where a thing is dropped to stand there in the
+   order. It is nothing at all until something is being dragged, and then it
+   opens up into a place big enough to aim at. */
+.eb-layers .gap {
+  height: 22px; margin: 2px 8px; border-radius: 6px; border: 1px dashed transparent;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 11px; box-sizing: border-box;
+}
+/* The room is always there, whether or not anything is being dragged: a list
+   that changes shape the moment a row is picked up moves the very row the hand
+   was aiming at. Only the line and its words appear. */
+.eb-layers .gap > span { display: none; overflow: hidden; white-space: nowrap; }
+.eb-layers .body.dragging .gap { border-color: var(--border); }
+.eb-layers .body.dragging .gap > span { display: block; }
+.eb-layers .body.dragging .gap.over {
+  border-color: var(--primary); border-style: solid; color: var(--primary);
+  background: rgba(37, 99, 235, .1);
+}
+/* The row itself, carried by the pointer. */
+.eb-layerghost {
+  position: fixed; z-index: 3000; pointer-events: none; display: flex; align-items: center;
+  gap: 2px; padding: 2px 4px; border-radius: 8px; font-size: 12.5px;
+  background: var(--surface, #fff); border: 1.5px solid var(--primary, #2563eb);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .22); opacity: .95;
+}
+.eb-layerghost .pick { display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 4px; }
+.eb-layerghost .nm { font-weight: 600; white-space: nowrap; }
+.eb-layerghost .tx { color: var(--muted, #666); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eb-layers .glabel.over { color: var(--primary); background: rgba(37, 99, 235, .08); border-radius: 6px; }
