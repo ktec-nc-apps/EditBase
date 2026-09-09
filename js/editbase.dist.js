@@ -7875,6 +7875,23 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /**
+   * Does the clipboard's HTML carry real content — a table, or any text — rather
+   * than nothing but a picture? Excel and other apps put an image of the
+   * selection on the clipboard beside the real thing as text/html; a screenshot
+   * or an image file has the picture alone. Telling them apart lets a pasted
+   * spreadsheet become a table instead of a flat picture of one.
+   */
+  function htmlHasContent(html) {
+    if (!html) { return false; }
+    let doc;
+    try { doc = new DOMParser().parseFromString(String(html), 'text/html'); } catch (e) { return false; }
+    const body = doc && doc.body;
+    if (!body) { return false; }
+    if (body.querySelector('table')) { return true; }
+    return !!(body.textContent && body.textContent.trim());
+  }
+
+  /**
    * What comes off the clipboard arrives as an object with a box round it, so it
    * can be picked up and put where it belongs rather than being poured into the
    * middle of the writing. Something that is already an object -- a picture, a
@@ -23170,7 +23187,13 @@ return function render(_ctx, _cache) {
       });
       c.addEventListener('paste', (e) => {
         const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
-        if (files.some((f) => /^image\//.test(f.type))) {
+        // Excel (and others) put an image of the selection on the clipboard
+        // beside the real thing as text/html. Take the picture only when that is
+        // all there is — a screenshot, an image file — never when there is real
+        // markup to read, or a pasted spreadsheet turns into a flat picture of a
+        // table instead of a table.
+        const htmlData = e.clipboardData ? e.clipboardData.getData('text/html') : '';
+        if (files.some((f) => /^image\//.test(f.type)) && !htmlHasContent(htmlData)) {
           e.preventDefault();
           this.insertPastedFiles(files);
           return;
