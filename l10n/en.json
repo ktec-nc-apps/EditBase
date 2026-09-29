@@ -1235,7 +1235,12 @@
         "Dot before it": "Dot before it",
         "Square before it": "Square before it",
         "Lines at both sides": "Lines at both sides",
-        "Speech bubble": "Speech bubble"
+        "Speech bubble": "Speech bubble",
+        "Delete the category": "Delete the category",
+        "The category \"{name}\" still has {n} documents in it. Move or delete them first.": "The category \"{name}\" still has {n} documents in it. Move or delete them first.",
+        "Delete the category \"{name}\"?": "Delete the category \"{name}\"?",
+        "The category \"{name}\" still has files in it. Move or delete them first.": "The category \"{name}\" still has files in it. Move or delete them first.",
+        "Could not delete the category: {msg}": "Could not delete the category: {msg}"
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

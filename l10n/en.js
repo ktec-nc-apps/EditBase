@@ -1,6 +1,11 @@
 OC.L10N.register(
     "editbase",
     {
+    "Delete the category": "Delete the category",
+    "The category \"{name}\" still has {n} documents in it. Move or delete them first.": "The category \"{name}\" still has {n} documents in it. Move or delete them first.",
+    "Delete the category \"{name}\"?": "Delete the category \"{name}\"?",
+    "The category \"{name}\" still has files in it. Move or delete them first.": "The category \"{name}\" still has files in it. Move or delete them first.",
+    "Could not delete the category: {msg}": "Could not delete the category: {msg}",
     "Heading design": "Heading design",
     "Design colour": "Design colour",
     "Use this colour for every heading": "Use this colour for every heading",

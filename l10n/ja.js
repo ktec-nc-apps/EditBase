@@ -1,6 +1,11 @@
 OC.L10N.register(
     "editbase",
     {
+    "Delete the category": "カテゴリを削除",
+    "The category \"{name}\" still has {n} documents in it. Move or delete them first.": "カテゴリ「{name}」には文書が {n} 件入っています。先に文書を移動するか削除してください。",
+    "Delete the category \"{name}\"?": "カテゴリ「{name}」を削除しますか？",
+    "The category \"{name}\" still has files in it. Move or delete them first.": "カテゴリ「{name}」にはまだファイルが入っています。先に移動するか削除してください。",
+    "Could not delete the category: {msg}": "カテゴリを削除できませんでした：{msg}",
     "Heading design": "見出しのデザイン",
     "Design colour": "デザインの色",
     "Use this colour for every heading": "この色をすべての見出しに使う",

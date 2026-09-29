@@ -1289,7 +1289,12 @@
         "Dot before it": "先頭に●",
         "Square before it": "先頭に■",
         "Lines at both sides": "両側に線",
-        "Speech bubble": "吹き出し"
+        "Speech bubble": "吹き出し",
+        "Delete the category": "カテゴリを削除",
+        "The category \"{name}\" still has {n} documents in it. Move or delete them first.": "カテゴリ「{name}」には文書が {n} 件入っています。先に文書を移動するか削除してください。",
+        "Delete the category \"{name}\"?": "カテゴリ「{name}」を削除しますか？",
+        "The category \"{name}\" still has files in it. Move or delete them first.": "カテゴリ「{name}」にはまだファイルが入っています。先に移動するか削除してください。",
+        "Could not delete the category: {msg}": "カテゴリを削除できませんでした：{msg}"
     },
     "pluralForm": "nplurals=1; plural=0;"
 }

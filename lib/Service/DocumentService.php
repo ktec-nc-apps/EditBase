@@ -145,6 +145,26 @@ class DocumentService {
 		return $node->getId();
 	}
 
+	/**
+	 * Delete a category -- an empty one only (owner 2026-09-29, BUGS #299): a
+	 * category with anything in it is refused, so no document goes with it.
+	 * The folder goes to Nextcloud's trash like any deleted folder.
+	 */
+	public function deleteFolder(string $userId, string $path): void {
+		$path = $this->cleanFolder($path);
+		if ($path === '') {
+			throw new \InvalidArgumentException('the whole of your own folder is not a category');
+		}
+		$node = $this->folder($userId)->get($path);
+		if (!($node instanceof Folder)) {
+			throw new \InvalidArgumentException('that is not a category');
+		}
+		if (count($node->getDirectoryListing()) > 0) {
+			throw new \InvalidArgumentException('not empty');
+		}
+		$node->delete();
+	}
+
 	/** Put a document in another folder, or back at the top with an empty path. */
 	public function move(string $userId, int $id, string $path): array {
 		$file = $this->file($userId, $id);

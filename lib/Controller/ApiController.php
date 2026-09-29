@@ -444,6 +444,15 @@ class ApiController extends Controller {
 	}
 
 	#[NoAdminRequired]
+	public function deleteFolder(): JSONResponse {
+		return $this->run(function () {
+			$path = (string)($this->request->getParam('path') ?? '');
+			$this->documents->deleteFolder($this->uid(), $path);
+			return ['deleted' => $path];
+		});
+	}
+
+	#[NoAdminRequired]
 	public function moveDocument(int $id): JSONResponse {
 		return $this->run(function () use ($id) {
 			$path = (string)($this->request->getParam('folder') ?? '');

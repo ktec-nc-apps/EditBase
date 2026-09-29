@@ -17468,10 +17468,16 @@ ${insideObjects('.eb-paper.boxed')} {
         <button v-for="c in catColourChoices" :key="c.value || 'none'" class="sw" :class="{ on: (ctx.cat.colour || '') === c.value }"
           :style="c.value ? { background: c.value } : {}" :title="c.label" @click="setCatColour(ctx.cat.key, c.value)"></button>
       </div>
+      <template v-if="ctx.cat.key && ctx.cat.key !== '~shared' && !ctx.cat.shared">
+        <div class="sep"></div>
+        <button class="ci danger" @click="deleteCategory(ctx.cat)">{{ t('Delete the category') }}</button>
+      </template>
     </template>
 
-    <!-- The right button on a document in the list down the left. -->
-    <template v-if="ctx.doc">
+    <!-- The right button on a document in the list down the left. A category's menu
+         is its own: without the else, the writing's menu (cut, paste, view…) came
+         after it (owner 2026-09-29, BUGS #299). -->
+    <template v-else-if="ctx.doc">
       <div class="hd">{{ ctx.doc.title }}</div>
       <button class="ci" @click="closeCtx(); openDoc(ctx.doc.id)">{{ t('Open') }}</button>
       <div class="sep"></div>
@@ -18832,6 +18838,26 @@ ${insideObjects('.eb-paper.boxed')} {
           await this.loadDocs();
           this.toggleCat(made.folder || name);
         } catch (e) { this.notify(this.t('Could not make the category: {msg}', { msg: e.message })); }
+      },
+      /**
+       * カテゴリを削除する（空のものだけ・オーナー 2026-09-29、BUGS #299）。文書が入って
+       * いれば消さずに、先に移すか削除するよう知らせる。
+       */
+      async deleteCategory(g) {
+        this.closeCtx();
+        if (!g || !g.key) { return; }
+        const inside = (this.docs || []).filter((d) => (d.folder || '') === g.key || String(d.folder || '').indexOf(g.key + '/') === 0).length;
+        if (inside) { this.notify(this.t('The category "{name}" still has {n} documents in it. Move or delete them first.', { name: g.label, n: inside })); return; }
+        if (!window.confirm(this.t('Delete the category "{name}"?', { name: g.label }))) { return; }
+        try {
+          await api('folders?path=' + encodeURIComponent(g.key), { method: 'DELETE' });
+          await this.loadDocs();
+          if (this.openCat === g.key) { this.toggleCat(''); }
+        } catch (e) {
+          this.notify(/not empty/.test(e.message)
+            ? this.t('The category "{name}" still has files in it. Move or delete them first.', { name: g.label })
+            : this.t('Could not delete the category: {msg}', { msg: e.message }));
+        }
       },
       /** Put a document in another category. In Files it is the same move. */
       async moveDoc(d, folder) {

@@ -3,6 +3,17 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] — 2026-09-30
+
+### Fixed
+- The right button on a category shows the category's own items only; the menu for
+  writing (cut, paste, view…) came after them.
+
+### Added
+- **Delete the category**, from its right-button menu. Only an empty category can be
+  deleted: one with documents in it says how many, and is kept until they are moved
+  or deleted. The folder goes to Nextcloud's trash.
+
 ## [0.1.1] — 2026-09-29
 
 ### Fixed
