@@ -40,6 +40,23 @@ class PreviewController extends Controller {
 		parent::__construct($appName, $request);
 	}
 
+	/**
+	 * The document as the editor would save it at this moment (posted by the editor),
+	 * shown the same way. A file saved by an older version is shown as it will be
+	 * saved now, with its pages, and nothing is written (owner 2026-09-29, BUGS #298).
+	 */
+	#[NoAdminRequired]
+	public function posted(): Response {
+		if ($this->userSession->getUser() === null) {
+			return new DataDisplayResponse('', Http::STATUS_FORBIDDEN);
+		}
+		$html = (string)$this->request->getParam('html', '');
+		if ($html === '' || strlen($html) > 40 * 1024 * 1024) {
+			return new DataDisplayResponse('', Http::STATUS_BAD_REQUEST);
+		}
+		return $this->page($html);
+	}
+
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
 	public function show(int $id): Response {
@@ -52,7 +69,10 @@ class PreviewController extends Controller {
 		} catch (\Throwable $e) {
 			return new DataDisplayResponse('', Http::STATUS_NOT_FOUND);
 		}
-		$html = (string)($doc['content'] ?? '');
+		return $this->page((string)($doc['content'] ?? ''));
+	}
+
+	private function page(string $html): Response {
 		$nonce = $this->nonces->getNonce();
 		$html = (string)preg_replace('/<script\b(?![^>]*\bnonce=)/i', '<script nonce="' . htmlspecialchars($nonce, ENT_QUOTES) . '"', $html);
 		$response = new DataDisplayResponse($html, Http::STATUS_OK, ['Content-Type' => 'text/html; charset=utf-8']);

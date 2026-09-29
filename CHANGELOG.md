@@ -3,6 +3,14 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] — 2026-09-29
+
+### Fixed
+- Web preview shows the document as it is open in the editor, page by page,
+  including changes not yet saved. It showed the file as saved, and a document
+  saved by an earlier version had no page divisions: everything after the first
+  page ran off the sheet.
+
 ## [0.1.0] — 2026-09-29
 
 The first version. Everything below is new, because there was nothing before it.

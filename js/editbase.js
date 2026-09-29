@@ -19796,13 +19796,22 @@ ${insideObjects('.eb-paper.boxed')} {
        * Web プレビュー（BUGS #16）：保存してから、保存した文書をウェブページとして別の
        * タブに開く。文書のプログラム（写真の拡大など）もそこで動く。
        */
-      async webPreview() {
+      webPreview() {
         if (!this.doc.id) { return; }
-        const id = this.doc.id;
-        const w = window.open('', '_blank');
-        try { await this.saveNow(true); } catch (e) { /* said already */ }
-        const url = BASE + 'preview/' + id + '?t=' + Date.now();
-        if (w) { w.location.href = url; } else { window.open(url, '_blank'); }
+        // いま開いている内容を、今の EditBase が保存する形のまま送って表示する（ファイルは
+        // 書き換えない）。保存されたファイルをそのまま見せていたので、古い版で保存された
+        // 文書はページの区切りが無く、2ページ目から紙の外へはみ出した（BUGS #298）。
+        const form = document.createElement('form');
+        form.method = 'post';
+        form.action = BASE + 'preview';
+        form.target = '_blank';
+        form.style.display = 'none';
+        const put = (name, value) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i); };
+        put('html', this.currentHtml(true));
+        put('requesttoken', (window.OC && OC.requestToken) || '');
+        document.body.appendChild(form);
+        form.submit();
+        form.remove();
       },
       printDoc() {
         const paper = normalisePaper(this.doc.paper);

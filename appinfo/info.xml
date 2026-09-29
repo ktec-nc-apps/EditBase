@@ -50,7 +50,7 @@ EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript �
 - 印刷する前にページの不具合を見つける「文書の点検」
 - 検索と置換、変更履歴、差し込み印刷、エディタ自身が保持する取り消し履歴
 - HTML5 と CSS が先。JavaScript はそれで無理なこと（オブジェクトの両側への回り込み・画像のエフェクト付きの拡大・表計算）にだけ使い、文書ごとに入り切りできます]]></description>
-	<version>0.1.0</version>
+	<version>0.1.1</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
 	<namespace>EditBase</namespace>

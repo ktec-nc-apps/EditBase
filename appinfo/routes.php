@@ -6,6 +6,7 @@ return [
 	'routes' => [
 		['name' => 'page#index', 'url' => '/', 'verb' => 'GET'],
 		['name' => 'preview#show', 'url' => '/preview/{id}', 'verb' => 'GET'],
+		['name' => 'preview#posted', 'url' => '/preview', 'verb' => 'POST'],
 
 		// settings & translations
 		['name' => 'api#getSettings', 'url' => '/api/settings', 'verb' => 'GET'],
