@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace OCA\EditBase\Service;
 
+use OCP\ICache;
 use OCP\ICacheFactory;
+use OCP\IMemcache;
 use OCP\IUserManager;
 
 /**
@@ -19,12 +21,20 @@ use OCP\IUserManager;
  * One record per document: a running number, the last few parcels of paragraphs,
  * and who is here with where their caret is. Everything in it expires by itself,
  * so nothing has to be tidied up when a page is closed or a network drops.
+ *
+ * The record is read, added to and written back one turn at a time (review S9):
+ * two people sending in the same instant used to both read it before either
+ * wrote, and one of them was lost -- with both handed the same running number,
+ * so neither was shown the other's paragraphs.
  */
 class LiveService {
 	private const KEEP = 40;
 	private const GONE = 12;
 	private const TTL = 180;
 	private const MAX_BLOCK = 40000;
+
+	/** How long a turn waits for the one before it, in seconds. */
+	private float $wait = 2.0;
 
 	public function __construct(
 		private ICacheFactory $cacheFactory,
@@ -36,16 +46,47 @@ class LiveService {
 	 * Put what this person has just typed in, and take everything the others have
 	 * typed since they last asked. One turn of the conversation, one request.
 	 *
+	 * Somebody who may only read the document ($mayWrite false) is shown what the
+	 * others write, and where they are, but nothing they send is passed on (review
+	 * S2) -- nor are they counted as writing, which would hold a paragraph against
+	 * the people who may.
+	 *
 	 * @param array<int, array<string, mixed>> $blocks
 	 * @return array<string, mixed>
 	 */
-	public function exchange(int $fileId, string $userId, int $since, array $blocks, array $where): array {
+	public function exchange(int $fileId, string $userId, int $since, array $blocks, array $where, bool $mayWrite = true): array {
+		if (!$mayWrite) {
+			$blocks = [];
+			$where['writing'] = false;
+		}
 		$cache = $this->cacheFactory->createDistributed('editbase-live');
 		$key = 'doc-' . $fileId;
+		$held = $this->hold($cache, $key);
+		try {
+			return $this->turn($cache, $key, $userId, $since, $blocks, $where);
+		} finally {
+			$this->release($cache, $key, $held);
+		}
+	}
+
+	/**
+	 * @param array<int, array<string, mixed>> $blocks
+	 * @return array<string, mixed>
+	 */
+	private function turn(ICache $cache, string $key, string $userId, int $since, array $blocks, array $where): array {
 		$now = time();
 		$rec = $cache->get($key);
 		$rec = is_array($rec) ? $rec : ['seq' => 0, 'items' => [], 'people' => []];
 		$seq = (int)($rec['seq'] ?? 0);
+		if ($seq <= 0) {
+			// The running number never starts at nought: a page that joined before
+			// anyone had written keeps nought as "the last one I saw", and nought is
+			// also what a newcomer says -- so the first thing written after it used
+			// to be withheld from it as old news (review S9). Counting from the clock
+			// also keeps a record that has lapsed and been begun again ahead of any
+			// number a page still holds from the one before.
+			$seq = (int)floor(microtime(true) * 1000);
+		}
 		$items = is_array($rec['items'] ?? null) ? $rec['items'] : [];
 		$people = is_array($rec['people'] ?? null) ? $rec['people'] : [];
 
@@ -113,12 +154,43 @@ class LiveService {
 	public function leave(int $fileId, string $userId): void {
 		$cache = $this->cacheFactory->createDistributed('editbase-live');
 		$key = 'doc-' . $fileId;
-		$rec = $cache->get($key);
-		if (!is_array($rec) || !isset($rec['people'][$userId])) {
-			return;
+		$held = $this->hold($cache, $key);
+		try {
+			$rec = $cache->get($key);
+			if (!is_array($rec) || !isset($rec['people'][$userId])) {
+				return;
+			}
+			unset($rec['people'][$userId]);
+			$cache->set($key, $rec, self::TTL);
+		} finally {
+			$this->release($cache, $key, $held);
 		}
-		unset($rec['people'][$userId]);
-		$cache->set($key, $rec, self::TTL);
+	}
+
+	/**
+	 * Wait for the record to be free, and take it. The hold lapses by itself after
+	 * a few seconds, so a request that dies holding it does not stop the document.
+	 * A cache that cannot do this (none is configured) is used as it is.
+	 */
+	private function hold(ICache $cache, string $key): bool {
+		if (!($cache instanceof IMemcache)) {
+			return false;
+		}
+		$until = microtime(true) + $this->wait;
+		while (!$cache->add($key . ':turn', 1, 5)) {
+			if (microtime(true) >= $until) {
+				// The page sends the same paragraphs again on its next turn.
+				throw new \RuntimeException('the document is busy; it will be tried again');
+			}
+			usleep(10000);
+		}
+		return true;
+	}
+
+	private function release(ICache $cache, string $key, bool $held): void {
+		if ($held) {
+			$cache->remove($key . ':turn');
+		}
 	}
 
 	/** @return array<int, array<string, mixed>> */

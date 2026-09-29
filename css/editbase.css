@@ -191,7 +191,17 @@
 .eb-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); padding: 0; }
 
 /* the desk and the paper */
-.eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: center; align-items: flex-start; }
+/* 中央寄せは「入りきるときだけ」。中身が机より広いとき、ふつうの center は
+   はみ出した始まり側を容器の外へ押し出し、そこへはスクロールで戻れない。
+   横書きでは紙が1枚ぶんの幅なので起きないが、縦書きでは紙が横に並ぶので、
+   左端＝最後のページに永久に届かなくなる（ズームを下げるしかなかった）。
+   safe center は、入りきらないときだけ中央寄せをやめて端から並べる。 */
+.eb-desk { flex: 1 1 auto; overflow: auto; background: var(--desk); padding: 26px 20px 60px; display: flex; justify-content: safe center; align-items: flex-start; }
+/* 縦書きは1ページ目が右端にある。机の起点を右にしておくと、開いた直後に
+   1ページ目が見え、入りきらないときのはみ出しも左側（あとのページ）に出る。
+   中身そのものは左から右の並びのままにする。 */
+.eb-desk.tate { direction: rtl; }
+.eb-desk.tate > .eb-paperwrap { direction: ltr; }
 .eb-paperwrap { flex: 0 0 auto; position: relative; width: var(--eb-paper-w); --eb-gap: 16px; }
 /* The sheets are real elements behind the text: one per printed page, each exactly
    the paper size, so the editing screen shows the paper rather than a scroll. */
@@ -272,6 +282,8 @@
 .eb-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
 .eb-row > * { flex: 1 1 150px; min-width: 150px; }
 .eb-row > .wide { flex: 1 1 100%; min-width: 100%; }
+/* the six edge buttons of a border need their own width, or they run under the next field (BUGS #247) */
+.eb-row > .b-sides { flex: 1 1 240px; min-width: 240px; }
 /* The little explanation under a field in a dialogue. It used to be called
    .eb-note, which is also the document's own side-bar note, so the app was
    repainting the document's notes in the editor while the saved file drew them
@@ -392,7 +404,7 @@
   .eb-paper { box-shadow: none !important; background-image: none !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
   /* the sheets themselves, the folds between them, and every mark of the editor's */
   .eb-sheets, .eb-pagespacer, .eb-fsel, .eb-mate, .eb-snap, .eb-placeband, .eb-fdrop,
-  .eb-ruler, .eb-preview, .eb-layers, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
+  .eb-ruler, .eb-preview, .eb-layers, .eb-docset, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
   .eb-ctxmenu, .eb-modal-back, .eb-fbar { display: none !important; }
   /* Nothing may hold the writing to one screenful: the page break has to be free
      to fall where it falls, or only the first page comes out. */
@@ -495,6 +507,9 @@
   padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--surface);
 }
 .eb-find .ic { color: var(--muted); display: inline-flex; }
+/* The word found, in the selection's colours, while the keyboard stays in the
+   find bar (BUGS #233). */
+::highlight(eb-find) { background-color: Highlight; color: HighlightText; }
 .eb-find input[type=text] {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   border-radius: 9px; padding: 6px 10px; font-size: 14px; min-width: 170px;
@@ -561,6 +576,13 @@
   background: var(--surface); border: 1px solid var(--border); border-radius: 11px; box-shadow: var(--shadow);
 }
 .eb-ctxmenu.flip .fly { left: auto; right: 100%; }
+/* A group left empty for what was clicked leaves its two lines side by side; one
+   is enough, and none at the top or the foot (owner 2026-09-29, BUGS #287). */
+.eb-ctxmenu .sep + .sep,
+.eb-ctxmenu > .sep:first-child, .eb-ctxmenu > .sep:last-child { display: none; }
+/* a menu taller than the window scrolls; its submenus are then placed on the window (placeFly) */
+.eb-ctxmenu.tall { overflow-y: auto; overscroll-behavior: contain; }
+.eb-ctxmenu.tall .fly { position: fixed; }
 .eb-ctxmenu .fly { overflow-y: auto; }
 .eb-ctxmenu .has-sub:hover > .fly, .eb-ctxmenu .has-sub:focus-within > .fly { display: block; }
 .eb-ctxmenu .has-sub > .s { opacity: .7; }
@@ -617,6 +639,11 @@
 .eb-fsel .hd.s { left: 50%; top: 100%; cursor: ns-resize; }
 .eb-fsel .hd.sw { left: 0; top: 100%; cursor: nesw-resize; }
 .eb-fsel .hd.w { left: 0; top: 50%; cursor: ew-resize; }
+/* Writing in the flow is sized by its two sides only, and a handle straddling its
+   edge lay over the first letter of every line (BUGS #152, 80% 表示で「そ」の左半分).
+   Those two stand outside the writing, like the bands of an object. */
+.eb-fsel.writing .hd.w { margin-left: -14px; }
+.eb-fsel.writing .hd.e { margin-left: 4px; }
 .eb-fsel .bar {
   position: absolute; left: -1px; bottom: 100%; margin-bottom: 9px;
   display: flex; align-items: center; gap: 2px; white-space: nowrap;
@@ -715,6 +742,8 @@
 .eb-sheet .run {
   position: absolute; left: var(--eb-ml); right: var(--eb-mr);
   display: flex; gap: 1em; font-size: 9pt; color: #666; pointer-events: none;
+  /* the document's body face and a set line height, as the page's margin boxes print it */
+  font-family: var(--eb-font-body, serif); line-height: 1.2;
 }
 /* The band on the first sheet while it is being written in: it takes the caret,
    and it is drawn as a place to write rather than as a picture of one. */
@@ -753,13 +782,30 @@
    on it is at the millimetre it says. The two outer marks are the page margins;
    the three inner ones are the indents of the paragraph the cursor is in. */
 .eb-paperwrap.ruled { margin-top: 30px; }
+/* ルーラーを出しているときは机の上の余白を無くし、ルーラーを道具の列の真下に付ける
+   （オーナー 2026-09-22「上のツールバーの下にくっつけろ」）。 */
+.eb-desk.ruled { padding-top: 0; }
+/* 道具の列のすぐ下に留める（LibreOffice と同じ）。以前は紙と一緒に動き、スクロール
+   すると画面の外へ消えた（オーナー 2026-09-22、BUGS #52）。流れの中では高さを持た
+   せない（上下の余白で打ち消す）ので、紙の位置は変わらない。 */
 .eb-ruler {
-  position: absolute; left: 0; right: 0; top: -30px; height: 22px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
-  font-size: 8px; color: var(--muted); user-select: none;
+  position: sticky; top: 0; z-index: 6; height: 22px; box-sizing: border-box;
+  margin-top: -30px; margin-bottom: 8px; border-radius: 0;
+  /* LibreOffice と同じ：余白の部分は濃い灰色、書ける範囲（.band）は白。帯そのものは
+     机の横幅いっぱいに引く（影を左右へ伸ばし、上下は切る）。 */
+  background: transparent;
+  font-size: 9px; color: var(--text); user-select: none;
 }
-.eb-ruler .band { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--primary) 9%, transparent); }
-.eb-ruler .tick { position: absolute; top: 2px; border-left: 1px solid var(--border); padding-left: 2px; line-height: 1; }
+.eb-ruler::before { content: ""; position: absolute; top: -1px; bottom: -1px; left: -100vw; right: -100vw; z-index: -1;
+  background: var(--surface); border-block: 1px solid var(--border); pointer-events: none; }
+/* 紙の幅の部分：余白の側は濃い灰色（書ける範囲は .band が白で上に重なる）。 */
+.eb-ruler::after { content: ""; position: absolute; top: 3px; bottom: 3px; left: 0; right: 0; z-index: -1;
+  background: color-mix(in srgb, var(--text) 16%, var(--surface)); pointer-events: none; }
+.eb-ruler .band { position: absolute; top: 3px; bottom: 3px; background: var(--surface); }
+.eb-ruler .tick { position: absolute; bottom: 5px; width: 0; height: 3px; border-left: 1px solid var(--muted); }
+.eb-ruler .tick.half { height: 6px; }
+.eb-ruler .tick.cm { height: 0; border-left: 0; }
+.eb-ruler .tick .num { position: absolute; bottom: -1px; transform: translateX(-50%); line-height: 1; }
 .eb-ruler .hm, .eb-ruler .ind { position: absolute; cursor: ew-resize; touch-action: none; }
 .eb-ruler .hm {
   top: 0; bottom: 0; width: 9px; margin-left: -4px;
@@ -966,10 +1012,13 @@
    runs off the foot of the window when the button it belongs to is near the
    bottom. fitMenu() puts it beside the rail and keeps it inside the window. */
 #editbase-root .eb-rail .eb-menu { position: fixed; left: 0; top: 0; min-width: 220px; z-index: 120; }
-/* The rail is the first thing to go when there is no width for it; everything on
-   it is in the menus as well. */
+/* Where there is little width the rail stays, one button wide, and scrolls:
+   hidden, sixteen of its tools (table, picture, text frame, columns, header, page
+   break, contents, ruby, formula, note, text colour ...) could not be reached from
+   anywhere else (BUGS #237). */
 @media (max-width: 900px) {
-  .eb-rail { display: none; }
+  .eb-rail, .eb-rail.tight { width: 46px; padding: 4px 4px; overflow-y: auto; }
+  #editbase-root .eb-rail .eb-tb, #editbase-root .eb-rail.tight .eb-tb { min-width: 36px; width: 36px; height: 34px; }
 }
 @media print {
   .eb-workarea { display: block !important; }
@@ -996,7 +1045,7 @@
 .eb-layers > .body { flex: 1 1 auto; overflow-y: auto; }
 .eb-layers > .head, .eb-layers > .none { flex: 0 0 auto; }
 .eb-preview { width: 132px; }
-.eb-layers { width: 210px; }
+.eb-layers { width: 240px; }
 .eb-layers .head, .eb-preview .head {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
   padding: 7px 6px 7px 10px; font-weight: 700; color: var(--muted);
@@ -1391,3 +1440,246 @@
 .eb-layerghost .nm { font-weight: 600; white-space: nowrap; }
 .eb-layerghost .tx { color: var(--muted, #666); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .eb-layers .glabel.over { color: var(--primary); background: rgba(37, 99, 235, .08); border-radius: 6px; }
+
+/* A file with tags EditBase does not handle: marked and greyed in the list, so it
+   is seen before it is opened. It can still be opened -- after asking. */
+#editbase-root .eb-docitem.unsupported { opacity: .55; }
+#editbase-root .eb-docitem.unsupported:hover { opacity: .8; }
+#editbase-root .eb-docitem.unsupported .t { color: var(--muted); }
+#editbase-root .eb-docitem .warn { color: #b26a00; font-weight: 700; }
+
+/* The paper is paper. Nextcloud paints the row of any table the pointer is on
+   (server.css: tbody tr:hover { background: var(--color-background-dark) }) --
+   meant for its own file lists, it reaches the tables in a document too. With
+   Nextcloud in its dark theme that colour is nearly black (41,41,41), while the
+   paper stays white and the writing black: a row the pointer rested on went
+   black and its writing disappeared. The owner, 2026-09-21, on 見本3. A row's
+   own colour, written on the row itself, is stronger than this and stays. */
+#editbase-root .eb-doc tbody tr:hover,
+#editbase-root .eb-doc tbody tr:focus,
+#editbase-root .eb-doc tbody tr:active { background-color: transparent; }
+
+/* The mark on a photograph that will enlarge in the saved document. Over the paper,
+   not part of it; it lets the pointer through to the photograph beneath. */
+#editbase-root .eb-zoommarks { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+#editbase-root .eb-zoommark { position: absolute; width: 28px; height: 28px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
+@media print { #editbase-root .eb-zoommarks { display: none !important; } }
+
+/* A document carrying EditBase's own program ("Use JavaScript"). */
+#editbase-root .eb-docitem .js { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: 1px;
+  color: #6b4f00; background: #fff1c2; border: 1px solid #e6c55a; }
+
+/* ---------- the document's own settings: a pop-up ----------
+   The page's head (title, description, what search engines and social media are
+   told) and the program. Long, so the middle scrolls and the buttons stay put. */
+.eb-modal.eb-docset { display: flex; flex-direction: column; overflow: hidden; }
+.eb-docset > h3, .eb-docset > .foot { flex: 0 0 auto; }
+.eb-docset > .body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.eb-docset .docname { font-weight: 600; margin: 2px 0 8px; word-break: break-all; color: var(--muted); }
+.eb-docset section { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.eb-docset h4 { margin: 0 0 4px; font-size: 13px; }
+.eb-docset .eb-tip { margin-top: 4px; }
+.eb-docset .eb-field textarea { resize: vertical; font-family: inherit; }
+
+
+/* Every drop-down in the app is painted in EditBase's own colours, wherever it
+   stands. The paragraph-style menu stands in the header row, outside the toolbar
+   whose rule paints the others, and Nextcloud's own select rule reached it
+   instead: with Nextcloud in its dark theme it came out black with white letters
+   in an otherwise light EditBase (the owner, 2026-09-21). color-scheme makes the
+   list the browser draws when it is opened follow EditBase's theme as well. */
+#editbase-root select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+#editbase-root[data-ebtheme="light"] { color-scheme: light; }
+#editbase-root[data-ebtheme="dark"] { color-scheme: dark; }
+#editbase-root .headtools .tb-style { border-radius: 8px; padding: 5px 8px; }
+/* Nextcloud's own rule for every input reached into EditBase: a check box was
+   stretched to 36px tall with a 2px border, and pointing at any box or field put
+   a dark edge and a white ring round it -- the tall black box beside "Drop
+   shadow" (the owner, 2026-09-21). A check box is the browser's own again, and
+   pointing at a field changes nothing; typing in one gives it EditBase's colour. */
+#editbase-root input[type=checkbox], #editbase-root input[type=radio] {
+  height: auto; min-height: 0; width: auto; padding: 0; margin: 0 6px 0 0; border: 0;
+  box-shadow: none; vertical-align: middle; accent-color: var(--primary);
+}
+#editbase-root input:hover, #editbase-root input:active, #editbase-root input:focus,
+#editbase-root textarea:hover, #editbase-root textarea:focus,
+#editbase-root select:hover, #editbase-root select:focus { box-shadow: none; }
+#editbase-root .eb-field input:not([type=checkbox]):not([type=radio]):hover,
+#editbase-root .eb-field textarea:hover, #editbase-root select:hover { border-color: var(--border); }
+#editbase-root .eb-field input:not([type=checkbox]):not([type=radio]):focus,
+#editbase-root .eb-field textarea:focus, #editbase-root select:focus { border-color: var(--primary); outline: none; }
+.eb-docset section.first { border-top: 0; margin-top: 0; padding-top: 0; }
+/* A small heading inside a menu: the typefaces this document already uses. */
+.eb-menu .eb-menu-head { padding: 4px 12px 2px; font-size: 11.5px; color: var(--muted); }
+/* Nextcloud's own rule for div[contenteditable=false] -- meant for its disabled
+   inputs -- reached every non-editable part of the page: a page break was drawn as
+   a grey, rounded, half-transparent box 130px wide, like an input field (the owner,
+   2026-09-22: "why does the page break show an input box?"), and the invisible
+   spacers that lay the pages out were held at least 36px tall. Only the properties
+   EditBase does not set itself are taken back here. */
+.eb-paper div[contenteditable="false"] {
+  width: auto; min-height: 0; padding: 0; background-color: transparent;
+  border-radius: 0; opacity: 1; font-size: inherit; color: inherit;
+}
+/* 「新しい文書」とその右のマークダウンのボタン */
+.eb-side .side-actions .newrow { display: flex; gap: 6px; align-items: stretch; }
+.eb-side .side-actions .newrow .wide { flex: 1 1 auto; }
+.eb-side .side-actions .md-new { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; padding: 0 10px; font-weight: 700; }
+.eb-side .side-actions .md-new .mdmark { display: inline-flex; }
+/* 物のプロパティ：タブ（LibreOffice の「枠」の画面と同じ分け方）と、中身に合った幅 */
+#editbase-root .eb-fp .eb-fp-tabs, #editbase-root .eb-cellprops .eb-fp-tabs, #editbase-root .eb-tabbed .eb-fp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--border); }
+#editbase-root .eb-fp .eb-fp-tab, #editbase-root .eb-cellprops .eb-fp-tab, #editbase-root .eb-tabbed .eb-fp-tab { border: 1px solid transparent; border-bottom: none; background: none; color: var(--muted); padding: 7px 12px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13.5px; margin-bottom: -1px; }
+#editbase-root .eb-fp .eb-fp-tab.on, #editbase-root .eb-cellprops .eb-fp-tab.on, #editbase-root .eb-tabbed .eb-fp-tab.on { background: var(--surface); color: var(--text); border-color: var(--border); font-weight: 600; }
+#editbase-root .eb-fp .eb-fp-what { margin: 12px 0 10px; color: var(--muted); font-size: 12.5px; }
+#editbase-root .eb-fp .eb-fp-grid { display: grid; grid-template-columns: max-content 1fr; gap: 10px 14px; align-items: center; }
+#editbase-root .eb-fp .eb-fp-grid > label:not(.opt) { color: var(--muted); font-size: 12.5px; text-align: right; }
+#editbase-root .eb-fp .eb-fp-grid > label.opt { font-size: 13.5px; }
+#editbase-root .eb-fp input.w-s { width: 7.5em; }
+#editbase-root .eb-fp .w-m { width: 16em; max-width: 100%; }
+#editbase-root .eb-fp .w-l { width: 100%; }
+#editbase-root .eb-fp input.w-c { width: 44px; height: 30px; padding: 2px; }
+#editbase-root .eb-fp .eb-fp-grid .inline { display: flex; gap: 8px; align-items: center; }
+#editbase-root .eb-fp .eb-fp-grid input[type=number], #editbase-root .eb-fp .eb-fp-grid input[type=text], #editbase-root .eb-fp .eb-fp-grid select {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 6px 8px; }
+#editbase-root .eb-fp .eb-pick { margin-bottom: 12px; }
+#editbase-root .eb-fp .body { min-height: 300px; }
+
+/* レイヤーバー：木の枝の開け閉め・種類の囲み文字・名前・名前の書き換え欄・落とす位置の線 */
+#editbase-root .eb-layers .list li .tw { flex: 0 0 16px; width: 16px; height: 20px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer; }
+#editbase-root .eb-layers .list li .tw.sp { cursor: inherit; }
+#editbase-root .eb-layers .pick .kd { flex: 0 0 auto; font-size: 10px; line-height: 1.3; padding: 0 3px; border: 1px solid #000; border-radius: 3px; color: #000; background: #fff; }
+#editbase-root .eb-layers .pick .nm { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#editbase-root .eb-layers .pick .nm.own { font-weight: 600; }
+#editbase-root .eb-layers .list li input.rename { flex: 1 1 auto; min-width: 0; font-size: 12px; padding: 2px 4px; margin: 2px 0; border: 1px solid var(--primary); border-radius: 4px; }
+.eb-layers .list li.over.above { outline: none; background: none; box-shadow: inset 0 2px 0 var(--primary); }
+.eb-layers .list li.over.below { outline: none; background: none; box-shadow: inset 0 -2px 0 var(--primary); }
+/* 紙の置き場の列：上に選んだ物の道具の段、下に机。 */
+.eb-center { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.eb-center > .eb-desk { min-height: 0; }
+.eb-layers .list li.over.into { outline: 2px solid var(--primary); outline-offset: -2px; background: rgba(37, 99, 235, .1); box-shadow: none; }
+/* レイヤー：目・鍵のボタンと名前 */
+#editbase-root .eb-layers .fl { flex: 0 0 20px; width: 20px; height: 20px; padding: 2px; border: 0; background: none; color: var(--text); cursor: pointer; border-radius: 4px; }
+#editbase-root .eb-layers .fl:hover { background: var(--surface-2); }
+#editbase-root .eb-layers .fl svg { width: 14px; height: 14px; }
+#editbase-root .eb-layers .fl.off { color: var(--muted); }
+#editbase-root .eb-layers .fl.on { color: var(--primary); }
+.eb-layers .glabel { display: flex; align-items: center; gap: 2px; }
+.eb-layers .glabel .lname { cursor: text; }
+#editbase-root .eb-layers .glabel input.rename { flex: 1 1 auto; min-width: 0; font-size: 11px; padding: 1px 4px; border: 1px solid var(--primary); border-radius: 4px; }
+#editbase-root .eb-layers .pick.hid .nm { opacity: .45; text-decoration: line-through; }
+/* Nextcloud 本体が div・p・span などのマウスの形を矢印に決めていて、紙の上の字の
+   上でも文字入力の縦棒にならなかった（オーナー 2026-09-22 文字枠の上で）。紙の中は
+   紙の形（text）を受け継ぐ。改ページの印などは自分の形を持つ（より強い指定）。 */
+.eb-paper * { cursor: inherit; }
+
+/* 数式バー（BUGS #290）：セルの名前・関数・入力欄を1行に。 */
+#editbase-root .eb-fxbar { gap: 6px; align-items: center; flex-wrap: nowrap; }
+#editbase-root .eb-fxbar .eb-fx-name { min-width: 3.2em; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font: 600 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; color: var(--text); background: var(--surface); }
+#editbase-root .eb-fxbar .eb-fx-btn { font-family: Georgia, serif; font-size: 15px; min-width: 34px; }
+#editbase-root .eb-fxbar .eb-fx-input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); color: var(--text); }
+#editbase-root .eb-fxbar .eb-fx-input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+#editbase-root .eb-fx-list { max-height: min(60vh, 460px); overflow-y: auto; width: min(460px, calc(100vw - 24px)); }
+#editbase-root .eb-fx-list .eb-fx-gname { font-size: 11.5px; color: var(--muted); padding: 6px 10px 2px; }
+#editbase-root .eb-fx-list .eb-fx-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; white-space: normal; text-align: left; }
+#editbase-root .eb-fx-list .eb-fx-item .n { font: 600 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+#editbase-root .eb-fx-list .eb-fx-item .d { font-size: 12px; color: var(--muted); }
+.eb-doc td[data-eb-fxedit], .eb-doc th[data-eb-fxedit] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* 表の列の記号と行の番号（BUGS #292）：選んだ表の枠の外、上と左に Calc の見出しのように。 */
+#editbase-root .eb-fsel .eb-thd {
+  position: absolute; box-sizing: border-box; pointer-events: auto; cursor: pointer; user-select: none;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; color: var(--muted, #667085);
+  background: var(--surface-2, #f2f4f7); border: 1px solid var(--border, #d0d5dd);
+}
+#editbase-root .eb-fsel .eb-thd.col { top: -20px; height: 18px; border-bottom: 0; }
+#editbase-root .eb-fsel .eb-thd.row { left: -26px; width: 24px; border-right: 0; }
+#editbase-root .eb-fsel .eb-thd.on { background: var(--primary, #2563eb); color: #fff; border-color: var(--primary, #2563eb); }
+#editbase-root .eb-fsel .eb-thd:hover { filter: brightness(.95); }
+
+/* 範囲で選んだセル（BUGS #293）：文書は変えず、上に色を重ねる。 */
+#editbase-root .eb-csel { position: absolute; pointer-events: none; background: rgba(37, 99, 235, .16); outline: 1px solid rgba(37, 99, 235, .55); outline-offset: -1px; z-index: 5; }
+/* セルを範囲で選んでいる間は、ブラウザの字の選択の色を出さない：文書の順に並ぶ字の
+   選択は範囲の外のセルまで塗り、どのセルを選んだのか分からなくなった。 */
+#editbase-root .eb-paperwrap.cellsel #eb-canvas ::selection { background: transparent; }
+
+/* セルのプロパティ（Excel と同じタブ、2026-09-29） */
+#editbase-root .eb-cellprops .body { min-height: 300px; }
+#editbase-root .eb-nf { display: grid; grid-template-columns: 150px 1fr; gap: 14px; }
+#editbase-root .eb-nf-cats { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: auto; max-height: 300px; }
+#editbase-root .eb-nf-cat { text-align: left; padding: 7px 10px; border: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
+#editbase-root .eb-nf-cat.on { background: var(--primary); color: #fff; }
+#editbase-root .eb-nf-sample { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+#editbase-root .eb-nf-sample .k { font-size: 12px; color: var(--muted); } #editbase-root .eb-nf-sample .v { font-size: 16px; font-weight: 600; }
+#editbase-root .eb-nf-examples { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 190px; overflow: auto; }
+#editbase-root .eb-nf-ex { display: grid; grid-template-columns: 1.3fr 1.6fr 1fr; gap: 8px; align-items: center; text-align: left; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: none; color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; }
+#editbase-root .eb-nf-ex.on { border-color: var(--primary); background: rgba(37, 99, 235, .08); }
+#editbase-root .eb-nf-ex code { font-size: 12px; } #editbase-root .eb-nf-ex .d { color: var(--muted); } #editbase-root .eb-nf-ex .s { font-weight: 600; text-align: right; }
+#editbase-root .eb-bd { display: grid; grid-template-columns: 170px 1fr; gap: 16px; }
+#editbase-root .eb-bd-line { display: flex; flex-direction: column; gap: 4px; }
+#editbase-root .eb-bd-line label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+#editbase-root .eb-bd-st { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; }
+#editbase-root .eb-bd-st.on { border-color: var(--primary); background: rgba(37, 99, 235, .08); }
+#editbase-root .eb-bd-st .ln { display: inline-block; width: 44px; height: 0; }
+#editbase-root .eb-bd-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+#editbase-root .eb-bd-pic { position: relative; width: 220px; height: 140px; margin: 6px auto; background: var(--surface); }
+#editbase-root .eb-bd-pic .txt { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; pointer-events: none; }
+#editbase-root .eb-bd-pic .edge { position: absolute; border: 0; padding: 0; cursor: pointer; background: transparent; }
+#editbase-root .eb-bd-pic .edge::after { content: ""; position: absolute; background: #c8ced8; }
+#editbase-root .eb-bd-pic .edge.top, #editbase-root .eb-bd-pic .edge.bottom, #editbase-root .eb-bd-pic .edge.insideH { left: 0; right: 0; height: 14px; }
+#editbase-root .eb-bd-pic .edge.top { top: -7px; } #editbase-root .eb-bd-pic .edge.bottom { bottom: -7px; } #editbase-root .eb-bd-pic .edge.insideH { top: calc(50% - 7px); }
+#editbase-root .eb-bd-pic .edge.left, #editbase-root .eb-bd-pic .edge.right, #editbase-root .eb-bd-pic .edge.insideV { top: 0; bottom: 0; width: 14px; }
+#editbase-root .eb-bd-pic .edge.left { left: -7px; } #editbase-root .eb-bd-pic .edge.right { right: -7px; } #editbase-root .eb-bd-pic .edge.insideV { left: calc(50% - 7px); }
+#editbase-root .eb-bd-pic .edge.top::after, #editbase-root .eb-bd-pic .edge.bottom::after, #editbase-root .eb-bd-pic .edge.insideH::after { left: 0; right: 0; top: 6px; height: 2px; }
+#editbase-root .eb-bd-pic .edge.left::after, #editbase-root .eb-bd-pic .edge.right::after, #editbase-root .eb-bd-pic .edge.insideV::after { top: 0; bottom: 0; left: 6px; width: 2px; }
+#editbase-root .eb-bd-pic .edge.keep::after { background: repeating-linear-gradient(90deg, #c8ced8 0 4px, transparent 4px 7px); }
+#editbase-root .eb-bd-pic .edge.left.keep::after, #editbase-root .eb-bd-pic .edge.right.keep::after, #editbase-root .eb-bd-pic .edge.insideV.keep::after { background: repeating-linear-gradient(180deg, #c8ced8 0 4px, transparent 4px 7px); }
+#editbase-root .eb-bd-pic .edge.on::after { background: var(--text, #111); }
+#editbase-root .eb-bd-pic .edge.off::after { background: transparent; }
+#editbase-root .eb-bd-pic .edge:hover::after { background: var(--primary); }
+#editbase-root .eb-fillpick { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+#editbase-root .eb-swatches { display: grid; grid-template-columns: repeat(10, 26px); gap: 5px; }
+#editbase-root .eb-swatches .sw { width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 0; }
+#editbase-root .eb-swatches .sw.on { outline: 2px solid var(--primary); outline-offset: 1px; }
+@media (max-width: 620px) { #editbase-root .eb-nf, #editbase-root .eb-bd { grid-template-columns: 1fr; } }
+#editbase-root .eb-tabbed .body { min-height: 280px; }
+/* 一覧の行は縮めない：枠の高さに合わせて縮み、行どうしが重なっていた（2026-09-29 オーナー指摘） */
+#editbase-root .eb-nf-cats .eb-nf-cat, #editbase-root .eb-nf-examples .eb-nf-ex { flex: 0 0 auto; }
+#editbase-root .eb-nf-cats .eb-nf-cat { border: 0; border-radius: 0; box-shadow: none; outline: none; min-height: 34px; }
+#editbase-root .eb-nf-cats .eb-nf-cat:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+#editbase-root .eb-nf-examples .eb-nf-ex { min-height: 34px; }
+/* 罫線の図：選んだ範囲の行と列に合わせたマス（1マス／横2／縦2／2×2）と、各マスの「文字」 */
+#editbase-root .eb-bd-pic { display: grid; }
+#editbase-root .eb-bd-pic .txt { position: static; display: grid; place-items: center; }
+/* 罫線タブの左の欄は、ほかの欄と同じ見た目に */
+#editbase-root .eb-bd-line .eb-field { margin: 4px 0 0; }
+#editbase-root .eb-bd-line .eb-field label { margin-top: 0; }
+#editbase-root .eb-bd-line input[type=number] { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; height: 32px; padding: 3px 8px; }
+#editbase-root .eb-bd-line input[type=color] { width: 60px; height: 32px; padding: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+/* タブを押したときの黒い枠を出さない（キーボードで移ったときだけ青い枠） */
+#editbase-root .eb-fp-tab:focus { outline: none; }
+#editbase-root .eb-fp-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+/* フォントのタブ：3 列の候補の枠とサンプル */
+#editbase-root .eb-fontpick { display: grid; grid-template-columns: 1.6fr 1fr .8fr; gap: 12px; }
+#editbase-root .eb-fontpick .col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#editbase-root .eb-fontpick .col label { font-size: 12px; color: var(--muted); }
+#editbase-root .eb-fontpick .col input { height: 32px; }
+#editbase-root .eb-fontpick .list { height: 150px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; }
+#editbase-root .eb-fontpick .list .it { flex: 0 0 auto; text-align: left; padding: 5px 8px; border: 0; background: none; color: inherit; cursor: pointer; font-size: 13.5px; }
+#editbase-root .eb-fontpick .list .it.on { background: var(--primary); color: #fff; }
+#editbase-root .eb-fontpick .row2 { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#editbase-root .eb-fontpick .row2 label { font-size: 12px; color: var(--muted); }
+#editbase-root .eb-fontpick .row2 input[type=color] { width: 60px; height: 30px; }
+#editbase-root .eb-fontpick .preview { grid-column: 1 / -1; height: 70px; border: 1px solid var(--border); border-radius: 6px; display: grid; place-items: center; overflow: hidden; background: var(--surface); }
+@media (max-width: 620px) { #editbase-root .eb-fontpick { grid-template-columns: 1fr; } }
+
+/* 見出しのデザインの見本（文書のスタイル） */
+#editbase-root .eb-hdcss { display: none; }
+#editbase-root .eb-hdgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; max-height: 300px; overflow: auto; padding: 2px; }
+#editbase-root .eb-hdtile { display: flex; flex-direction: column; gap: 6px; align-items: stretch; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: #111; cursor: pointer; text-align: left; }
+#editbase-root .eb-hdtile.on { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+#editbase-root .eb-hdtile .nm { font-size: 11px; color: #667085; }
+#editbase-root .eb-hdtile .pv { font: 700 15px/1.5 var(--eb-font-head, sans-serif); display: block; }
+#editbase-root .eb-hdtile .pv > span { display: block; }
+#editbase-root .eb-inks input[type=color] { width: 60px; flex: 0 0 60px; }

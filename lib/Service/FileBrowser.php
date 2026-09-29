@@ -8,6 +8,7 @@ use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 
 /**
  * Browsing the user's own Files, so a picture can be put into a document.
@@ -20,6 +21,13 @@ class FileBrowser {
 	/** Big enough for a photograph, small enough not to exhaust PHP's memory. */
 	public const MAX_BYTES = 24 * 1024 * 1024;
 	private const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/avif', 'image/bmp'];
+	/** A Markdown file is text; five megabytes of it is a book. */
+	public const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024;
+
+	/** Whether a file is Markdown, by its name: the MIME type is not reliable for it. */
+	public static function isMarkdown(string $name): bool {
+		return (bool)preg_match('/\.(md|markdown|mdown|mkd)$/i', $name);
+	}
 
 	public function __construct(
 		private IRootFolder $rootFolder,
@@ -56,6 +64,7 @@ class FileBrowser {
 				'mime' => $mime,
 				'size' => $child->getSize(),
 				'is_image' => in_array($mime, self::IMAGE_MIMES, true),
+				'is_markdown' => self::isMarkdown($name),
 			];
 		}
 		$byName = static fn (array $a, array $b): int => strnatcasecmp($a['name'], $b['name']);
@@ -94,6 +103,10 @@ class FileBrowser {
 		if ($file === null) {
 			throw new NotFoundException('file ' . $id . ' not found');
 		}
+		// Put into a document, a picture is a copy of it (review S3).
+		if (!Downloads::allowed($file)) {
+			throw new NotPermittedException('whoever shared this picture does not allow it to be downloaded');
+		}
 		if (!in_array($file->getMimeType(), self::IMAGE_MIMES, true)) {
 			throw new \InvalidArgumentException('not an image');
 		}
@@ -106,6 +119,55 @@ class FileBrowser {
 			'mime' => $file->getMimeType(),
 			'size' => $file->getSize(),
 			'data' => base64_encode($file->getContent()),
+		];
+	}
+
+	/**
+	 * A Markdown file's text, to be made into a document.
+	 *
+	 * The file itself is only read, never written: the document made from it is a
+	 * new file, and the Markdown stays as it was.
+	 *
+	 * Text written on a Japanese Windows machine is often Shift_JIS rather than
+	 * UTF-8; read as UTF-8 it comes out as garbage. TextEncoding works out what
+	 * it is, so the browser always receives UTF-8 and is told what it was.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function markdown(string $userId, int $id): array {
+		$userFolder = $this->rootFolder->getUserFolder($userId);
+		$file = null;
+		foreach ($userFolder->getById($id) as $node) {
+			if ($node instanceof File) {
+				$file = $node;
+				break;
+			}
+		}
+		if ($file === null) {
+			throw new NotFoundException('file ' . $id . ' not found');
+		}
+		// Made into a document of one's own, a note is a copy of it (review S3).
+		if (!Downloads::allowed($file)) {
+			throw new NotPermittedException('whoever shared this note does not allow it to be downloaded');
+		}
+		if (!self::isMarkdown($file->getName())) {
+			throw new \InvalidArgumentException('not a Markdown file');
+		}
+		if ($file->getSize() > self::MAX_MARKDOWN_BYTES) {
+			throw new \InvalidArgumentException('file is larger than ' . (int)(self::MAX_MARKDOWN_BYTES / 1024 / 1024) . ' MB');
+		}
+		$read = TextEncoding::toUtf8((string)$file->getContent());
+		return [
+			'id' => $file->getId(),
+			'name' => $file->getName(),
+			'size' => $file->getSize(),
+			'content' => $read['text'],
+			'encoding' => [
+				'read' => $read['encoding'],
+				'declared' => $read['declared'],
+				'mismatch' => $read['mismatch'],
+				'lossy' => $read['lossy'],
+			],
 		];
 	}
 }

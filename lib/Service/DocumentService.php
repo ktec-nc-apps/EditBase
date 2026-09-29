@@ -9,8 +9,11 @@ use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\IConfig;
 use OCP\IUserManager;
+use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
 use OCP\Share\IManager as IShareManager;
 use OCP\Share\IShare;
 
@@ -27,12 +30,17 @@ class DocumentService {
 	public const EXT = '.html';
 	private const DEFAULT_FOLDER = 'EditBase';
 
+	/** How long a save waits for another save of the same document to finish, in seconds. */
+	private float $lockWait = 10.0;
+
 	public function __construct(
 		private IRootFolder $rootFolder,
 		private IConfig $config,
 		private IShareManager $shares,
 		private IUserManager $users,
 		private VersionService $versions,
+		private DocumentCheck $check,
+		private ILockingProvider $locking,
 	) {
 	}
 
@@ -76,6 +84,8 @@ class DocumentService {
 	public function list(string $userId): array {
 		$out = [];
 		$seen = [];
+		// What one listing may read to mark files it has not seen before (S14).
+		$this->check->beginListing();
 		$this->gather($this->folder($userId), '', $out, $seen);
 		foreach ($this->sharedWithMe($userId) as $item) {
 			if (isset($seen[$item['id']])) {
@@ -151,6 +161,19 @@ class DocumentService {
 		if ($file->getParent()->getId() === $target->getId()) {
 			return $this->describe($file, false);
 		}
+		// Moving is taking it out of one folder and putting it in another, and each
+		// half needs its own permission -- which is what Files asks for too (review
+		// S6). The move itself would only look at the second.
+		if (!$file->isDeletable()) {
+			throw new NotPermittedException('this document may not be taken out of the folder it is in');
+		}
+		if (!$target->isCreatable()) {
+			throw new NotPermittedException('that category is read only');
+		}
+		// Out of a share that does not allow downloading is out of the share (S3).
+		if ($file->getMountPoint()->getMountPoint() !== $target->getMountPoint()->getMountPoint() && !Downloads::allowed($file)) {
+			throw new NotPermittedException('whoever shared this document does not allow it to be downloaded');
+		}
 		$was = $file->getParent();
 		$wasCalled = $file->getName();
 		$moved = $file->move($target->getPath() . '/' . $this->freeName($target, $this->stripExt($file->getName())));
@@ -180,8 +203,24 @@ class DocumentService {
 				continue;
 			}
 			$seen[$node->getId()] = true;
-			$out[] = $this->describe($node, false, $path);
+			$out[] = $this->withCheck($this->describe($node, false, $path), $node);
 		}
+	}
+
+	/**
+	 * A list row, with what EditBase would have to take out of the file to open it
+	 * (null for a file it handles as it is). The list marks the ones it does not.
+	 *
+	 * @param array<string, mixed> $row
+	 * @return array<string, mixed>
+	 */
+	private function withCheck(array $row, File $file): array {
+		$seen = $this->check->forFile($file);
+		$row['unsupported'] = $seen['found'];
+		// Carries EditBase's own program (checked by its fingerprint): the list
+		// marks it "JS", so it is known before it is opened.
+		$row['script'] = $seen['script'];
+		return $row;
 	}
 
 	/** @param array<int, string> $out */
@@ -208,11 +247,26 @@ class DocumentService {
 	private function sharedWithMe(string $userId): array {
 		$out = [];
 		$seen = [];
+		$mine = $this->rootFolder->getUserFolder($userId);
 		foreach ([IShare::TYPE_USER, IShare::TYPE_GROUP] as $type) {
 			foreach ($this->shares->getSharedWith($userId, $type, null, 200) as $share) {
+				// The share as this user has it -- where it is in their own Files, and
+				// what they may do with it -- not as its owner has it (review S11): the
+				// owner's own folders are not this user's to see, and the owner may
+				// write in what this user may only read. A share this user declined, or
+				// has not yet accepted, is not in their Files, and is not listed.
+				$node = null;
 				try {
-					$node = $share->getNode();
+					foreach ($mine->getById($share->getNodeId()) as $candidate) {
+						if ($candidate instanceof File || $candidate instanceof Folder) {
+							$node = $candidate;
+							break;
+						}
+					}
 				} catch (\Throwable) {
+					$node = null;
+				}
+				if ($node === null) {
 					continue;
 				}
 				$owner = $this->nameOf($share->getShareOwner());
@@ -230,7 +284,15 @@ class DocumentService {
 					continue;
 				}
 				$seen[$node->getId()] = true;
-				$item = $this->describe($node, false, '');
+				$item = $this->withCheck($this->describe($node, false, ''), $node);
+				// A document shared on its own keeps the number of the folder it is
+				// in on its owner's side, as it always has: the list files it under
+				// "Shared with me" by it, and it is not a folder this user can see.
+				try {
+					$item['folderId'] = $share->getNode()->getParent()->getId();
+				} catch (\Throwable) {
+					// kept as this user sees it
+				}
 				$item['owner'] = $owner;
 				$item['shared'] = true;
 				$out[] = $item;
@@ -311,24 +373,62 @@ class DocumentService {
 	 * @return array<string, mixed>
 	 */
 	public function save(string $userId, int $id, string $content, string $etag = '', bool $manual = false): array {
-		$file = $this->file($userId, $id);
-		if ($etag !== '' && $file->getEtag() !== $etag) {
-			$out = $this->describe($file, true);
-			$out['stale'] = true;
-			return $out;
-		}
-		// The version is of what is there now, taken before it is written over --
-		// on every save, or only on the ones the writer asked for, as they choose.
-		$keep = $this->versions->keep($userId);
-		if ($keep > 0 && ($manual || $this->versions->when($userId) === 'auto') && $file->getSize() > 0) {
+		// The check and the write are one step (review S4). A second save of the
+		// same document waits for the first to finish, then looks again at what is
+		// there: two writers who both started from the same version used to both
+		// pass the check, and the one who wrote last threw the other's work away
+		// while both were told their save had gone in.
+		return $this->oneAtATime($this->file($userId, $id), function () use ($userId, $id, $content, $etag, $manual): array {
+			// Looked up again inside: what was there before the wait may not be there now.
+			$file = $this->file($userId, $id);
+			if ($etag !== '' && $file->getEtag() !== $etag) {
+				$out = $this->describe($file, true);
+				$out['stale'] = true;
+				return $out;
+			}
+			// The version is of what is there now, taken before it is written over --
+			// on every save, or only on the ones the writer asked for, as they choose.
+			$keep = $this->versions->keep($userId);
+			if ($keep > 0 && ($manual || $this->versions->when($userId) === 'auto') && $file->getSize() > 0) {
+				try {
+					$this->versions->take($file, $keep);
+				} catch (\Throwable) {
+					// A version that cannot be taken must not cost the writer their save.
+				}
+			}
+			$file->putContent($content);
+			return $this->describe($file, false);
+		});
+	}
+
+	/**
+	 * Run $write while holding this document against every other write through
+	 * EditBase. Nextcloud's own locking does the holding, under a name of the
+	 * app's own, so the file's own locks -- which the write takes -- are left alone.
+	 *
+	 * @template T
+	 * @param callable(): T $write
+	 * @return T
+	 */
+	private function oneAtATime(File $file, callable $write): mixed {
+		$key = 'editbase/save/' . $file->getId();
+		$until = microtime(true) + $this->lockWait;
+		while (true) {
 			try {
-				$this->versions->take($file, $keep);
-			} catch (\Throwable) {
-				// A version that cannot be taken must not cost the writer their save.
+				$this->locking->acquireLock($key, ILockingProvider::LOCK_EXCLUSIVE, $file->getName());
+				break;
+			} catch (LockedException) {
+				if (microtime(true) >= $until) {
+					throw new \RuntimeException('somebody else is saving this document; try again in a moment');
+				}
+				usleep(50000);
 			}
 		}
-		$file->putContent($content);
-		return $this->describe($file, false);
+		try {
+			return $write();
+		} finally {
+			$this->locking->releaseLock($key, ILockingProvider::LOCK_EXCLUSIVE);
+		}
 	}
 
 	/** The versions kept beside a document, newest first. */
@@ -342,9 +442,11 @@ class DocumentService {
 
 	/** @return array<string, mixed> */
 	public function restoreVersion(string $userId, int $id, int $number): array {
-		$file = $this->file($userId, $id);
-		$this->versions->restore($file, $number, $this->versions->keep($userId));
-		return $this->describe($this->file($userId, $id), true);
+		// Putting a version back writes the document, so it waits its turn like a save.
+		return $this->oneAtATime($this->file($userId, $id), function () use ($userId, $id, $number): array {
+			$this->versions->restore($this->file($userId, $id), $number, $this->versions->keep($userId));
+			return $this->describe($this->file($userId, $id), true);
+		});
 	}
 
 	/** What version the file is at now, without reading the whole of it. */
@@ -362,6 +464,10 @@ class DocumentService {
 	/** @return array<string, mixed> */
 	public function duplicate(string $userId, int $id): array {
 		$file = $this->file($userId, $id);
+		// A copy in one's own folder is a download by another name (review S3).
+		if (!Downloads::allowed($file)) {
+			throw new NotPermittedException('whoever shared this document does not allow it to be downloaded');
+		}
 		$folder = $this->folder($userId);
 		$base = $this->stripExt($file->getName());
 		$copy = $folder->newFile($this->freeName($folder, $base . ' (2)'), $file->getContent());
@@ -433,11 +539,24 @@ class DocumentService {
 			'mtime' => $file->getMTime(),
 			'etag' => $file->getEtag(),
 			'writable' => $file->isUpdateable(),
+			// False for a document whose share does not allow downloading: it can be
+			// read and written in, not copied away (S3), and the editor can say so.
+			'download' => Downloads::allowed($file),
 			'shared' => false,
 			'owner' => '',
 		];
 		if ($withContent) {
-			$out['content'] = $content;
+			// Whatever the file was written in, the browser is handed UTF-8, and told
+			// what it was read as -- a document from elsewhere in Shift_JIS could not
+			// be opened at all before this (see TextEncoding).
+			$read = TextEncoding::htmlToUtf8((string)$content);
+			$out['content'] = $read['text'];
+			$out['encoding'] = [
+				'read' => $read['encoding'],
+				'declared' => $read['declared'],
+				'mismatch' => $read['mismatch'],
+				'lossy' => $read['lossy'],
+			];
 		}
 		return $out;
 	}

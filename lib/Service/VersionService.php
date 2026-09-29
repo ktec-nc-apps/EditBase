@@ -9,6 +9,7 @@ use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\FilesMetadata\IFilesMetadataManager;
 use OCP\IConfig;
 
 /**
@@ -20,14 +21,25 @@ use OCP\IConfig;
  * They are plain HTML like everything else here, so a version can be opened,
  * printed or picked apart with nothing but a browser -- and Nextcloud's own
  * versions, trash and sync still apply to them as they do to any file.
+ *
+ * The name alone does not say whose a version is: Report.html and Report.htm in
+ * one folder both come to Report.#01, and a document deleted in Files leaves its
+ * versions behind for the next one of the same name. So each version is also
+ * marked, out of sight in the file's metadata, with the id of the document it
+ * was taken from (review S10), and a document only ever sees, restores, moves or
+ * deletes its own. A version made before the marks were -- it has none -- is
+ * taken by its name, as it always was. The names themselves are unchanged.
  */
 class VersionService {
 	public const MAX = 99;
 	private const DEFAULT_KEEP = 10;
+	/** The metadata key a version carries: the file id of its document. */
+	private const MARK = 'editbase-version-of';
 
 	public function __construct(
 		private IRootFolder $rootFolder,
 		private IConfig $config,
+		private IFilesMetadataManager $metadata,
 	) {
 	}
 
@@ -66,6 +78,16 @@ class VersionService {
 		}
 		$folder = $file->getParent();
 		$stem = $this->stem($file->getName());
+		$of = $file->getId();
+		// A place in the row held by another document's version is not this one's
+		// to shift or to drop: then no version is taken this time, rather than one
+		// document's history being pushed into another's.
+		for ($i = 1; $i <= $keep; $i++) {
+			$node = $this->slot($folder, $stem, $i);
+			if ($node !== null && !$this->belongs($node, $of)) {
+				return;
+			}
+		}
 		// The last one falls off the end.
 		$oldest = $this->slot($folder, $stem, $keep);
 		if ($oldest !== null) {
@@ -78,7 +100,7 @@ class VersionService {
 			}
 			$node->move($folder->getPath() . '/' . $this->name($stem, $i + 1));
 		}
-		$folder->newFile($this->name($stem, 1), $file->getContent());
+		$this->mark($folder->newFile($this->name($stem, 1), $file->getContent()), $of);
 	}
 
 	/**
@@ -92,7 +114,7 @@ class VersionService {
 		$out = [];
 		for ($i = 1; $i <= self::MAX; $i++) {
 			$node = $this->slot($folder, $stem, $i);
-			if ($node === null) {
+			if ($node === null || !$this->belongs($node, $file->getId())) {
 				continue;
 			}
 			$out[] = [
@@ -108,10 +130,12 @@ class VersionService {
 	/** What one version holds. */
 	public function read(File $file, int $number): string {
 		$node = $this->slot($file->getParent(), $this->stem($file->getName()), $number);
-		if ($node === null) {
+		if ($node === null || !$this->belongs($node, $file->getId())) {
 			throw new NotFoundException('there is no version ' . $number);
 		}
-		return $node->getContent();
+		// An old version may predate the document being saved by EditBase, and so
+		// still be in whatever it was written in.
+		return TextEncoding::htmlToUtf8((string)$node->getContent())['text'];
 	}
 
 	/**
@@ -128,16 +152,16 @@ class VersionService {
 	/**
 	 * The versions of a document, wherever they are. Given by the folder and the
 	 * name the document had, because they are looked for both before and after
-	 * the document itself has moved.
+	 * the document itself has moved -- and by its id, which does not change.
 	 *
 	 * @return array<int, File>
 	 */
-	public function slotsOf(Folder $folder, string $name): array {
+	public function slotsOf(Folder $folder, string $name, int $of): array {
 		$stem = $this->stem($name);
 		$out = [];
 		for ($i = 1; $i <= self::MAX; $i++) {
 			$node = $this->slot($folder, $stem, $i);
-			if ($node !== null) {
+			if ($node !== null && $this->belongs($node, $of)) {
 				$out[$i] = $node;
 			}
 		}
@@ -156,7 +180,7 @@ class VersionService {
 		if ($wasIn->getId() === $folder->getId() && $this->stem($wasCalled) === $stem) {
 			return;
 		}
-		foreach ($this->slotsOf($wasIn, $wasCalled) as $number => $node) {
+		foreach ($this->slotsOf($wasIn, $wasCalled, $file->getId()) as $number => $node) {
 			$target = $folder->getPath() . '/' . $this->name($stem, $number);
 			try {
 				$node->move($target);
@@ -168,12 +192,33 @@ class VersionService {
 
 	/** The versions go with the document when it goes. */
 	public function drop(File $file): void {
-		foreach ($this->slotsOf($file->getParent(), $file->getName()) as $node) {
+		foreach ($this->slotsOf($file->getParent(), $file->getName(), $file->getId()) as $node) {
 			try {
 				$node->delete();
 			} catch (\Throwable) {
 				// Nothing to be done about one that will not go.
 			}
+		}
+	}
+
+	/** Whether a version is this document's: marked with its id, or not marked at all. */
+	private function belongs(File $version, int $of): bool {
+		try {
+			$metadata = $this->metadata->getMetadata($version->getId());
+			return !$metadata->hasKey(self::MARK) || $metadata->getInt(self::MARK) === $of;
+		} catch (\Throwable) {
+			// No metadata: a version from before the marks, or a server without them.
+			return true;
+		}
+	}
+
+	private function mark(File $version, int $of): void {
+		try {
+			$metadata = $this->metadata->getMetadata($version->getId(), true);
+			$metadata->setInt(self::MARK, $of);
+			$this->metadata->saveMetadata($metadata);
+		} catch (\Throwable) {
+			// Unmarked, it is found by its name, as versions always were.
 		}
 	}
 

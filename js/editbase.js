@@ -12,7 +12,35 @@
   const { createApp } = Vue;
 
   const BASE = ((window.OC && OC.generateUrl) ? OC.generateUrl('/apps/editbase') : '/apps/editbase') + '/';
-  const TOKEN = (window.OC && OC.requestToken) ? OC.requestToken : '';
+  // The request token is read each time it is sent, not once at load. Nextcloud
+  // hands out a new one when the session is renewed (its heartbeat updates
+  // OC.requestToken), and the one read at load then had every request refused
+  // with 412 -- every save, for good, until a reload, which lost whatever had
+  // not been saved (review D13).
+  function requestToken() {
+    if (window.OC && OC.requestToken) { return OC.requestToken; }
+    const head = document.head && document.head.dataset ? document.head.dataset.requesttoken : '';
+    return head || '';
+  }
+  /**
+   * A fresh token, fetched the way Nextcloud's own heartbeat fetches one, and
+   * handed to the rest of the page the same way.
+   */
+  async function renewToken() {
+    const url = (window.OC && OC.generateUrl) ? OC.generateUrl('/csrftoken') : '/csrftoken';
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) { throw new Error('HTTP ' + res.status); }
+    const got = await res.json();
+    const token = got && typeof got.token === 'string' ? got.token : '';
+    if (!token) { throw new Error('no token'); }
+    if (window.OC) { OC.requestToken = token; }
+    if (document.head && document.head.dataset) { document.head.dataset.requesttoken = token; }
+    try {
+      const bus = window._nc_event_bus;
+      if (bus && typeof bus.emit === 'function') { bus.emit('csrf-token-update', { token: token }); }
+    } catch (e) { /* the page's own listeners are not ours to worry about */ }
+    return token;
+  }
 
   // ---- i18n -----------------------------------------------------------------
   // English strings are the source/keys; Nextcloud loads l10n/<ncLang>.js server-side.
@@ -39,17 +67,51 @@
   }
 
   // ---- server ---------------------------------------------------------------
-  async function api(path, opts) {
+  async function api(path, opts, retried) {
     const res = await fetch(BASE + 'api/' + path, {
       credentials: 'same-origin',
-      headers: Object.assign({ 'Content-Type': 'application/json', requesttoken: TOKEN }, (opts || {}).headers || {}),
+      headers: Object.assign({ 'Content-Type': 'application/json', requesttoken: requestToken() }, (opts || {}).headers || {}),
       method: (opts || {}).method || 'GET',
       body: (opts || {}).body != null ? JSON.stringify(opts.body) : undefined,
     });
+    // 412 is Nextcloud refusing the token ("CSRF check failed") -- the app itself
+    // never answers with it. Nothing was done with the request, so it is sent
+    // once more with a fresh token.
+    if (res.status === 412 && !retried) {
+      let renewed = false;
+      try { await renewToken(); renewed = true; } catch (e) { /* answered below as it was */ }
+      if (renewed) { return api(path, opts, true); }
+    }
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('json') ? await res.json() : await res.text();
-    if (!res.ok) { throw new Error((body && body.error) || ('HTTP ' + res.status)); }
+    if (!res.ok) { throw new Error(serverSays((body && body.error) || ('HTTP ' + res.status))); }
     return body;
+  }
+  /**
+   * What the server said went wrong, in the writer's language. The server speaks
+   * English (its words are the keys), and they were put on the screen as they came
+   * -- "Could not save: somebody else is saving this document…" in the middle of a
+   * Japanese screen. A sentence with a number or a name in it is matched by its
+   * shape; anything not known here is shown as it came.
+   */
+  const SERVER_SHAPES = [
+    [/^document \d+ not found$/, 'The document was not found. It may have been moved or deleted.'],
+    [/^file \d+ not found$/, 'The file was not found. It may have been moved or deleted.'],
+    [/^file is larger than (\d+) MB$/, 'The file is larger than {n} MB.'],
+    [/^image is larger than (\d+) MB$/, 'The picture is larger than {n} MB.'],
+    [/^there is a file called (.+) there already$/, 'There is already a file called {n} there.'],
+    [/^no such account: (.+)$/, 'There is no account called {n}.'],
+    [/^there is no version (\d+)$/, 'There is no version {n}.'],
+    [/^the site answered with an error \((\d+)\)$/, 'The site answered with an error ({n}).'],
+    [/^(.+) is not available$/, '{n} is not available.'],
+  ];
+  function serverSays(msg) {
+    const text = String(msg == null ? '' : msg);
+    for (let i = 0; i < SERVER_SHAPES.length; i += 1) {
+      const m = SERVER_SHAPES[i][0].exec(text);
+      if (m) { return T(SERVER_SHAPES[i][1], { n: m[1] != null ? m[1] : '' }); }
+    }
+    return T(text);
   }
 
   // ---- paper ----------------------------------------------------------------
@@ -85,6 +147,9 @@
     // '' on the colour means plain white paper, as it comes out of the tray.
     bg: { colour: '', image: '', fit: 'cover', fade: 0, w: 0, h: 0 },
     border: { style: 'none', width: 1, colour: '#333333', gap: 6, radius: 0 },
+    // レイヤー（Illustrator と同じ考え方）：番号ごとの名前・隠す・固定する。
+    // 本文のレイヤー（0）は持たない。{ "2": { name: "背景", hide: false, lock: true } }
+    layers: {},
   };
   const PAGE_FITS = ['cover', 'contain', 'stretch', 'tile'];
   const PAGE_BORDERS = ['none', 'solid', 'dashed', 'dotted', 'double'];
@@ -97,6 +162,12 @@
     return '';
   }
 
+  /** The numbers of the paper dialog and what each field takes (see keepPaperNumbers). */
+  const PAPER_LIMITS = [
+    [['margin', 'top'], 0, 100], [['margin', 'bottom'], 0, 100], [['margin', 'left'], 0, 100], [['margin', 'right'], 0, 100],
+    [['fontSize'], 6, 36], [['lineHeight'], 1, 3], [['bg', 'fade'], 0, 90],
+    [['border', 'width'], 0.1, 20], [['border', 'gap'], 0, 40], [['border', 'radius'], 0, 40],
+  ];
   function normalisePaper(p) {
     const out = JSON.parse(JSON.stringify(DEFAULT_PAPER));
     if (!p || typeof p !== 'object') { return out; }
@@ -105,6 +176,17 @@
     if (p.font === 'sans') { out.font = 'sans'; }
     if (p.headingNumbers === 'decimal' || p.headingNumbers === 'japanese') { out.headingNumbers = p.headingNumbers; }
     out.vertical = !!p.vertical;
+    if (p.layers && typeof p.layers === 'object') {
+      Object.keys(p.layers).forEach((k) => {
+        const n = Number(k);
+        const v = p.layers[k];
+        if (!Number.isInteger(n) || !n || Math.abs(n) > 999 || !v || typeof v !== 'object') { return; }
+        const one = {};
+        if (typeof v.name === 'string' && v.name.trim()) { one.name = v.name.replace(/[<>]/g, '').trim().slice(0, 40); }
+        if (v.hide) { one.hide = true; }
+        if (Object.keys(one).length) { out.layers[String(n)] = one; }
+      });
+    }
     const fs = Number(p.fontSize);
     if (fs >= 6 && fs <= 36) { out.fontSize = fs; }
     const lh = Number(p.lineHeight);
@@ -235,6 +317,15 @@
     return paper.orientation === 'landscape' ? { w: s.h, h: s.w } : { w: s.w, h: s.h };
   }
   /** The @page rule — the one piece of CSS that differs per document. */
+  /**
+   * 隠したレイヤーの物は、画面にも印刷にも出さない（Illustrator の目のマーク）。保存する
+   * ファイルに書く分。
+   */
+  function layerRules(paper) {
+    const L = (paper && paper.layers) || {};
+    return Object.keys(L).filter((k) => L[k].hide)
+      .map((k) => '.eb-doc [data-eb-layer="' + Number(k) + '"] { visibility: hidden !important; }').join('\n');
+  }
   function pageRule(paper, about) {
     const s = PAPERS[paper.size] || PAPERS.A4;
     const sh = sheet(paper);
@@ -279,13 +370,35 @@
     const m = paper.margin;
     const out = [];
     const zones = { l: 'left', c: 'center', r: 'right' };
+    // 縦書きの文書（body が縦書き）を Chrome で印刷すると、上下の余白の箱の幅を、紙の
+    // 幅でなく紙の高さから割り出す（Chrome 151 で実測：A4 縦・左右の余白 20mm で、
+    // 中央の欄が 105mm でなく 148.5mm＝20＋(297−40)/2 を中心に出て、右の欄は紙の外
+    // （20＋257mm）へ出て消えた・#258）。編集の画面は3つの欄を字の領域の幅の3等分
+    // で描く（.run の .l .c .r）。印刷も各欄を3等分の幅と決め、割り出しの違い（紙の
+    // 高さ−幅）を各欄の右の余白で打ち消す：左の欄は左端から、中央の欄は字の領域の
+    // まん中に、右の欄は字の領域の右端までになる（A4 縦で余白を変えて実測で一致）。
+    // 横長の紙の縦書きは、この打ち消しでは合わない（実測）ので、ここでは触らない。
+    const sh = sheet(paper);
+    const tateFix = paper.vertical && sh.h > sh.w
+      ? ' width: ' + round1((sh.w - m.left - m.right) / 3) + 'mm; margin-right: ' + round1(sh.h - sh.w) + 'mm;'
+      : '';
+    // 横長の紙の縦書きでは、下の余白の箱が紙の下へ（紙の幅−高さの分）はみ出して、
+    // フッターが印刷されなかった（#268・Chrome 151 で実測：A4 横で 87mm 下）。その分を
+    // 上へ戻すと、画面と同じ下の余白に出る。
+    const landFoot = paper.vertical && sh.w > sh.h ? ' margin-top: -' + round1(sh.w - sh.h) + 'mm;' : '';
+    // The band's letters: the document's body face and a set line height, the same
+    // as the band on the screen (.eb-sheet .run). The margin box took the page's
+    // own defaults -- the browser's serif, a line height of "normal" -- and with
+    // the document's face that is a taller line, so the header printed 1.1 mm low
+    // and the footer 1.5 mm high (printmatch 柱と ノンブル).
+    const bandFace = ' font-family: ' + fontStack(resolveFonts(paper, 'ja').body, 'serif') + '; line-height: 1.2;';
     const say = (side, which, gap, deep) => {
       const slots = paper[which] || {};
       const rules = [];
       Object.keys(zones).forEach((k) => {
         const text = runText(String(slots[k] || ''), about);
         if (!text) { return; }
-        rules.push('@' + side + '-' + zones[k] + ' { content: ' + cssContent(text) + ';'
+        rules.push('@' + side + '-' + zones[k] + ' { content: ' + cssContent(text) + ';' + tateFix + (side === 'bottom' ? landFoot : '') + bandFace
           + ' vertical-align: ' + (side === 'top' ? 'bottom' : 'top') + ';'
           + ' padding-' + (side === 'top' ? 'bottom' : 'top') + ': ' + round1(gap) + 'mm;'
           + ' font-size: 9pt; color: #444; }');
@@ -325,7 +438,11 @@
       if (!piece) { return; }
       if (piece === '{page}') { bits.push('counter(page)'); return; }
       if (piece === '{pages}') { bits.push('counter(pages)'); return; }
-      bits.push('"' + piece.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
+      // The words stand inside <style> in the file, so they may not close it: a
+      // title of `</style><script>…` walked out of the sheet and was printed with
+      // the app's own nonce (BUGS #98). "<" is written as the CSS escape for it,
+      // which reads the same; a line break inside a CSS string ends the string.
+      bits.push('"' + piece.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/</g, '\\3c ').replace(/\r?\n|\r/g, '\\a ') + '"');
     });
     return bits.length ? bits.join(' ') : '""';
   }
@@ -502,6 +619,8 @@
   // editor cannot drift from the artefact. Everything is scoped to .eb-doc: in a
   // saved file that class sits on <body>, in the editor it sits on the canvas.
   const DOC_CSS = `
+/* 目のマークで隠した物は、画面にも印刷にも出さない。 */
+.eb-doc [data-eb-hide] { visibility: hidden !important; }
 /* The editor sits inside an interface stylesheet that sets border-box on
    everything; a saved file, opened on its own, gets the browser's content-box.
    A box 139.6mm wide with a border and padding then came out 150.2mm in the file
@@ -511,7 +630,11 @@
 .eb-doc {
   font-family: var(--eb-font-body, "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif);
   font-size: 10.5pt; line-height: 1.75; color: #111111; text-align: left;
-  word-break: normal; overflow-wrap: anywhere; hyphens: auto;
+  /* No automatic hyphens, as LibreOffice's default: with "auto" the printout of an
+     English document broke words where the screen did not -- the saved file says
+     its language and the editor's paper does not -- and the lines and pages
+     differed (BUGS #229). */
+  word-break: normal; overflow-wrap: anywhere; hyphens: manual;
   /* A thing put behind the writing is given a level below it, and a browser
      paints those behind everything in the box they belong to -- which, with no
      box of its own, means behind the paper as well, where it cannot be seen.
@@ -519,9 +642,13 @@
      the writing, and no further. */
   isolation: isolate;
 }
-.eb-doc > *:first-child { margin-top: 0; }
-.eb-doc > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
-.eb-doc p { margin: 0 0 0.9em; }
+.eb-doc > *:first-child { margin-block-start: 0; }
+.eb-doc > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+/* 保存したファイルでは、本文はページごとの div（.eb-page）に入っている。本文の
+   最初の物は、1ページ目の div の最初の物。 */
+.eb-doc > .eb-page:first-child > *:first-child,
+.eb-doc > .eb-page:first-child > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+.eb-doc p { margin: 0; margin-block-end: 0.9em; }
 /* Everything a heading, a list, a block of code or a table needs is said here
    rather than left to the browser: an interface stylesheet round the editor can
    have its own opinion about a bare <ul> or <h2>, and then the editor draws one
@@ -529,15 +656,15 @@
    makes the file render the same wherever it is opened. */
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
   font-family: var(--eb-font-head, "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif);
-  line-height: 1.4; margin: 1.6em 0 0.7em; break-after: avoid-page; text-align: left;
+  line-height: 1.4; margin: 0; margin-block: 1.6em 0.7em; break-after: avoid-page; text-align: left;
   color: #111111; font-weight: 700;
 }
 .eb-doc h1 { font-size: 1.9em; letter-spacing: .02em; }
-.eb-doc h2 { font-size: 1.5em; border-bottom: 1.5pt solid #222; padding-bottom: .2em; }
+.eb-doc h2 { font-size: 1.5em; border-block-end: 1.5pt solid #222; padding-block-end: .2em; }
 .eb-doc h3 { font-size: 1.25em; }
 .eb-doc h4 { font-size: 1.1em; }
 .eb-doc h5, .eb-doc h6 { font-size: 1em; }
-.eb-doc ul, .eb-doc ol { margin: 0 0 0.9em; padding-left: 1.7em; }
+.eb-doc ul, .eb-doc ol { margin: 0; margin-block-end: 0.9em; padding: 0; padding-inline-start: 1.7em; }
 .eb-doc ul { list-style-type: disc; }
 .eb-doc ul ul { list-style-type: circle; }
 .eb-doc ul ul ul { list-style-type: square; }
@@ -548,10 +675,11 @@
 .eb-doc ol ol ol { list-style-type: lower-roman; }
 /* A list inside a list stands in from the one it is in, and keeps the space
    above and below for the list as a whole rather than for each level. */
-.eb-doc li > ul, .eb-doc li > ol { margin-bottom: 0; margin-top: .2em; }
-.eb-doc li { margin: 0.15em 0; }
+.eb-doc li > ul, .eb-doc li > ol { margin-block-end: 0; margin-block-start: .2em; }
+.eb-doc li { margin: 0; margin-block: 0.15em; }
 .eb-doc blockquote {
-  margin: 1em 0; padding: .4em 0 .4em 1em; border-left: 3pt solid #999; color: #333;
+  margin: 0; margin-block: 1em; padding: 0; padding-block: .4em; padding-inline-start: 1em;
+  border-inline-start: 3pt solid #999; color: #333;
 }
 .eb-doc pre {
   margin: 1em 0;
@@ -561,37 +689,69 @@
 }
 .eb-doc code { font-family: var(--eb-font-mono, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace); font-size: .92em; }
 .eb-doc a { color: #14509b; }
-.eb-doc hr { border: none; border-top: .75pt solid #999; margin: 1.4em 0; }
-.eb-doc hr.eb-rule-thick { border-top-width: 2pt; }
-.eb-doc hr.eb-rule-dashed { border-top-style: dashed; }
+.eb-doc hr { border: none; border-block-start: .75pt solid #999; margin: 0; margin-block: 1.4em; }
+.eb-doc hr.eb-rule-thick { border-block-start-width: 2pt; }
+.eb-doc hr.eb-rule-dashed { border-block-start-style: dashed; }
 .eb-doc img { max-width: 100%; height: auto; }
-.eb-doc figure { margin: 1.2em auto; text-align: center; break-inside: avoid; }
-.eb-doc figcaption { font-size: .88em; color: #444; margin-top: .4em; }
+.eb-doc figure { margin: 0; margin-block: 1.2em; margin-inline: auto; text-align: center; break-inside: avoid; }
+.eb-doc figcaption { font-size: .88em; color: #444; margin-block-start: .4em; }
 .eb-doc figcaption:empty { display: none; }
+/* A picture that is a letter (BUGS #70): it stands in the line at the height of
+   the words, unless the file says how tall it is. */
+.eb-doc img.eb-glyph { display: inline; width: auto; vertical-align: -0.125em; }
+.eb-doc img.eb-glyph:not([style*="height"]) { height: 1em; }
 .eb-doc figure.eb-img-s { max-width: 34%; }
 .eb-doc figure.eb-img-m { max-width: 62%; }
 .eb-doc figure.eb-img-l { max-width: 100%; }
-.eb-doc figure.eb-img img { width: 100%; height: auto; }\n.eb-doc figure.eb-img-left { float: left; margin: .3em 1.4em .8em 0; }\n.eb-doc figure.eb-img-right { float: right; margin: .3em 0 .8em 1.4em; }\n.eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6, .eb-doc table { clear: both; }\n.eb-doc a { text-decoration: underline; text-underline-offset: 2px; }\n.eb-doc nav.eb-toc { margin: 1.4em 0; break-inside: avoid; }\n.eb-doc nav.eb-toc .eb-toc-title { font-weight: 700; margin: 0 0 .5em; }\n.eb-doc nav.eb-toc ul { list-style: none; margin: 0; padding: 0; }\n.eb-doc nav.eb-toc li { margin: .2em 0; }\n.eb-doc nav.eb-toc li.eb-toc-l2 { padding-left: 1.5em; }\n.eb-doc nav.eb-toc li.eb-toc-l3 { padding-left: 3em; }\n.eb-doc nav.eb-toc li.eb-toc-l4 { padding-left: 4.5em; }\n.eb-doc nav.eb-toc a { color: inherit; text-decoration: none; }
+/* 縦書きで紙の上に置いた写真。結び付け先（.eb-anchor）の横幅は0なので、大きさの
+   割合（最大幅 34%・62%）が0に対する割合になり、写真が見えなくなった（2026-09-22
+   点検で発見：縦書きで「自由に配置」を押すと写真が消えた）。置いた写真は幅で決まる。 */
+.eb-doc.eb-tategaki .eb-anchor > figure.eb-img, .eb-tategaki .eb-anchor > figure.eb-img { max-width: none; }
+/* 縦書きの本文の中の写真（#259）。縦書きでは写真の幅が対する「本文の幅」（全ページを
+   横に並べた長さ）が決まっておらず、max-width の 34%・62% も img の width: 100% も
+   効かない。写真は画素の数のままの大きさ（1600×1200 が 424×318mm）で紙からはみ出し、
+   小・中・大も効かなかった。写真の大きさは書く向きで変わらない（LibreOffice も同じ）：
+   縦書きでも、横書きと同じく1ページの字の領域の幅の 34%・62%・100% の幅にする。
+   高さは字の領域の高さまで（縦長の写真が紙をまたがない。そのときは比を崩さず枠の中に
+   収める）。縦書きでは、写真の説明（figcaption）は写真の左の行になり、紙の幅を写真と
+   分け合う：説明のある写真は、説明の1行分だけ幅を控えて、説明ごと1ページに入れる
+   （控えないと「大」の写真は説明ごとでは1ページに入らず、紙の間にまたがった）。
+   写真はブロックにして、行の下の余り（字の並びの基準線の下）を作らない。寸法は紙から
+   決まる値で、編集の画面では紙の設定（paperStyle）が、ファイルでは buildHtml が
+   与える。大きさを手で決めた写真（style の width）と、紙の上に置いた写真は除く。 */
+.eb-doc.eb-tategaki figure.eb-img:not([style*="width"]):not(.eb-anchor > *) { max-width: none; }
+.eb-doc.eb-tategaki figure.eb-img:not([style*="width"]):not(.eb-anchor > *) img {
+  display: block; margin-inline: auto;
+  width: var(--eb-pagew, auto); height: auto; max-width: none; max-height: var(--eb-pageh, none); object-fit: contain;
+}
+.eb-doc.eb-tategaki figure.eb-img:not([style*="width"]):not(.eb-anchor > *):not(.eb-cap-in):not(.eb-cap-none):has(> figcaption:not(:empty)) img {
+  max-width: calc(var(--eb-pagew, 100vw) - 1lh - .5em);
+}
+.eb-doc.eb-tategaki figure.eb-img-s:not([style*="width"]):not(.eb-anchor > *) img { width: calc(var(--eb-pagew, 100vw) * .34); }
+.eb-doc.eb-tategaki figure.eb-img-m:not([style*="width"]):not(.eb-anchor > *) img { width: calc(var(--eb-pagew, 100vw) * .62); }
+.eb-doc figure.eb-img img { width: 100%; height: auto; }\n.eb-doc figure.eb-img-left { float: left; margin: .3em 1.4em .8em 0; }\n.eb-doc figure.eb-img-right { float: right; margin: .3em 0 .8em 1.4em; }\n.eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6, .eb-doc table { clear: both; }\n.eb-doc a { text-decoration: underline; text-underline-offset: 2px; }\n.eb-doc nav.eb-toc { margin: 0; margin-block: 1.4em; }\n.eb-doc nav.eb-toc .eb-toc-title { font-weight: 700; margin: 0; margin-block-end: .5em; }\n.eb-doc nav.eb-toc ul { list-style: none; margin: 0; padding: 0; }\n.eb-doc nav.eb-toc li { margin: 0; margin-block: .2em; }\n.eb-doc nav.eb-toc li.eb-toc-l2 { padding-inline-start: 1.5em; }\n.eb-doc nav.eb-toc li.eb-toc-l3 { padding-inline-start: 3em; }\n.eb-doc nav.eb-toc li.eb-toc-l4 { padding-inline-start: 4.5em; }\n.eb-doc nav.eb-toc a { color: inherit; text-decoration: none; }
 
 /* callout boxes — borders rather than fills, because browsers do not print
    background colours unless the reader turns them on */
 .eb-doc .eb-box {
-  border: 1pt solid #444; border-radius: 8pt; padding: .8em 1em; margin: 1.1em 0; break-inside: avoid;
+  border: 1pt solid #444; border-radius: 8pt; padding: 0; padding-block: .8em; padding-inline: 1em;
+  margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 .eb-doc .eb-box.sq { border-radius: 0; }
 .eb-doc .eb-box.dashed { border-style: dashed; }
 .eb-doc .eb-box.thick { border-width: 2pt; }
 .eb-doc .eb-box.tint { background: #f5f7fb; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.eb-doc .eb-box > *:first-child { margin-top: 0; }
-.eb-doc .eb-box > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
-.eb-doc .eb-box > *:last-child { margin-bottom: 0; }
-.eb-doc .eb-box .eb-box-title { font-weight: 700; margin-bottom: .4em; }
+.eb-doc .eb-box > *:first-child { margin-block-start: 0; }
+.eb-doc .eb-box > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+.eb-doc .eb-box > *:last-child { margin-block-end: 0; }
+.eb-doc .eb-box .eb-box-title { font-weight: 700; margin-block-end: .4em; }
 .eb-doc .eb-note {
-  border-left: 4pt solid #2563eb; padding: .5em 0 .5em .9em; margin: 1.1em 0; break-inside: avoid;
+  border-inline-start: 4pt solid #2563eb; padding: 0; padding-block: .5em; padding-inline-start: .9em;
+  margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 
 /* tables — sized to the text column and kept whole across a page break */
-.eb-doc table.eb-table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .96em; white-space: normal; vertical-align: baseline; }
+.eb-doc table.eb-table { border-collapse: collapse; inline-size: 100%; margin: 0; margin-block: 1.1em; font-size: .96em; white-space: normal; vertical-align: baseline; }
 .eb-doc table.eb-table th, .eb-doc table.eb-table td {
   border: .75pt solid #666; padding: .38em .6em; vertical-align: top;
 }
@@ -663,7 +823,8 @@
   border: 3.5pt solid transparent; border-left-color: #333333; border-right: none;
 }
 .eb-doc .eb-frame {
-  border: .75pt solid #666; padding: .6em .8em; margin: 1.1em 0; break-inside: avoid;
+  border: .75pt solid #666; padding: 0; padding-block: .6em; padding-inline: .8em;
+  margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 /* A frame carried on from the page before begins the next page. In the editor
    paginate puts it there; on paper this is what does it, in any browser. */
@@ -672,7 +833,7 @@
    paper -- the editor does not draw one, because it stands the block against the
    top margin of the sheet. Two and a half millimetres of disagreement between
    the screen and the printout, measured. The margin goes. */
-.eb-doc .eb-cont, .eb-doc .eb-pagebreak + * { margin-top: 0; }
+.eb-doc .eb-cont, .eb-doc .eb-pagebreak + * { margin-block-start: 0; }
 /* And the block after a fold is not always the NEXT element. A peg of no height
    (.eb-anchor) is left in the writing wherever an object was placed, and the
    editor puts a spacer of its own in to carry the block to the sheet below; both
@@ -687,10 +848,38 @@
 .eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + *,
 .eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + *,
 .eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + .eb-anchor + * { margin-top: 0; }
-.eb-doc .eb-frame > *:first-child { margin-top: 0; }
-.eb-doc .eb-frame > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
-.eb-doc .eb-frame > *:last-child { margin-bottom: 0; }
+.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + .eb-anchor + * { margin-block-start: 0; }
+/* ページの div に分けたファイルでは、改ページの印はページの div の最後に、次の
+   物は次のページの div の最初にある。 */
+.eb-doc > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:first-child,
+.eb-doc > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+/* 足した白紙のページ（.eb-blankpage）の後も同じ：白紙の後ろで紙が変わり、次の物は
+   紙の頭から始まる。編集の画面はそう描くのに、印刷は次の物の上の余白を残した ――
+   1枚目の上にページを足すと、2枚目の頭の見出しの余白の分だけ字が次の紙へ押し出され、
+   2枚目の中身が画面と印刷で違った（#266）。 */
+.eb-doc .eb-blankpage + *,
+.eb-doc .eb-blankpage + .eb-pagespacer + *,
+.eb-doc .eb-blankpage + .eb-anchor + *,
+.eb-doc .eb-blankpage + .eb-pagespacer + .eb-anchor + *,
+.eb-doc > .eb-page:has(> .eb-blankpage:last-child) + .eb-page > *:first-child,
+.eb-doc > .eb-page:has(> .eb-blankpage:last-child) + .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+/* 印刷では、ページの頭に来る本文の段落・見出し・表などを新しい紙から始める（BUGS #200）。ページの中身は画面で
+   決めたもの ―― 3行の段落を丸ごと次へ送る孤立行・泣き別れ（LibreOffice と同じ 2・2）
+   も画面の組みのとおり。指定が無いと Chrome が自分で紙を切り、3行の段落を 2行＋1行に
+   分けて、そのページから先の中身が画面と1〜数行ずつずれた（120段落で11ページ中7枚）。
+   改ページの印・白紙のページで終わるページの次は、印の方が紙を変えるので二重にしない。
+   紙の頭の物の上の余白は、Chrome が自分で切ったときと同じく落とす。ページの div その
+   ものに紙を変えさせると、置いた物だけのページが白紙で出て、別のページに描いた物の
+   位置もずれた（オーナーの文書の写しが3枚→5ページ）ので、本文の物だけに付ける。 */
+@media print {
+  .eb-doc > .eb-page:not(:has(> .eb-pagebreak:last-child)):not(:has(> .eb-blankpage:last-child)) + .eb-page
+    > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, dl, blockquote, pre, table):nth-child(1 of :not(.eb-anchor)) {
+    break-before: page; page-break-before: always; margin-block-start: 0;
+  }
+}
+.eb-doc .eb-frame > *:first-child { margin-block-start: 0; }
+.eb-doc .eb-frame > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+.eb-doc .eb-frame > *:last-child { margin-block-end: 0; }
 /* A run of words made into a frame: a box, but not a box that shows until it is
    told to. It is inline-block so it can be given a size, floated or placed. */
 .eb-doc span.eb-frame { display: inline-block; border: 0; padding: 0; margin: 0; }
@@ -707,7 +896,11 @@
    the text it belongs to. That is what makes it print on the page its text is on:
    HTML has no coordinate system that spans pages, but a box positioned against a
    paragraph goes wherever that paragraph goes. */
-.eb-doc div.eb-anchor { position: relative; height: 0; margin: 0; display: flow-root; }
+/* 錨は文章の中に立つ、長さのない杭。長さが無いのは「文章の進む向き」であって
+   画面の高さではない。height: 0 と書いてあったので、縦書きでは紙を横切る向きの
+   高さが 0 になるだけで、流れの中では長さを持たず、杭が常に文章の先頭に居た。
+   置いた物はその杭を基準にするので、どこに置いても紙の右端に張り付いていた。 */
+.eb-doc div.eb-anchor { position: relative; block-size: 0; margin: 0; display: flow-root; }
 /* A placed object is taken out of the writing and put where the writer put it.
    A shape's own rule may be the more particular one -- the arrow says
    position: relative so its head can be hung on it -- and then the object is
@@ -725,7 +918,7 @@
 /* An inline picture sits on a text line, and the line leaves a few pixels under
    it for descenders -- so a band pinned to the foot of the figure hangs past the
    foot of the picture. Made a block, the picture is the whole of the box. */
-.eb-doc figure.eb-img.eb-cap-in > img { display: block; margin-left: auto; margin-right: auto; }
+.eb-doc figure.eb-img.eb-cap-in > img, .eb-doc figure.eb-img.eb-cap-in > a > img { display: block; margin-left: auto; margin-right: auto; }
 .eb-doc figure.eb-img.eb-cap-in > figcaption {
   position: absolute; left: 0; right: 0; bottom: 0; margin: 0;
   background: rgba(0, 0, 0, .48); color: #ffffff; padding: .35em .6em;
@@ -760,6 +953,10 @@
    Only boxes that stand on the page: objects in the flow are not made to keep
    clear of each other, which is the writer's business and not the editor's. */
 .eb-doc .eb-anchor > * { display: flow-root; }
+/* ... but a table stays a table. Made a box like the rest, its rows no longer
+   filled it: a table drawn on the page stood as a small grid in the corner of the
+   box that was drawn (owner 2026-09-29, BUGS #284). */
+.eb-doc .eb-anchor > table { display: table; }
 .eb-doc .eb-anchor > figure.eb-img.eb-cap-t { display: flex; flex-direction: column-reverse; align-items: center; }
 
 /* The room an object takes out of the writing. Empty, no ink, no room of its own
@@ -772,6 +969,10 @@
    took the page out of the writer's hands.) */
 .eb-doc span.eb-anchor { position: relative; display: inline; }
 .eb-doc .eb-anchor > * { position: absolute; margin: 0; }
+/* 両側に字を回す物の横の空き（span.eb-gap）は、幅（inline-size）を持つ箱。編集の画面は
+   display: inline-block を書き込むが、保存のときの消毒は display を残さない。すると
+   ファイルと印刷では空きが幅の無い span になり、字が物の下を通っていた（BUGS #103）。 */
+.eb-doc span.eb-gap { display: inline-block; }
 /* Browsers leave background colours out of a printout unless the page insists. */
 .eb-doc .eb-ink { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .eb-doc .eb-shadow { box-shadow: 0 1pt 4pt rgba(0, 0, 0, .28); }
@@ -789,14 +990,6 @@
    bar, a caption. The writing mode does the rest, because a browser has had this
    since 2016 and Japanese typesetting is what it was put there for. */
 .eb-doc.eb-tategaki { writing-mode: vertical-rl; text-orientation: mixed; text-align: left; }
-.eb-doc.eb-tategaki h2 { border-bottom: none; border-left: 1.5pt solid #222; padding-bottom: 0; padding-left: .2em; }
-.eb-doc.eb-tategaki blockquote { border-left: none; border-top: 3pt solid #999; padding: 0 .4em 0 .4em; margin: 0 1em; }
-.eb-doc.eb-tategaki .eb-note { border-left: none; border-top: 4pt solid #2563eb; padding: .9em .5em 0 .5em; margin: 0 1.1em; }
-.eb-doc.eb-tategaki hr { border-top: none; border-left: .75pt solid #999; margin: 0 1.4em; }
-.eb-doc.eb-tategaki table.eb-table { width: auto; height: 100%; }
-.eb-doc.eb-tategaki .eb-pagebreak { break-before: page; }
-.eb-doc.eb-tategaki ul, .eb-doc.eb-tategaki ol { padding-left: 0; padding-top: 1.7em; }
-.eb-doc.eb-tategaki figure { margin: 0 1.2em; }
 /* Latin runs and figures stay upright in a column of Japanese unless they are
    short enough to be turned on their side, which is what a reader expects. */
 .eb-doc.eb-tategaki .eb-yoko { text-combine-upright: all; }
@@ -834,16 +1027,16 @@
    CSS can move content between pages. Kept together at the end, they print. */
 .eb-doc .eb-fnref { font-size: .72em; vertical-align: super; line-height: 0; }
 .eb-doc .eb-fnref a { color: #14509b; text-decoration: none; }
-.eb-doc .eb-notes { margin: 2em 0 0; border-top: .75pt solid #999; padding-top: .6em; font-size: .92em; }
-.eb-doc .eb-notes .eb-notes-title { font-weight: 700; margin: 0 0 .4em; }
-.eb-doc .eb-notes ol { margin: 0; padding-left: 1.8em; }
-.eb-doc .eb-notes li { margin: .15em 0; }
+.eb-doc .eb-notes { margin: 0; margin-block-start: 2em; border-block-start: .75pt solid #999; padding-block-start: .6em; font-size: .92em; }
+.eb-doc .eb-notes .eb-notes-title { font-weight: 700; margin: 0; margin-block-end: .4em; }
+.eb-doc .eb-notes ol { margin: 0; padding: 0; padding-inline-start: 1.8em; }
+.eb-doc .eb-notes li { margin: 0; margin-block: .15em; }
 .eb-doc .eb-notes li p { margin: 0; }
 
 /* columns */
 .eb-doc .eb-cols { column-gap: 8mm; column-rule: none; }
-.eb-doc .eb-cols > *:first-child { margin-top: 0; }
-.eb-doc .eb-cols > *:nth-child(1 of :not(.eb-anchor)) { margin-top: 0; }
+.eb-doc .eb-cols > *:first-child { margin-block-start: 0; }
+.eb-doc .eb-cols > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
 
 /* Nothing at all, standing where the writing on the last page stops, so that the
    footer is at the foot of that page as it is on every other. */
@@ -872,7 +1065,7 @@
    narrower than that would simply have the formula hanging out of it -- which is
    what a width dragged on to one used to do. The box is never smaller than the
    formula in it; to make a formula smaller, its handles change its size. */
-.eb-doc .eb-math-block { display: block; margin: 1em 0; break-inside: avoid; min-width: max-content; }
+.eb-doc .eb-math-block { display: block; margin: 0; margin-block: 1em; break-inside: avoid; min-width: max-content; }
 :where(.eb-doc .eb-math-block) { text-align: center; }
 
 /* A page from somewhere else, carried in a frame. It is the one thing in a
@@ -891,7 +1084,7 @@
 }
 
 /* an explicit page break: invisible on paper, a labelled line on screen */
-.eb-doc .eb-pagebreak { break-before: page; height: 0; margin: 0; border: none; }
+.eb-doc .eb-pagebreak { break-before: page; block-size: 0; margin: 0; border: none; }
 /* A page the writer asked for, standing on its own. Adding a page used to be
    said with TWO page breaks -- one to end the page before it and one to end the
    blank page -- and the writer, who had asked for a page, got two marks he had
@@ -908,16 +1101,16 @@
      browser drops a break between two boxes that hold nothing: two pages asked
      for at the very front printed as one. A single transparent pixel is a box,
      and a box takes the page it is broken on to. */
-  height: 1px; margin: 0; border: none; background: none;
+  block-size: 1px; margin: 0; border: none; background: none;
 }
 @media screen {
   .eb-doc .eb-pagebreak {
-    height: 1.6em; margin: 1.2em 0; border-top: 1.5pt dashed #2563eb; position: relative;
+    block-size: 1.6em; margin: 0; margin-block: 1.2em; border-block-start: 1.5pt dashed #2563eb; position: relative;
   }
 }
 @media print {
-  .eb-doc .eb-pagebreak { height: 0 !important; margin: 0 !important; border: none !important; }
-  .eb-doc .eb-blankpage { height: 1px !important; margin: 0 !important; border: none !important; }
+  .eb-doc .eb-pagebreak { block-size: 0 !important; margin: 0 !important; border: none !important; }
+  .eb-doc .eb-blankpage { block-size: 1px !important; margin: 0 !important; border: none !important; }
   .eb-doc a { text-decoration: none; }
 }
 `;
@@ -936,12 +1129,23 @@
    object and it was drawn a whole page from where the editor had worked out it
    stood. translate moves it without touching either its margin or the layout. */
 .eb-paper.eb-doc .eb-anchor > * { translate: 0 var(--eb-shift, 0px); }
+/* 縦書きでは文章が右から左へ流れるので、折り目をまたぐぶんのずらしも横へ、
+   向きは逆になる。 */
+.eb-paper.eb-doc.eb-tategaki .eb-anchor > * { translate: calc(0px - var(--eb-shift, 0px)) 0; }
 /* A page the writer asked for is a blank page, and a blank page looks blank.
    Nothing is drawn on it -- no mark, no label, no shading. The owner, more than
    once: "adding a page above should not need this symbol." It is only as deep as
    a page so that the arithmetic that moves blocks moves it; on paper it has no
    height at all and breaks on both sides, which is the same page. */
-.eb-paper.eb-doc .eb-blankpage { height: var(--eb-usable, 0px); background: none; border: none; }
+.eb-paper.eb-doc .eb-blankpage { block-size: var(--eb-usable, 0px); background: none; border: none; }
+.eb-paper .eb-pagebreak { cursor: pointer; }
+/* 枠そのものを選んでいる間は文字のカーソルを出さない（中の文字ではなく枠が選ばれている印）。 */
+.eb-paper.objtaken { caret-color: transparent; }
+/* 「印刷どおりに表示」では改ページの印（点線と「改ページ」の字）も紙には出ないので消す。
+   大きさはそのまま残し、ページの割り付けは動かさない。 */
+.eb-paper.asprinted .eb-pagebreak { border-color: transparent; }
+.eb-paper.asprinted .eb-pagebreak::after { content: none; }
+.eb-paper .eb-pagebreak.eb-picked { background: rgba(37, 99, 235, .12); outline: 2px solid #2563eb; outline-offset: 2px; }
 .eb-paper .eb-pagebreak::after {
   content: attr(data-label); position: absolute; top: -.9em; left: 50%; transform: translateX(-50%);
   font-size: 9pt; color: #2563eb; background: #fff; padding: 0 .6em;
@@ -1020,7 +1224,54 @@ ${insideObjects('.eb-paper.boxed')} {
     align: '', lineHeight: '', before: '', after: '',
     fill: '', border: '', borderStyle: 'solid', borderWidth: '', borderColour: '',
     radius: '', pad: '', indent: '', spacing: '', marker: '', markerColour: '',
+    design: '', accent: '',
   };
+  /**
+   * 見出しのデザイン（オーナー 2026-09-29「CSS を使えば多彩な見出しのデザインができる」）。
+   * どれも CSS だけで描く（保存したファイルも印刷も同じ）。線は行の向きに沿った論理的な
+   * 向き（block-end ＝横書きの下・縦書きの左、inline-start ＝横書きの左・縦書きの上）で
+   * 引くので、縦書きでも崩れない。--eb-da が色、--eb-ds がその薄い色。
+   */
+  const HEADING_DESIGNS = [
+    ['underline', 'Underline', 'border-block-end: .12em solid var(--eb-da); padding-block-end: .15em;'],
+    ['double', 'Double underline', 'border-block-end: .22em double var(--eb-da); padding-block-end: .15em;'],
+    ['dots', 'Dotted underline', 'border-block-end: .16em dotted var(--eb-da); padding-block-end: .15em;'],
+    ['fade', 'Fading underline', 'padding-block-end: .2em; background: linear-gradient(to right, var(--eb-da), transparent) left bottom / 100% .14em no-repeat;'],
+    ['marker', 'Highlighter', 'background: linear-gradient(transparent 60%, var(--eb-ds) 60%);', true],
+    ['bar', 'Bar at the start', 'border-inline-start: .3em solid var(--eb-da); padding-inline-start: .5em;'],
+    ['barline', 'Bar and underline', 'border-inline-start: .3em solid var(--eb-da); border-block-end: .06em solid var(--eb-da); padding: .1em .5em;'],
+    ['band', 'Tinted band', 'background: var(--eb-ds); padding: .3em .6em;'],
+    ['bandbar', 'Band with a bar', 'background: var(--eb-ds); border-inline-start: .3em solid var(--eb-da); padding: .3em .6em;'],
+    ['solid', 'Solid band', 'background: var(--eb-da); color: #fff; padding: .3em .6em;'],
+    ['round', 'Rounded band', 'background: var(--eb-ds); border-radius: .6em; padding: .3em .8em;'],
+    ['box', 'Box', 'border: .1em solid var(--eb-da); padding: .3em .6em;'],
+    ['topbottom', 'Lines above and below', 'border-block: .1em solid var(--eb-da); padding: .25em 0;'],
+    ['stitch', 'Stitched', 'background: var(--eb-ds); outline: .1em dashed var(--eb-da); outline-offset: -.3em; padding: .45em .8em;'],
+    ['shadow', 'Offset shadow', 'border: .1em solid var(--eb-da); box-shadow: .25em .25em 0 var(--eb-da); padding: .3em .6em;'],
+    ['tab', 'Tab', 'background: linear-gradient(to right, var(--eb-da) 0 .45em, var(--eb-ds) .45em); padding: .3em .6em .3em 1em;'],
+  ].map(([key, label, css, inline]) => ({ key, label, css, inline: !!inline }));
+  /** Designs drawn with a mark before the words, or lines to either side of them. */
+  const HEADING_DESIGNS_EXTRA = [
+    ['dot', 'Dot before it', '', '::before { content: "●"; color: var(--eb-da); margin-inline-end: .35em; font-size: .8em; }'],
+    ['square', 'Square before it', '', '::before { content: "■"; color: var(--eb-da); margin-inline-end: .35em; font-size: .8em; }'],
+    ['sides', 'Lines at both sides', 'display: flex; align-items: center; gap: .6em;', '::before, SEL::after { content: ""; flex: 1; border-block-start: .08em solid var(--eb-da); }'],
+    ['bubble', 'Speech bubble', 'position: relative; background: var(--eb-da); color: #fff; padding: .3em .7em; border-radius: .35em; margin-block-end: .7em;',
+      '::after { content: ""; position: absolute; inset-inline-start: 1.2em; inset-block-start: 100%; border: .4em solid transparent; border-block-start-color: var(--eb-da); }'],
+  ].map(([key, label, css, extra]) => ({ key, label, css, extra }));
+  const ALL_DESIGNS = HEADING_DESIGNS.concat(HEADING_DESIGNS_EXTRA);
+  /** The CSS of a design for a selector; the colour is set on the element itself when given. */
+  function designCss(sel, key, accent) {
+    const d = ALL_DESIGNS.find((x) => x.key === key);
+    if (!d) { return ''; }
+    const vars = accent ? '--eb-da: ' + accent + '; --eb-ds: color-mix(in srgb, ' + accent + ' 16%, #fff); ' : '';
+    const sels = sel.split(',').map((x) => x.trim());
+    // The heading's own lines are taken off first: the design is the whole of its look.
+    let out = sels.join(', ') + ' { ' + vars + 'border: 0; box-shadow: none; ' + d.css + (d.inline ? ' display: inline;' : '') + ' }';
+    if (d.extra) {
+      out += '\n' + sels.map((x) => x + d.extra.replace(/SEL/g, x)).join('\n');
+    }
+    return out;
+  }
   const STYLE_SIDES = ['', 'all', 'top', 'bottom', 'left', 'right'];
   const STYLE_BORDERS = ['solid', 'dashed', 'dotted', 'double'];
   const STYLE_MARKERS = ['', 'disc', 'circle', 'square', 'decimal', 'decimal-leading-zero', 'lower-alpha', 'upper-alpha', 'katakana', 'cjk-ideographic', 'none'];
@@ -1062,6 +1313,8 @@ ${insideObjects('.eb-paper.boxed')} {
       to.spacing = numOr(src.spacing, -0.1, 1, 100);
       if (STYLE_MARKERS.indexOf(src.marker) > 0) { to.marker = src.marker; }
       if (typeof src.markerColour === 'string' && /^#[0-9a-f]{6}$/i.test(src.markerColour)) { to.markerColour = src.markerColour; }
+      if (ALL_DESIGNS.some((d) => d.key === src.design)) { to.design = src.design; }
+      if (typeof src.accent === 'string' && /^#[0-9a-f]{6}$/i.test(src.accent)) { to.accent = src.accent; }
     });
     return out;
   }
@@ -1070,7 +1323,7 @@ ${insideObjects('.eb-paper.boxed')} {
     return !!(v.family || v.size !== '' || v.colour || v.bold || v.italic || v.underline
       || v.align || v.lineHeight !== '' || v.before !== '' || v.after !== ''
       || v.fill || v.border || v.radius !== '' || v.pad !== '' || v.indent !== ''
-      || v.spacing !== '' || v.marker || v.markerColour);
+      || v.spacing !== '' || v.marker || v.markerColour || v.design);
   }
   function anyStyles(styles) { return STYLE_TARGETS.some((t) => styleHasAnything(styles[t.key])); }
   /** The stylesheet those settings come to. */
@@ -1107,6 +1360,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // or they would lose to it -- and the editor would not show what the file does.
       const sel = prefix ? t.sel.split(',').map((x) => prefix + x.trim()).join(', ') : t.sel;
       if (decls.length) { out.push(sel + ' { ' + decls.join('; ') + '; }'); }
+      if (v.design) { out.push(designCss(sel, v.design, v.accent || v.colour || '#2563eb')); }
       // The mark in front of a list item is drawn by the browser, and only a rule
       // of its own can reach it.
       if (v.markerColour) {
@@ -1228,8 +1482,8 @@ ${insideObjects('.eb-paper.boxed')} {
     'IMG', 'FIGURE', 'FIGCAPTION', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'DL', 'DT', 'DD', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
-  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-split', 'data-frame-height', 'data-free-top', 'data-free-peg', 'data-eb-again', 'data-eb-id', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
+  const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-zoom', 'data-split', 'data-frame-height', 'data-frame-dir', 'data-size-dir', 'data-drawn', 'data-free-top', 'data-free-peg', 'data-free-page', 'data-eb-again', 'data-eb-formula', 'data-eb-numfmt', 'data-eb-value', 'data-eb-fxedit', 'data-eb-flowcut', 'data-eb-home', 'data-eb-top0', 'data-eb-id', 'data-eb-layer', 'data-eb-name', 'data-eb-hide', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|inline-size|block-size|min-inline-size|min-block-size|max-inline-size|max-block-size|margin-block|margin-block-start|margin-block-end|margin-inline|margin-inline-start|margin-inline-end|padding-block|padding-block-start|padding-block-end|padding-inline|padding-inline-start|padding-inline-end|border-block-start|border-block-end|border-inline-start|border-inline-end|border|border-top|border-right|border-bottom|border-left|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
 
   /**
    * Split a style attribute into its declarations. Not on every semicolon: a
@@ -1297,8 +1551,59 @@ ${insideObjects('.eb-paper.boxed')} {
     const kid = el.querySelector && el.querySelector('source[src]');
     return kid ? kid.getAttribute('src') : '';
   }
+  /**
+   * The old way of saying how a thing looks, said the way this editor says it.
+   * Word, LibreOffice and older pages write align="center" on a paragraph, and
+   * <center> and <font color> round words. The attribute and the tags were thrown
+   * away, so a form's centred title and right-hand date came in flush left
+   * (BUGS #71). LibreOffice keeps them; so does this, as a style.
+   */
+  function presentationalToStyle(root) {
+    if (!root || !root.querySelectorAll) { return; }
+    const doc = root.ownerDocument || document;
+    root.querySelectorAll('[align]').forEach((el) => {
+      const v = String(el.getAttribute('align') || '').trim().toLowerCase();
+      if (!/^(left|center|right|justify)$/.test(v) || !el.style) { return; }
+      if (el.nodeName === 'TABLE') {
+        if (v === 'center' && !el.style.marginLeft && !el.style.marginRight) { el.style.marginLeft = 'auto'; el.style.marginRight = 'auto'; }
+      } else if (/^(P|H[1-6]|DIV|TD|TH|LI|DT|DD|CAPTION|BLOCKQUOTE|SECTION|ARTICLE|HEADER|FOOTER|TR|THEAD|TBODY)$/.test(el.nodeName) && !el.style.textAlign) {
+        el.style.textAlign = v;
+      }
+    });
+    root.querySelectorAll('center').forEach((c) => {
+      const d = doc.createElement('div');
+      d.style.textAlign = 'center';
+      while (c.firstChild) { d.appendChild(c.firstChild); }
+      c.parentNode.replaceChild(d, c);
+    });
+    root.querySelectorAll('font').forEach((f) => {
+      const sp = doc.createElement('span');
+      const color = f.getAttribute('color');
+      if (color) { sp.style.color = color; }
+      const face = f.getAttribute('face');
+      if (face) { sp.style.fontFamily = face; }
+      while (f.firstChild) { sp.appendChild(f.firstChild); }
+      f.parentNode.replaceChild(sp, f);
+    });
+  }
+  /**
+   * Whether a link or a source would run something. A browser reads the address
+   * after throwing away every control character and space in front of it, and
+   * every tab and line break anywhere in it -- a wider set than \s. A link that
+   * began with U+0001 passed the old test and the browser then ran the
+   * `javascript:` behind it (BUGS #99). Read the address the way the browser does.
+   */
+  function unsafeUrl(value) {
+    const v = String(value == null ? '' : value).replace(/^[\u0000-\u0020]+/, '').replace(/[\t\n\r]/g, '');
+    return /^(javascript|data:text\/html|vbscript)/i.test(v);
+  }
   function sanitiseInto(container, opts) {
     const found = (opts && opts.found) || null;
+    // What was taken out, counted -- for asking the writer before a file that was
+    // not made here is opened (see unsupportedReport).
+    const report = (opts && opts.report) || null;
+    const count = (key) => { if (report) { report.tags[key] = (report.tags[key] || 0) + 1; } };
+    presentationalToStyle(container);
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
     const drop = [];
     const unwrap = [];
@@ -1310,17 +1615,32 @@ ${insideObjects('.eb-paper.boxed')} {
       // frame is made when the file is written. So an iframe arriving from
       // anywhere -- the clipboard, a file being opened -- is dropped here, and
       // only the box that was agreed to survives.
+      // <rb> is the base of a reading: without its tag it is the same words in the
+      // same <ruby>, so it goes quietly instead of being asked about -- every
+      // novel from 青空文庫 is written with it (BUGS #69).
+      if (!isMath && name === 'RB') { unwrap.push(el); el = walker.nextNode(); continue; }
       if (isMath ? !MATHML_TAGS.has(name) : !HTML_TAGS.has(name)) {
         // Scripts and frames go entirely; anything else merely loses its tag.
         const inOurBox = el.parentNode && el.parentNode.classList && el.parentNode.classList.contains('eb-embed');
         if (found && !inOurBox && FOREIGN.test(el.nodeName.toUpperCase())) {
           found.push({ kind: el.nodeName.toLowerCase(), url: foreignUrl(el) });
         }
-        (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|LINK|META|BASE|FORM|INPUT|BUTTON|SELECT|TEXTAREA|VIDEO|AUDIO|CANVAS|SVG)$/.test(el.nodeName) ? drop : unwrap).push(el);
+        // A frame inside one of our own boxes is ours: the box is what is kept.
+        if (!inOurBox) { count(String(name).toLowerCase()); }
+        // A form is not dropped with what it holds: a page's form can have whole
+        // paragraphs of explanation in it, and they went with it -- measured on a
+        // page brought in from outside, "the important explanation written inside
+        // the form" was gone the moment the file was opened. The form goes; the
+        // writing stays. Its fields (INPUT, BUTTON, ...) are dropped on their own.
+        // Upper-cased: a parsed <svg> is an SVG element, whose name is lower case,
+        // and it was unwrapped instead -- its CSS text and labels spilled into the
+        // writing as words (BUGS #100).
+        (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|LINK|META|BASE|INPUT|BUTTON|SELECT|TEXTAREA|VIDEO|AUDIO|CANVAS|SVG)$/.test(String(el.nodeName).toUpperCase()) ? drop : unwrap).push(el);
       } else {
         Array.from(el.attributes).forEach((a) => {
           const an = a.name.toLowerCase();
-          if (an.startsWith('on') || !ATTR_OK.has(an)) { el.removeAttribute(a.name); return; }
+          if (an.startsWith('on')) { if (report) { report.handlers += 1; } el.removeAttribute(a.name); return; }
+          if (!ATTR_OK.has(an)) { el.removeAttribute(a.name); return; }
           if (an === 'style') {
             const v = cleanStyle(a.value);
             if (v) { el.setAttribute('style', v); } else { el.removeAttribute('style'); }
@@ -1328,7 +1648,8 @@ ${insideObjects('.eb-paper.boxed')} {
           // class="" is litter: it survives a save, comes back, and makes two
           // copies of the same document look different.
           if (an === 'class' && !String(a.value).trim()) { el.removeAttribute('class'); }
-          if ((an === 'href' || an === 'src') && /^\s*(javascript|data:text\/html|vbscript)/i.test(a.value)) {
+          if ((an === 'href' || an === 'src') && unsafeUrl(a.value)) {
+            if (report) { report.jsLinks += 1; }
             el.removeAttribute(a.name);
           }
         });
@@ -1346,6 +1667,75 @@ ${insideObjects('.eb-paper.boxed')} {
     return container;
   }
 
+  /**
+   * The boxes of a file made elsewhere, turned into what EditBase cuts across
+   * pages. A box holding only words (text, <br>, inline tags) becomes a
+   * paragraph, keeping its attributes. A box holding blocks is opened: its runs
+   * of loose words become paragraphs and its blocks stand on their own. A box
+   * with nothing in it goes. EditBase's own boxes (class eb-…) and what is
+   * inside them are not touched.
+   */
+  const BOXES = 'div, section, article, aside, nav, header, footer';
+  const PHRASING = new Set(['SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'DEL', 'INS', 'MARK', 'CODE', 'SUB', 'SUP', 'SMALL', 'A',
+    'BR', 'IMG', 'RUBY', 'RT', 'RP', 'WBR', 'ABBR', 'TIME', 'BDI', 'BDO']);
+  function boxesToParagraphs(root) {
+    const ours = (el) => {
+      for (let n = el; n && n !== root; n = n.parentElement) {
+        if (/\beb-/.test(n.getAttribute('class') || '') || n.nodeName === 'PRE') { return true; }
+      }
+      return false;
+    };
+    const inline = (n) => n.nodeType === 3 || (n.nodeType === 1 && (PHRASING.has(n.nodeName) || n.namespaceURI === 'http://www.w3.org/1998/Math/MathML'));
+    const doc = root.ownerDocument || document;
+    const para = (from) => {
+      const p = doc.createElement('p');
+      if (from) {
+        Array.from(from.attributes).forEach((a) => { if (/^(style|class|lang|dir|id|title)$/.test(a.name)) { p.setAttribute(a.name, a.value); } });
+      }
+      return p;
+    };
+    const blank = (n) => n.nodeType === 3 && !n.data.replace(/[\s\u200b]+/g, '');
+    Array.from(root.querySelectorAll(BOXES)).reverse().forEach((box) => {
+      if (!box.parentNode || ours(box)) { return; }
+      const kids = Array.from(box.childNodes);
+      if (kids.every(inline)) {
+        if (!box.textContent.replace(/[\s\u200b]+/g, '') && !box.querySelector('img, math')) { box.remove(); return; }
+        const p = para(box);
+        while (box.firstChild) { p.appendChild(box.firstChild); }
+        box.parentNode.replaceChild(p, box);
+        return;
+      }
+      const align = box.style && box.style.textAlign;
+      let run = null;
+      kids.forEach((k) => {
+        if (inline(k)) {
+          if (!run && blank(k)) { return; }
+          if (!run) { run = para(null); box.insertBefore(run, k); }
+          run.appendChild(k);
+        } else {
+          run = null;
+          if (align && k.nodeType === 1 && k.style && !k.style.textAlign) { k.style.textAlign = align; }
+        }
+      });
+      box.querySelectorAll(':scope > p').forEach((p) => {
+        // A paragraph holding only a no-break space is a blank line the writer
+        // put there (Word writes its empty lines that way) and stays, as it does
+        // in LibreOffice. \s counts U+00A0, and those lines were lost (BUGS #102).
+        if (!p.textContent.replace(/[ \t\n\r\f\u200b]+/g, '') && !p.querySelector('img, math')) { p.remove(); return; }
+        if (align && !p.style.textAlign) { p.style.textAlign = align; }
+      });
+      while (box.firstChild) { box.parentNode.insertBefore(box.firstChild, box); }
+      box.remove();
+    });
+  }
+
+  /** An empty count of what a file would lose by being opened here. */
+  function newStripReport() { return { tags: {}, handlers: 0, jsLinks: 0 }; }
+  function stripTotal(r) {
+    if (!r) { return 0; }
+    return Object.values(r.tags).reduce((a, b) => a + b, 0) + r.handlers + r.jsLinks;
+  }
+
   function sanitiseHtml(html) {
     const box = document.createElement('div');
     box.innerHTML = String(html == null ? '' : html);
@@ -1360,9 +1750,29 @@ ${insideObjects('.eb-paper.boxed')} {
   function escapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  /** Zero-width spaces are a caret trick of the editor's, not part of the text. */
+  /**
+   * Zero-width spaces the editor put in as a caret's foothold are not part of the
+   * text: the one a new empty run is started with (bold, a size, added text --
+   * caretPlaceholder, ensureIns), and the one set beside a reading to keep the
+   * caret out of it. Only those are taken out. A zero-width space in the writing
+   * itself -- where a line may break in Thai, or in a long address -- is the
+   * writer's, and every one of them used to go at every save (review D19).
+   */
+  const EDITOR_ZWSP = /(<(?:strong|em|b|i|u|s|code|sup|sub|span|mark|ins)\b[^>]*>)\u200B+|\u200B+(?=<ruby\b)|(<\/ruby>)\u200B+/gi;
+  // A wrapper with nothing left in it once the caret's place-holder is gone: the
+  // bold asked for at a word's end and never typed into. It shows nothing and
+  // only sits in the file (PS 仕事5, 2026-09-28: two empty <strong> saved). Not
+  // one with a name (a bookmark) and not a span with a class (eb-gap and its
+  // like are drawn by their class, empty or not).
+  const EMPTY_INLINE = /<(strong|em|b|i|u|s|mark)(?:\s(?![^>]*\bid=)[^>]*)?><\/\1>|<span(?:\s(?![^>]*\b(?:id|class)=)[^>]*)?><\/span>/gi;
   function stripEditorArtefacts(html) {
-    return String(html).replace(/\u200B/g, '');
+    let out = String(html).replace(EDITOR_ZWSP, (m, open, ruby) => open || ruby || '');
+    for (let i = 0; i < 4; i += 1) {
+      const next = out.replace(EMPTY_INLINE, '');
+      if (next === out) { break; }
+      out = next;
+    }
+    return out;
   }
 
   /**
@@ -1424,6 +1834,452 @@ ${insideObjects('.eb-paper.boxed')} {
     return out.join(' ');
   }
 
+  // --- EB_DOC_SCRIPT BEGIN ---
+  /**
+   * The program a document carries when the writer turns on "Use JavaScript"
+   * (the owner, 2026-09-21). It adds what HTML alone cannot -- the photographs'
+   * enlargements for now -- and nothing the document needs in order to be read:
+   * where it does not run, the document is exactly what it would have been.
+   *
+   * It is written into the head of the file as <script id="eb-script">. On the
+   * way back in, it is recognised by its fingerprint (DOC_SCRIPT_SHA256) and not
+   * by its name alone, so a script of somebody else's under the same name is
+   * still treated as a foreign one. Change a character of it and the test
+   * (editbase-tests/php/script-drift.php) says to add the new fingerprint -- the
+   * old ones stay in the list, for the documents saved with them.
+   *
+   * No "</" may appear in it: written <\/ instead, which is the same to the
+   * program. A browser reads a script as far as </script>, but the HTML reader
+   * the server uses (libxml) stops at the first "</" followed by a letter -- it
+   * read the '</svg>' in a string as the end of the program, and the fingerprint
+   * of what was left did not match. EditBase's own program went unrecognised.
+   */
+  const DOC_SCRIPT = String.raw`(function () {
+  'use strict';
+  // EditBase: the program a document carries when "Use JavaScript" is on.
+  // It only adds to the page; without it the document reads exactly the same.
+  var d = document;
+  var css = ''
+    + 'body.eb-js figure.eb-img[data-zoom="full"] img, body.eb-js figure.eb-img[data-zoom="grow"] img,'
+    + ' body.eb-js figure.eb-img[data-zoom="gallery"] img { cursor: zoom-in; }'
+    + 'body.eb-js figure.eb-img[data-zoom="lift"] img { transition: transform .25s ease, box-shadow .25s ease; }'
+    + 'body.eb-js figure.eb-img[data-zoom="lift"] img:hover { transform: scale(1.04); box-shadow: 0 10px 28px rgba(0,0,0,.28); }'
+    + 'body.eb-js figure.eb-img[data-zoom="grow"] img { transition: transform .35s ease; position: relative; }'
+    + 'body.eb-js figure.eb-img[data-zoom="grow"] img.eb-grown { z-index: 2147483000; cursor: zoom-out; box-shadow: 0 12px 40px rgba(0,0,0,.45); }'
+    + '.eb-zoom-back { position: fixed; inset: 0; z-index: 2147482000; background: rgba(0,0,0,.35); }'
+    + '.eb-zoom-view { position: fixed; inset: 0; z-index: 2147483100; background: rgba(0,0,0,.88);'
+    + ' display: flex; align-items: center; justify-content: center; cursor: zoom-out; }'
+    + '.eb-zoom-view img { max-width: 94vw; max-height: 90vh; box-shadow: 0 10px 40px rgba(0,0,0,.6); background: #fff; }'
+    + '.eb-zoom-view .eb-zoom-cap { position: absolute; left: 0; right: 0; bottom: 2vh; text-align: center; color: #eee; font: 14px sans-serif; }'
+    + '.eb-zoom-view button { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 64px;'
+    + ' border: none; border-radius: 8px; background: rgba(255,255,255,.14); color: #fff; font: 28px sans-serif; cursor: pointer; }'
+    + '.eb-zoom-view button:hover { background: rgba(255,255,255,.28); }'
+    + '.eb-zoom-view .eb-prev { left: 2vw; } .eb-zoom-view .eb-next { right: 2vw; }'
+    + '.eb-loupe { position: fixed; z-index: 2147483200; width: 180px; height: 180px; border-radius: 50%;'
+    + ' border: 3px solid #fff; box-shadow: 0 4px 18px rgba(0,0,0,.4); background-repeat: no-repeat; pointer-events: none; display: none; }'
+    + '.eb-zoom-mark { position: absolute; width: 28px; height: 28px; pointer-events: none; z-index: 1;'
+    + ' filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }'
+    + '@media print { .eb-zoom-back, .eb-zoom-view, .eb-loupe, .eb-zoom-mark { display: none !important; }'
+    + ' body.eb-js figure.eb-img img { transform: none !important; box-shadow: none !important; } }';
+
+  function kindOf(img) {
+    var f = img && img.closest ? img.closest('figure.eb-img') : null;
+    return f ? (f.getAttribute('data-zoom') || '') : '';
+  }
+  function allPhotos() {
+    return [].slice.call(d.querySelectorAll('figure.eb-img img')).filter(function (i) { return !!i.getAttribute('src'); });
+  }
+  function captionOf(img) {
+    var f = img.closest ? img.closest('figure') : null;
+    var c = f ? f.querySelector('figcaption') : null;
+    return c ? c.textContent : (img.getAttribute('alt') || '');
+  }
+
+  // ---- the whole screen, one photograph or all of them in turn ----
+  var view = null;
+  var list = [];
+  var at = 0;
+  function show() {
+    var img = list[at];
+    view.querySelector('img').src = img.getAttribute('src');
+    view.querySelector('img').alt = img.getAttribute('alt') || '';
+    view.querySelector('.eb-zoom-cap').textContent = captionOf(img) + (list.length > 1 ? '  (' + (at + 1) + ' / ' + list.length + ')' : '');
+  }
+  function openView(img, gallery) {
+    closeAll();
+    list = gallery ? allPhotos() : [img];
+    at = Math.max(0, list.indexOf(img));
+    view = d.createElement('div');
+    view.className = 'eb-zoom-view';
+    view.innerHTML = '<img alt=""><div class="eb-zoom-cap"><\/div>'
+      + (gallery && list.length > 1 ? '<button class="eb-prev" aria-label="previous">&#8249;<\/button><button class="eb-next" aria-label="next">&#8250;<\/button>' : '');
+    view.addEventListener('click', function (e) {
+      if (e.target.classList.contains('eb-prev')) { step(-1); return; }
+      if (e.target.classList.contains('eb-next')) { step(1); return; }
+      closeAll();
+    });
+    d.body.appendChild(view);
+    show();
+  }
+  function step(by) {
+    if (!view || list.length < 2) { return; }
+    at = (at + by + list.length) % list.length;
+    show();
+  }
+
+  // ---- grown where it stands ----
+  var grown = null;
+  var back = null;
+  function grow(img) {
+    if (grown === img) { closeAll(); return; }
+    closeAll();
+    var r = img.getBoundingClientRect();
+    var s = Math.min(window.innerWidth * 0.9 / r.width, window.innerHeight * 0.9 / r.height, 4);
+    if (!(s > 1)) { return; }
+    var dx = window.innerWidth / 2 - (r.left + r.width / 2);
+    var dy = window.innerHeight / 2 - (r.top + r.height / 2);
+    back = d.createElement('div');
+    back.className = 'eb-zoom-back';
+    back.addEventListener('click', closeAll);
+    d.body.appendChild(back);
+    img.classList.add('eb-grown');
+    img.style.transform = 'translate(' + dx + 'px, ' + dy + 'px) scale(' + s + ')';
+    grown = img;
+  }
+
+  function closeAll() {
+    if (view) { view.remove(); view = null; }
+    if (back) { back.remove(); back = null; }
+    if (grown) { grown.style.transform = ''; grown.classList.remove('eb-grown'); grown = null; }
+  }
+
+  // ---- a magnifying glass ----
+  var loupe = null;
+  function glass(img, e) {
+    if (!loupe) { loupe = d.createElement('div'); loupe.className = 'eb-loupe'; d.body.appendChild(loupe); }
+    var r = img.getBoundingClientRect();
+    var k = 2.5;
+    var x = e.clientX - r.left;
+    var y = e.clientY - r.top;
+    if (x < 0 || y < 0 || x > r.width || y > r.height) { loupe.style.display = 'none'; return; }
+    loupe.style.display = 'block';
+    loupe.style.left = (e.clientX - 90) + 'px';
+    loupe.style.top = (e.clientY - 90) + 'px';
+    loupe.style.backgroundImage = 'url("' + img.getAttribute('src').replace(/"/g, '%22') + '")';
+    loupe.style.backgroundSize = (r.width * k) + 'px ' + (r.height * k) + 'px';
+    loupe.style.backgroundPosition = (90 - x * k) + 'px ' + (90 - y * k) + 'px';
+  }
+
+  // ---- the mark that says a photograph can be enlarged: a magnifying glass with
+  // a plus, at its bottom right corner. Only on the ones that do something when
+  // pointed at or pressed -- "lift" only rises a little, and a mark there would
+  // promise what does not happen. Placed by the program, so a reader without it
+  // is never shown a mark that does nothing.
+  var MARK = '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">'
+    + '<circle cx="10" cy="10" r="7" fill="rgba(255,255,255,.92)" stroke="#333" stroke-width="2"/>'
+    + '<path d="M15.2 15.2l5.6 5.6" stroke="#333" stroke-width="2.8" stroke-linecap="round"/>'
+    + '<path d="M10 6.6v6.8M6.6 10h6.8" stroke="#333" stroke-width="2" stroke-linecap="round"/><\/svg>';
+  function marks() {
+    allPhotos().forEach(function (img) {
+      var kind = kindOf(img);
+      var f = img.closest('figure.eb-img');
+      var m = f.querySelector('.eb-zoom-mark');
+      if (!kind || kind === 'lift') { if (m) { m.remove(); } return; }
+      if (!m) {
+        m = d.createElement('span');
+        m.className = 'eb-zoom-mark';
+        m.innerHTML = MARK;
+        f.appendChild(m);
+        if (window.getComputedStyle(f).position === 'static') { f.style.position = 'relative'; }
+      }
+      m.style.left = (img.offsetLeft + img.offsetWidth - 32) + 'px';
+      m.style.top = (img.offsetTop + img.offsetHeight - 32) + 'px';
+    });
+  }
+
+  // ---- words on both sides of an object ----
+  // The room is laid in the editor and saved with the document, so the page reads
+  // the same here. It is laid again only if the words have come out differently
+  // on this machine (another typeface, say) and have run under the object: then
+  // the saved room is taken out and made afresh, line by line, as the editor does.
+  var BLOCKS = 'p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, dl, div.eb-cols';
+  var PX_MM = 96 / 25.4;
+  function bothSides() {
+    var objs = [].slice.call(d.querySelectorAll('.eb-anchor > [data-wrap="both"]'));
+    if (!objs.length) { return; }
+    var tate = d.body.classList.contains('eb-tategaki');
+    var inFrom = function (r) { return tate ? r.top : r.left; };
+    var inTo = function (r) { return tate ? r.bottom : r.right; };
+    var blFrom = function (r) { return tate ? -r.right : r.top; };
+    var blTo = function (r) { return tate ? -r.left : r.bottom; };
+    var blocks = [].slice.call(d.querySelectorAll(BLOCKS)).filter(function (b) {
+      return !b.closest('header.eb-header, footer.eb-footer');
+    });
+    function gapOf(o) { var g = parseFloat(o.getAttribute('data-wrap-gap')); return (isFinite(g) && g >= 0 ? g : 3) * PX_MM; }
+    function boxes(b) {
+      var out = [];
+      var walk = d.createTreeWalker(b, NodeFilter.SHOW_TEXT, { acceptNode: function (t) {
+        for (var up = t.parentNode; up && up !== b; up = up.parentNode) {
+          if (up.classList && (up.classList.contains('eb-gap') || up.classList.contains('eb-flow') || up.classList.contains('eb-anchor'))) { return NodeFilter.FILTER_REJECT; }
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      } });
+      var rg = d.createRange();
+      var t = walk.nextNode();
+      while (t) {
+        for (var i = 0; i < t.data.length; i += 1) {
+          rg.setStart(t, i); rg.setEnd(t, i + 1);
+          var r = rg.getBoundingClientRect();
+          if (r.width > 0 || r.height > 0) { out.push({ node: t, i: i, r: r }); }
+        }
+        t = walk.nextNode();
+      }
+      return out;
+    }
+    function mine(o, b) {
+      if (o.contains(b) || b.contains(o)) { return false; }
+      var peg = o.parentNode;
+      return !(peg && !b.closest('.eb-anchor') && (peg.compareDocumentPosition(b) & 2));
+    }
+    function under(o, b, all) {
+      var r = o.getBoundingClientRect(); var g = gapOf(o);
+      return (all || boxes(b)).filter(function (c) {
+        return blTo(c.r) > blFrom(r) - g && blFrom(c.r) < blTo(r) + g && inTo(c.r) > inFrom(r) - g + 0.5 && inFrom(c.r) < inTo(r) + g - 0.5;
+      })[0] || null;
+    }
+    var broken = objs.some(function (o) { return blocks.some(function (b) { return mine(o, b) && !!under(o, b); }); });
+    if (!broken) { return; }
+    [].slice.call(d.querySelectorAll('span.eb-gap')).forEach(function (s) { var p = s.parentNode; s.remove(); if (p) { p.normalize(); } });
+    var min = 20 * PX_MM;
+    var NO_START = '、。，．・：；？！ゝゞーｰ）］｝〕〉》」』】〙〗〟’”ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ';
+    objs.forEach(function (o) {
+      blocks.forEach(function (b) {
+        if (!mine(o, b)) { return; }
+        for (var guard = 0; guard < 300; guard += 1) {
+          var r = o.getBoundingClientRect(); var g = gapOf(o);
+          var x0 = inFrom(r) - g, x1 = inTo(r) + g;
+          var cs = window.getComputedStyle(b);
+          var bb = b.getBoundingClientRect();
+          var lineFrom = tate ? bb.top + parseFloat(cs.paddingTop) : bb.left + parseFloat(cs.paddingLeft);
+          var lineTo = tate ? bb.bottom - parseFloat(cs.paddingBottom) : bb.right - parseFloat(cs.paddingRight);
+          var all = boxes(b);
+          var hit = under(o, b, all);
+          if (!hit) { break; }
+          var mid = (blFrom(hit.r) + blTo(hit.r)) / 2;
+          var line = all.filter(function (c) { return blFrom(c.r) <= mid && blTo(c.r) >= mid; });
+          var at = (x0 - lineFrom < min && line.length) ? line[0] : hit;
+          // 行頭に来てはいけない字（。、」っ など）で分かれるときは、前の一字と一緒に送る。
+          var k = line.indexOf(hit);
+          if (at === hit && k > 0 && NO_START.indexOf(hit.node.data.charAt(hit.i)) >= 0) { at = line[k - 1]; }
+          var from = inFrom(at.r);
+          var width = (lineTo - x1 < min) ? lineTo - from : x1 - from;
+          if (!(width > 0.5)) { break; }
+          var gap = d.createElement('span');
+          gap.className = 'eb-gap';
+          gap.setAttribute('aria-hidden', 'true');
+          gap.setAttribute('style', 'display: inline-block; inline-size: ' + (Math.round(width / PX_MM * 10) / 10) + 'mm; block-size: 0; vertical-align: baseline;');
+          var where = at.i > 0 ? at.node.splitText(at.i) : at.node;
+          where.parentNode.insertBefore(gap, where);
+        }
+      });
+    });
+  }
+
+  function start() {
+    var st = d.createElement('style');
+    st.id = 'eb-script-css';
+    st.textContent = css;
+    d.head.appendChild(st);
+    d.body.classList.add('eb-js');
+    d.addEventListener('click', function (e) {
+      var img = e.target && e.target.closest ? e.target.closest('figure.eb-img img') : null;
+      if (!img) { return; }
+      var kind = kindOf(img);
+      if (kind === 'full') { openView(img, false); }
+      else if (kind === 'gallery') { openView(img, true); }
+      else if (kind === 'grow') { grow(img); }
+    });
+    d.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closeAll(); }
+      else if (e.key === 'ArrowLeft') { step(-1); }
+      else if (e.key === 'ArrowRight') { step(1); }
+    });
+    d.addEventListener('mousemove', function (e) {
+      var img = e.target && e.target.closest ? e.target.closest('figure.eb-img img') : null;
+      if (img && kindOf(img) === 'loupe') { glass(img, e); }
+      else if (loupe) { loupe.style.display = 'none'; }
+    });
+    window.addEventListener('scroll', function () { if (grown) { closeAll(); } }, { passive: true });
+    window.addEventListener('beforeprint', closeAll);
+    marks();
+    window.addEventListener('resize', marks);
+    window.addEventListener('load', marks);
+    allPhotos().forEach(function (img) { if (!img.complete) { img.addEventListener('load', marks); } });
+    // After the typefaces have come in: it is their widths that decide the lines.
+    if (d.fonts && d.fonts.ready) { d.fonts.ready.then(bothSides); } else { window.addEventListener('load', bothSides); }
+  }
+  if (d.readyState === 'loading') { d.addEventListener('DOMContentLoaded', start); } else { start(); }
+}());`;
+  // --- EB_DOC_SCRIPT END ---
+  /** Every version of DOC_SCRIPT that EditBase has written, by SHA-256 of its text. */
+  const DOC_SCRIPT_SHA256 = [
+    'ce2ded243f9d2efe5ae25cbadf75a0d7a5233b124b0522a48a017a98d683ce69',
+    'aea48c41b63f7d337bd6c9cfae017dd81bee566e34ebbf97737a02200b2b72a9',
+    '2b63d99bb7595aadd5221aeee5611ef043b5e48b91e431b7fdf60b6e3fa4bdc3',
+    '35754528deb554f52796fe5618b268705d92d45451d96c082d98cc0fdeced96b',
+  ];
+
+  /**
+   * Whether a file carries EditBase's own program, and whether it is really ours.
+   * Read at the top of the file first (<meta name="editbase-script">), as the
+   * owner asked -- then made sure of by the program's fingerprint, because the
+   * name alone can be copied onto anything.
+   *
+   * @returns {Promise<{present: boolean, ours: boolean}>}
+   */
+  async function docScriptState(text) {
+    const dom = new DOMParser().parseFromString(String(text || ''), 'text/html');
+    const el = dom.head ? dom.head.querySelector('script#eb-script') : null;
+    if (!el) { return { present: false, ours: false }; }
+    const subtle = (window.crypto && window.crypto.subtle) || (globalThis.crypto && globalThis.crypto.subtle);
+    if (!subtle || typeof TextEncoder === 'undefined') { return { present: true, ours: false }; }
+    try {
+      const buf = await subtle.digest('SHA-256', new TextEncoder().encode(String(el.textContent || '').trim()));
+      const hex = Array.from(new Uint8Array(buf)).map((x) => x.toString(16).padStart(2, '0')).join('');
+      return { present: true, ours: DOC_SCRIPT_SHA256.indexOf(hex) >= 0 };
+    } catch (e) {
+      return { present: true, ours: false };
+    }
+  }
+
+  /**
+   * ウェブの頁として使うときの、文書の頭（head）の情報（オーナー 2026-09-21：
+   * SEO 対策と簡易ヘッダ編集。一覧でファイル名を右クリック →「文書設定」）。
+   * 書くのは書き手が入れたものだけ。空の欄は何も書かない。
+   */
+  const HEAD_FIELDS = ['description', 'keywords', 'author', 'robots', 'canonical',
+    'ogTitle', 'ogDescription', 'ogImage', 'ogType', 'ogSiteName', 'twitterCard'];
+  function normaliseHead(h) {
+    const out = {};
+    HEAD_FIELDS.forEach((k) => {
+      const v = h && typeof h[k] === 'string' ? h[k].replace(/[\u0000-\u001f\u007f]+/g, ' ').trim() : '';
+      out[k] = v.slice(0, k === 'description' || k === 'ogDescription' ? 1000 : 500);
+    });
+    // 住所は http(s) のものだけ。javascript: などは書かない。
+    ['canonical', 'ogImage'].forEach((k) => { if (out[k] && !/^https?:\/\//i.test(out[k])) { out[k] = ''; } });
+    if (['', 'noindex', 'nofollow', 'noindex, nofollow'].indexOf(out.robots) < 0) { out.robots = ''; }
+    if (['', 'article', 'website'].indexOf(out.ogType) < 0) { out.ogType = ''; }
+    if (['', 'summary', 'summary_large_image'].indexOf(out.twitterCard) < 0) { out.twitterCard = ''; }
+    return out;
+  }
+  function headTags(h) {
+    const v = normaliseHead(h);
+    const name = (n, c) => (c ? '<meta name="' + n + '" content="' + escapeAttr(c) + '">\n' : '');
+    const prop = (n, c) => (c ? '<meta property="' + n + '" content="' + escapeAttr(c) + '">\n' : '');
+    return name('description', v.description) + name('keywords', v.keywords) + name('author', v.author)
+      + name('robots', v.robots)
+      + (v.canonical ? '<link rel="canonical" href="' + escapeAttr(v.canonical) + '">\n' : '')
+      + prop('og:title', v.ogTitle) + prop('og:description', v.ogDescription) + prop('og:image', v.ogImage)
+      + prop('og:type', v.ogType) + prop('og:site_name', v.ogSiteName) + name('twitter:card', v.twitterCard);
+  }
+  function readHead(dom) {
+    const meta = (sel) => { const m = dom.querySelector(sel); return m ? (m.getAttribute('content') || '') : ''; };
+    const can = dom.querySelector('link[rel="canonical"]');
+    return normaliseHead({
+      description: meta('meta[name="description"]'), keywords: meta('meta[name="keywords"]'),
+      author: meta('meta[name="author"]'), robots: meta('meta[name="robots"]'),
+      canonical: can ? (can.getAttribute('href') || '') : '',
+      ogTitle: meta('meta[property="og:title"]'), ogDescription: meta('meta[property="og:description"]'),
+      ogImage: meta('meta[property="og:image"]'), ogType: meta('meta[property="og:type"]'),
+      ogSiteName: meta('meta[property="og:site_name"]'), twitterCard: meta('meta[name="twitter:card"]'),
+    });
+  }
+
+  /**
+   * 保存したファイルを画面で開いたときの紙（BUGS #88）。本文はページごとの div
+   * （.eb-page）に入っているので、その div を1枚の紙として描く：紙の大きさ、余白、
+   * 白い地と影、紙と紙の間。編集の画面と同じ見え方になる。
+   *
+   * 置いた物は、編集の画面で測った「その紙の字の書き始めからの距離」（--eb-st）で
+   * 描く。入れ物はその紙の字の書き始めに置き直す（左右の幅も本文と同じ）ので、横の
+   * 位置と幅はそのまま効く。印刷はこの規則を一切使わない（@media screen の中だけ）。
+   */
+  const SHEET_GAP_MM = 8;
+  /**
+   * 紙ごとの重なりの順番。紙はそれぞれ重なりの箱（z-index）で、前の紙ほど上に置く。
+   * 前の紙から次の紙へはみ出して描かれる物（まとめ枠の最後に結び付けた写真など）が、
+   * 次の紙の字の上に描かれるように ―― 編集の画面では物はいつも字の上にある。同じ
+   * 順番だと、後の紙の字が物を覆っていた（縦書きの図形が字の下に隠れた）。
+   */
+  function sheetsZ(pages) {
+    let out = '';
+    for (let n = 1; n <= pages; n += 1) { out += '  body.eb-doc.eb-paged > #page-' + n + ' { z-index: ' + (pages - n + 1) + '; }\n'; }
+    return out;
+  }
+  function sheetsCss(paper, s, art, pages) {
+    const m = paper.margin;
+    if (paper.vertical) { return sheetsCssTate(paper, s, art, pages); }
+    return '@media screen {\n'
+      + sheetsZ(pages)
+      + '  body.eb-doc.eb-paged { width: auto; min-height: 0; max-width: none; padding: 8mm 0 1px;'
+      + ' background: none; box-shadow: none; }\n'
+      + '  body.eb-doc.eb-paged > .eb-page { position: relative; display: flow-root;'
+      // 紙の大きさは決まっている。中身が字の領域を少し越えても（最後の段落の下の空き
+      // など）紙は伸ばさない：伸ばすと、縦書きでは紙が左へ広がり字がずれて見えた。
+      + ' width: ' + s.w + 'mm; max-width: 100%; height: ' + s.h + 'mm;'
+      + ' padding: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;'
+      + ' margin: 0 auto ' + SHEET_GAP_MM + 'mm; }\n'
+      // 紙の白い地・影・紙の絵は、紙の重なりの箱のいちばん奥（::before）に描く。字の
+      // 後ろに置いた物（z-index が負）も、紙の地の下に隠れずに地の上に出る。編集の画面も、
+      // 紙は本文の後ろに別に描いている。
+      + '  body.eb-doc.eb-paged > .eb-page::before { content: ""; position: absolute; inset: 0;'
+      + ' z-index: -1000000; pointer-events: none; background-color: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18);'
+      + (art.any ? ' background-image: url("' + art.url + '"); background-size: ' + s.w + 'mm ' + s.h + 'mm;'
+        + ' background-repeat: no-repeat; background-position: left top;' : '')
+      + ' }\n'
+      // 紙の頭の字は紙の書き始めから。編集の画面も印刷もそう描く。
+      + '  body.eb-doc.eb-paged > .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }\n'
+      + '  body.eb-doc.eb-paged > .eb-page > div.eb-anchor:has(> [style*="--eb-st"]) { position: absolute;'
+      + ' top: ' + m.top + 'mm; left: ' + m.left + 'mm; right: ' + m.right + 'mm; }\n'
+      + '  body.eb-doc.eb-paged > .eb-page > div.eb-anchor > [style*="--eb-st"] { top: var(--eb-st) !important; }\n'
+      + '  body.eb-doc.eb-paged .eb-anchor > [style*="--eb-sp"] { translate: 0 calc(var(--eb-sp) * '
+      + round1(m.top + m.bottom + SHEET_GAP_MM) + 'mm); }\n'
+      // 紙が分かれているので、改ページの印（画面だけの青い点線）は要らない。
+      + '  body.eb-doc.eb-paged .eb-pagebreak { block-size: 0; margin: 0; border: none; }\n'
+      + '}\n';
+  }
+
+  /**
+   * 縦書きの文書の紙（BUGS #88 の縦書き）。縦書きでは紙が右から左へ並ぶ。ページの
+   * div を1枚ずつの紙にし、画面の向きも縦書きにする ―― そうしないとブラウザは左端
+   * （最後のページ）から見せる。
+   *
+   * 縦書きでは置いた物の入れ物をページの div へ移さない（anchorMoves）。別の紙へ
+   * はみ出して描かれる物は、何枚先か（--eb-sp）の分だけ左へずらして描く。
+   */
+  function sheetsCssTate(paper, s, art, pages) {
+    const m = paper.margin;
+    return '@media screen {\n'
+      + sheetsZ(pages)
+      + '  html:has(> body.eb-doc.eb-paged.eb-tategaki) { writing-mode: vertical-rl; }\n'
+      + '  body.eb-doc.eb-paged { height: auto; min-width: 0; width: auto; max-width: none;'
+      + ' padding: ' + SHEET_GAP_MM + 'mm; background: none; box-shadow: none; }\n'
+      + '  body.eb-doc.eb-paged > .eb-page { position: relative; display: flow-root;'
+      + ' height: ' + s.h + 'mm; width: ' + s.w + 'mm;'
+      + ' padding: ' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;'
+      + ' margin: 0; margin-block-end: ' + SHEET_GAP_MM + 'mm; }\n'
+      + '  body.eb-doc.eb-paged > .eb-page::before { content: ""; position: absolute; inset: 0;'
+      + ' z-index: -1000000; pointer-events: none; background-color: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18);'
+      + (art.any ? ' background-image: url("' + art.url + '"); background-size: ' + s.w + 'mm ' + s.h + 'mm;'
+        + ' background-repeat: no-repeat; background-position: left top;' : '')
+      + ' }\n'
+      + '  body.eb-doc.eb-paged > .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }\n'
+      + '  body.eb-doc.eb-paged .eb-anchor > [style*="--eb-sp"] { translate: calc(var(--eb-sp) * '
+      + round1(-(m.left + m.right + SHEET_GAP_MM)) + 'mm) 0; }\n'
+      + '  body.eb-doc.eb-paged .eb-pagebreak { block-size: 0; margin: 0; border: none; }\n'
+      + '}\n';
+  }
+
   function buildHtml(doc) {
     const paper = normalisePaper(doc.paper);
     const styles = normaliseStyles(doc.styles);
@@ -1433,18 +2289,24 @@ ${insideObjects('.eb-paper.boxed')} {
     const fonts = resolveFonts(paper, lang);
     const url = fontsUrl([fonts.body, fonts.head, fonts.mono].concat(familiesInBody(body)).concat(stylesFamilies(styles)));
     const s = sheet(paper);
+    // 保存したファイル（ページの div に分けたもの）は、画面でも紙を1枚ずつ描く。
+    const sheets = /<div class="eb-page"/.test(body);
     // On screen the file should read as a sheet of paper, the way the editor
     // draws it -- a white page on a grey ground -- not as a web page that happens
     // to be narrow. Print takes none of this: paper is already white.
     const art = pageArt(paper);
+    // 紙の地は、ブラウザがダークモードでも明るいまま。字は #111 の黒なので、暗い地
+    // に出た字が読めなくなっていた（BUGS #88）。
     const page = 'html { background: #ffffff; }\n'
-      + '@media screen { html { background: #f1f2f4; -webkit-print-color-adjust: exact; }\n'
-      + '  body.eb-doc { background: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18); }\n'
-      + '  @media (prefers-color-scheme: dark) { html { background: #2b2d31; } } }\n'
+      + '@media screen { html { background: #f1f2f4; color-scheme: light; -webkit-print-color-adjust: exact; }\n'
+      + '  body.eb-doc { background: #ffffff; box-shadow: 0 1px 8px rgba(0, 0, 0, .18); } }\n'
       + 'body.eb-doc { margin: 0; font-size: ' + paper.fontSize + 'pt; line-height: ' + paper.lineHeight + '; }\n'
       + '.eb-doc { --eb-font-body: ' + fontStack(fonts.body, 'serif') + ';'
       + ' --eb-font-head: ' + fontStack(fonts.head, 'sans') + ';'
       + ' --eb-font-mono: ' + fontStack(fonts.mono, 'mono') + '; }\n'
+      // 縦書きの写真の大きさが対する、1ページの字の領域（編集の画面の paperStyle と同じ値・#259）。
+      + (paper.vertical ? '.eb-doc { --eb-pageh: ' + round1(s.h - paper.margin.top - paper.margin.bottom) + 'mm;'
+        + ' --eb-pagew: ' + round1(s.w - paper.margin.left - paper.margin.right) + 'mm; }\n' : '')
       // On screen the body IS the sheet, exactly as the editor's page is: the
       // paper's width, with the margins as padding. Setting the margins as CSS
       // margins instead left the column 4mm narrower and let the first
@@ -1464,7 +2326,8 @@ ${insideObjects('.eb-paper.boxed')} {
         + '@media print { html { background: transparent; } }\n'
         + '@media screen { body.eb-doc { background-image: url("' + art.url + '");'
         + ' background-size: ' + s.w + 'mm ' + s.h + 'mm; background-repeat: repeat-y;'
-        + ' background-position: center top; } }\n' : '');
+        + ' background-position: center top; } }\n' : '')
+      + (sheets ? sheetsCss(paper, s, art, (body.match(/<div class="eb-page" id="page-\d+">/g) || []).length) : '');
     // The typeface travels with the document as a stylesheet link, so the file looks
     // the same on a machine that has none of these fonts installed. It is the only
     // thing in the file that points anywhere outside it, and it is left out entirely
@@ -1480,17 +2343,23 @@ ${insideObjects('.eb-paper.boxed')} {
       + '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
       + '<meta name="generator" content="EditBase ' + escapeAttr(APP_VERSION) + '">\n'
       + '<meta name="editbase-paper" content="' + escapeAttr(JSON.stringify(paper)) + '">\n'
+      // Said at the top, where a reader of the first lines finds it: this file
+      // carries EditBase's program (the owner: detect it when reading).
+      + (doc.script ? '<meta name="editbase-script" content="1">\n' : '')
+      + (doc.review ? '<meta name="editbase-review" content="1">\n' : '')
       + (anyStyles(styles) ? '<meta name="editbase-styles" content="' + escapeAttr(JSON.stringify(styles)) + '">\n' : '')
       + '<title>' + escapeAttr(doc.title || 'Document') + '</title>\n'
+      + headTags(doc.head)
       + fontLinks
-      + '<style>\n' + pageRule(paper, runAbout(doc)) + '\n' + page + '\n' + DOC_CSS
+      + '<style id="eb-base">\n' + pageRule(paper, runAbout(doc)) + '\n' + layerRules(paper) + '\n' + page + '\n' + DOC_CSS
       + (anyStyles(styles) ? '\n/* the styles of this document */\n' + stylesCss(styles) + '\n' : '')
       + '</style>\n'
       // The writer's own rules stand in a sheet of their own, after everything
       // else, so they win -- and so that a person opening the file can see at a
       // glance which of the rules in it are theirs.
       + (own ? '<style id="eb-css">\n' + scopeCss(own, '') + '\n</style>\n' : '')
-      + '</head>\n<body class="' + docClasses(paper, doc.clean) + '">\n'
+      + (doc.script ? '<script id="eb-script">\n' + DOC_SCRIPT + '\n</script>\n' : '')
+      + '</head>\n<body class="' + docClasses(paper, doc.clean) + (sheets ? ' eb-paged' : '') + '">\n'
       // The writing, and nothing else. The running header and footer are the
       // page's own margin boxes, written in the @page rule; the paper's paint is
       // on the page box. Nothing stands between the top of the body and the
@@ -1502,8 +2371,29 @@ ${insideObjects('.eb-paper.boxed')} {
 
   /** Read a file back. Anything not written by EditBase still opens; it just
    *  arrives without paper settings, and saving it will re-write its stylesheet. */
-  function parseHtml(text) {
+  function parseHtml(text, report, opts) {
     const dom = new DOMParser().parseFromString(String(text || ''), 'text/html');
+    if (report && dom.head) {
+      // In the head, a script, or a style sheet that is not our own, is dropped
+      // too: the document is written back with EditBase's own head. EditBase's own
+      // program is not counted -- once its fingerprint has been checked (ownScript).
+      const ownScript = !!(opts && opts.ownScript);
+      dom.head.querySelectorAll('script').forEach((sc) => {
+        if (ownScript && sc.id === 'eb-script') { return; }
+        report.tags.script = (report.tags.script || 0) + 1;
+      });
+      // Our own are the base sheet (#eb-base) and the writer's own rules (#eb-css).
+      // A file saved before the base sheet had a name carries it as the one plain
+      // <style> in the head, and only a file that says it was made by EditBase is
+      // given that allowance -- a second plain one was put there by something else.
+      const ours = /^EditBase\b/.test((dom.querySelector('meta[name="generator"]') || { getAttribute: () => '' }).getAttribute('content') || '');
+      let plain = ours ? 1 : 0;
+      dom.head.querySelectorAll('style').forEach((st) => {
+        if (st.id === 'eb-base' || st.id === 'eb-css') { return; }
+        if (!st.id && plain > 0) { plain -= 1; return; }
+        report.tags.style = (report.tags.style || 0) + 1;
+      });
+    }
     const meta = dom.querySelector('meta[name="editbase-paper"]');
     const styleMeta = dom.querySelector('meta[name="editbase-styles"]');
     const gen = dom.querySelector('meta[name="generator"]');
@@ -1521,6 +2411,12 @@ ${insideObjects('.eb-paper.boxed')} {
       if (cell) { while (cell.firstChild) { body.insertBefore(cell.firstChild, run); } }
       run.remove();
     }
+    // ページの区切り（<div class="eb-page" id="page-N">）は保存するときに書くもので、
+    // 編集の中では持たない。開くたびに外し、ページで切った段落・表・リストを一つに
+    // 戻す。ページは開いたあとでこの画面が組み直す（オーナー 2026-09-23）。
+    unpage(body);
+    homeAnchors(body);
+    joinFlowCuts(body);
     Array.from(body.querySelectorAll('.eb-runpage, .eb-runhead, .eb-runfoot, .eb-pagedeco')).forEach((n) => n.remove());
     // An older EditBase put the header and the footer in the writing itself, as a
     // <header> and a <footer> block. They printed over the words and stood on one
@@ -1537,11 +2433,34 @@ ${insideObjects('.eb-paper.boxed')} {
       }
       el.remove();
     });
-    sanitiseInto(body);
+    // A page Word saved writes its lists the way it puts them on the clipboard
+    // (see wordLists; BUGS #85).
+    wordLists(body);
+    markGlyphs(body);
+    // A drawing written in the page is kept as a picture of itself, as pasting
+    // does, rather than thrown away (BUGS #100).
+    svgToPictures(body);
+    sanitiseInto(body, report ? { report } : undefined);
+    // A file made elsewhere is written in boxes -- a novel from 青空文庫 is one
+    // <div> of lines split by <br>, a Wikipedia article is divs inside divs. The
+    // page breaker cuts paragraphs, lists and tables, never a box, so a box
+    // longer than a page ran straight through the folds and its lines were drawn
+    // in the grey between the sheets (BUGS #68). LibreOffice reads such a box as
+    // paragraphs; so does this. EditBase's own files are left as they are.
+    if (!(gen && /^EditBase\b/.test(gen.getAttribute('content') || ''))) {
+      boxesToParagraphs(body);
+      // The spaces between a table's rows and cells are the file's indentation,
+      // not writing (BUGS #73).
+      body.querySelectorAll('table, thead, tbody, tfoot, tr, colgroup, ul, ol, dl').forEach((el) => {
+        Array.from(el.childNodes).forEach((k) => { if (k.nodeType === 3 && !k.data.trim()) { k.remove(); } });
+      });
+    }
     toObjects(body);
     return {
       title: (dom.title || '').trim(),
       lang: dom.documentElement.getAttribute('lang') || 'ja',
+      review: !!dom.querySelector('meta[name="editbase-review"]'),
+      head: readHead(dom),
       paper: normalisePaper(paper),
       styles: normaliseStyles((function () {
         try { return JSON.parse((styleMeta && styleMeta.getAttribute('content')) || '{}'); } catch (e) { return {}; }
@@ -1563,6 +2482,50 @@ ${insideObjects('.eb-paper.boxed')} {
   let canvasEl = null;
   // The selection a dialog interrupted, so that applying it lands where it was.
   let ctxRange = null;
+  // 書体の小窓などを開くあいだ、選んだ範囲を「本文の頭から何字目〜何字目」でも覚えて
+  // おく。小窓が開いているあいだにページの組み直しで段落がつなぎ直されると、範囲その
+  // ものは途中まで縮む ―― Ctrl+A で選んで「ほかの書体…」から選ぶと、前半の字にしか
+  // 効かなかった（オーナー 2026-09-22 漢字一覧.html、BUGS #65）。
+  let ctxKeep = null;
+  function textCount(node, offset) {
+    const c = canvas();
+    if (!c || !node) { return null; }
+    const r = document.createRange();
+    r.selectNodeContents(c);
+    try { r.setEnd(node, offset); } catch (e) { return null; }
+    return r.toString().length;
+  }
+  function pointAtCount(count) {
+    const c = canvas();
+    if (!c) { return null; }
+    let left = count;
+    const w = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
+    let last = null;
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (left <= n.data.length) { return { node: n, at: left }; }
+      left -= n.data.length;
+      last = n;
+    }
+    return last ? { node: last, at: last.data.length } : null;
+  }
+  function keepRange(r) {
+    ctxRange = r ? r.cloneRange() : null;
+    ctxKeep = r && !r.collapsed ? { start: textCount(r.startContainer, r.startOffset), end: textCount(r.endContainer, r.endOffset), len: r.toString().length } : null;
+  }
+  /** 覚えた範囲を選び直す。範囲が縮んでいたら字数から作り直す。 */
+  function restoreKept() {
+    let r = ctxRange;
+    if (ctxKeep && ctxKeep.start != null && ctxKeep.end != null && (!r || r.toString().length !== ctxKeep.len)) {
+      const a = pointAtCount(ctxKeep.start);
+      const b = pointAtCount(ctxKeep.end);
+      if (a && b) {
+        r = document.createRange();
+        r.setStart(a.node, a.at);
+        r.setEnd(b.node, b.at);
+      }
+    }
+    if (r) { try { selectRange(r); } catch (e) { /* the text moved on */ } }
+  }
   // The object the bounding box is drawn round. It is not Vue state: the canvas is
   // plain DOM, and this is a node in it.
   let frameEl = null;
@@ -1570,6 +2533,50 @@ ${insideObjects('.eb-paper.boxed')} {
   let pastePlain = false;
   let wrapTimer = null;
   let layerEls = [];
+  // レイヤーバーで名前の書き換えを始めた時刻
+  let renameAt = 0;
+  // レイヤーバーで最後に押した行と時刻（続けて二度押したら名前の書き換え）
+  const lastPick = { id: -1, at: 0 };
+  // ---- レイヤーバーの木と重ね順 ----------------------------------------------------
+  // 中に物を置ける枠（まとめ枠・囲み記事・注）。その中に置いた物は枠と一緒に動き、
+  // 重ね順も枠の中だけで決まる（枠が重なりの一まとまりになる）。
+  const LAYER_HOLDERS = 'div.eb-frame, aside.eb-box, div.eb-note';
+  /** 物や段落が入っている枠（続きの部分なら頭の枠）。本文の直下なら null。 */
+  function holderOf(el) {
+    const c = canvas();
+    const up = el && el.parentNode && el.parentNode.closest ? el.parentNode.closest(LAYER_HOLDERS) : null;
+    if (!up || !c || !c.contains(up)) { return null; }
+    return chainable(up) ? chainLead(up) : up;
+  }
+  const zOf = (n) => Number(n && n.style && n.style.zIndex) || 0;
+  /** 本文（紙の直下）に残っている、ただ一つの段落か（ページで分かれた切れは一つと数える）。 */
+  function isLastParagraph(el) {
+    const c = canvas();
+    if (!c || !el || el.parentNode !== c || !el.matches || !el.matches('p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote')) { return false; }
+    // 同じ段落の、ページで分かれたほかの切れは数えない。数えないのはその段落自身の
+    // 切れだけ ―― 選んだ段落に切った印があると、同じタグのほかの段落をすべて「切れ」
+    // として数えず、段落が4つある文書でも「最後の段落」と断っていた（D17）。
+    const pieces = cutPieces(el);
+    const others = Array.from(c.children).filter((k) => k !== el && pieces.indexOf(k) < 0
+      && k.matches && k.matches('p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, table')
+      && !k.classList.contains('eb-textbox'));
+    return others.length === 0;
+  }
+  /** 枠の中に置いた物（直下のものだけ）を、奥から手前の順に。 */
+  function placedIn(holder) {
+    const c = canvas();
+    if (!c || !holder) { return []; }
+    const pieces = chainable(holder) ? chainOf(holder) : [holder];
+    const out = [];
+    pieces.forEach((f) => {
+      f.querySelectorAll('.eb-anchor > *').forEach((o) => { if (holderOf(o) === holder && out.indexOf(o) < 0) { out.push(o); } });
+    });
+    return out.map((o, i) => ({ o, i })).sort((a, b) => (zOf(a.o) - zOf(b.o)) || (a.i - b.i)).map((x) => x.o);
+  }
+  /** 枠の中の物を、渡された順（奥→手前）に 1, 2, 3… と重ね直す。 */
+  function restackIn(list) {
+    list.forEach((o, i) => { o.style.zIndex = String(i + 1); o.removeAttribute('data-eb-layer'); });
+  }
   // When a row in the layer bar was last let go of, so that the click which ends
   // a drag on the row it started from is not also taken as a choice.
   let layerDropped = 0;
@@ -1633,10 +2640,69 @@ ${insideObjects('.eb-paper.boxed')} {
     const r = sel.getRangeAt(0);
     return inCanvas(r.commonAncestorContainer) ? r : null;
   }
+  /**
+   * The word the caret stands in (or just after), as a range -- for a command that
+   * acts on a word when nothing is chosen. Words as the browser's own word breaker
+   * sees them in the document's language: 普通 in 普通の人, not the whole run.
+   */
+  function segmentWordAt(r) {
+    if (!r || !r.collapsed || typeof Intl === 'undefined' || !Intl.Segmenter) { return null; }
+    let node = r.startContainer;
+    let at = r.startOffset;
+    if (node.nodeType !== 3) {
+      const kid = node.childNodes[at] || null;
+      const before = at > 0 ? node.childNodes[at - 1] : null;
+      if (before && before.nodeType === 3) { node = before; at = before.data.length; }
+      else if (kid && kid.nodeType === 3) { node = kid; at = 0; }
+      else { return null; }
+    }
+    const lang = (document.documentElement.lang || 'ja');
+    let hit = null;
+    for (const seg of new Intl.Segmenter(lang, { granularity: 'word' }).segment(node.data)) {
+      if (!seg.isWordLike) { continue; }
+      const end = seg.index + seg.segment.length;
+      if (seg.index <= at && at <= end) { hit = { from: seg.index, to: end }; if (at < end) { break; } }
+    }
+    if (!hit) { return null; }
+    const w = document.createRange();
+    w.setStart(node, hit.from);
+    w.setEnd(node, hit.to);
+    return w;
+  }
   function selectRange(r) {
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(r);
+  }
+  // ---- windows (dialogues) and the keyboard ----
+  /** The window on top, if one is open (the last one drawn is the one in front). */
+  function topModal(root) {
+    if (!root || !root.querySelectorAll) { return null; }
+    const all = root.querySelectorAll(':scope > .eb-modal-back');
+    return all.length ? all[all.length - 1] : null;
+  }
+  /**
+   * The first box of a window gets the keyboard; one marked data-eb-first before it
+   * (the address of a link, when the words are already there). A window with no
+   * box to fill takes the keyboard itself, so the keys stay out of the text.
+   */
+  function focusModal(back) {
+    const boxes = Array.from(back.querySelectorAll('input, select, textarea')).filter((el) => !el.disabled
+      && !/^(hidden|checkbox|radio|file|color|range|button|submit)$/.test(el.type || '')
+      && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden');
+    const first = boxes.find((el) => el.hasAttribute('data-eb-first')) || boxes[0];
+    // On a touch screen a box that takes the keyboard pulls the screen keyboard up
+    // over half the window before anything is asked for; there the window itself
+    // takes the keys (away from the text all the same) and a tap chooses the box.
+    const touch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    if (first && !touch) {
+      first.focus();
+      if (first.nodeName === 'INPUT' && first.select) { try { first.select(); } catch (e) { /* not a box with text */ } }
+      return;
+    }
+    const box = back.querySelector('.eb-modal') || back;
+    if (!box.hasAttribute('tabindex')) { box.setAttribute('tabindex', '-1'); }
+    box.focus();
   }
   /** The last run of words chosen in the writing, kept for the toolbar's own
    *  boxes: they take the focus, and with it the selection. */
@@ -1660,6 +2726,70 @@ ${insideObjects('.eb-paper.boxed')} {
    * partially selected word becomes a node of its own. This is what lets the
    * wrappers below be exact instead of approximate.
    */
+  /**
+   * 枠を選んだ状態で道具の列を使うとき（オーナー 2026-09-21「案A」）、効かせるのは
+   * その枠の文字だけ。枠の中に置いた別の図形・文字枠の文字は、その枠のものではない。
+   */
+  let objectTextParts = null;
+  /** 枠の部分（ページをまたいだ枠は、すべてのページの部分）。 */
+  function objectParts(obj) {
+    if (!obj) { return []; }
+    if (chainable(obj)) { return chainOf(chainLead(obj)); }
+    return [obj];
+  }
+  /**
+   * 枠の文字全体の大きさ・書体を、段落ごとに指定する（一字ずつ span で包むと、
+   * ファイルが細切れの span だらけになる）。中の文字に付いていた同じ指定は外す。
+   * 枠の中に置いた別の物（図形・文字枠）には触れない。
+   */
+  function styleObjectBlocks(obj, prop, value) {
+    const parts = objectParts(obj);
+    const name = dashed(prop);
+    const blocks = [];
+    parts.forEach((part) => {
+      if (part.matches && part.matches(TEXT_BLOCKS)) { blocks.push(part); }
+      part.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, td, th, dt, dd').forEach((el) => {
+        const anchor = el.closest('.eb-anchor');
+        if (anchor && part.contains(anchor)) { return; }
+        blocks.push(el);
+      });
+    });
+    blocks.forEach((block) => {
+      Array.from(block.querySelectorAll('[style]')).forEach((el) => {
+        const anchor = el.closest('.eb-anchor');
+        if (anchor && block.contains(anchor)) { return; }
+        if (!el.style.getPropertyValue(name)) { return; }
+        el.style.removeProperty(name);
+        if (!el.getAttribute('style')) { el.removeAttribute('style'); unwrapBareSpan(el); }
+      });
+      if (value) { block.style.setProperty(name, value); } else { block.style.removeProperty(name); }
+      if (!block.getAttribute('style')) { block.removeAttribute('style'); }
+    });
+  }
+  /** 枠の文字の最初の一字（枠の中に置いた別の物の文字は除く）。 */
+  function objectFirstText(obj) {
+    const parts = objectParts(obj);
+    const was = objectTextParts;
+    objectTextParts = parts;
+    try {
+      for (const part of parts) {
+        const w = document.createTreeWalker(part, NodeFilter.SHOW_TEXT, null);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (n.data.trim() && !outsideObjectText(n)) { return n; }
+        }
+      }
+      return null;
+    } finally { objectTextParts = was; }
+  }
+  function outsideObjectText(n) {
+    if (!objectTextParts) { return false; }
+    for (let up = n.parentNode; up; up = up.parentNode) {
+      if (objectTextParts.indexOf(up) >= 0) { return false; }
+      if (up.classList && up.classList.contains('eb-anchor')) { return true; }
+    }
+    return true;
+  }
+  const STRUCTURAL = /^(TABLE|THEAD|TBODY|TFOOT|TR|COLGROUP|COL|UL|OL|DL)$/;
   function textNodesInRange(range) {
     // Split the end first: splitting the start would move the end boundary.
     if (range.endContainer.nodeType === 3 && range.endOffset > 0 && range.endOffset < range.endContainer.data.length) {
@@ -1683,7 +2813,14 @@ ${insideObjects('.eb-paper.boxed')} {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     let n = walker.nextNode();
     while (n) {
-      if (n.data.length && inCanvas(n) && rangeHolds(range, n)) { out.push(n); }
+      // The spaces a file leaves between the rows and cells of a table (or the
+      // items of a list) are not writing. Wrapped in a span, they put a span
+      // inside a <tr>, and the next read of the file threw the table's contents
+      // out of their cells -- a table inside a table ended up after the words
+      // beside it (BUGS #73, a Word document opened after Ctrl+A and a font).
+      const holder = n.parentNode;
+      const between = holder && (STRUCTURAL.test(holder.nodeName) || (holder === canvas() && !n.data.trim()));
+      if (n.data.length && !between && inCanvas(n) && rangeHolds(range, n) && !outsideObjectText(n)) { out.push(n); }
       n = walker.nextNode();
     }
     if (!out.length && range.startContainer.nodeType === 3 && range.startContainer.data.length) {
@@ -1764,12 +2901,23 @@ ${insideObjects('.eb-paper.boxed')} {
     const spec = INLINE_SPECS[key];
     const range = getRange();
     if (!spec || !range) { return; }
+    // A word taken because nothing was chosen is not left chosen: the caret goes
+    // back where it was, or the next letter typed replaces the word (BUGS E1).
+    let caretBack = null;
     if (range.collapsed) {
       const word = wordRangeAt(range);
-      if (word) { selectRange(word); } else { return caretPlaceholder(spec); }
+      if (word) { caretBack = caretOffset(); selectRange(word); } else { return caretPlaceholder(spec); }
     }
     const r = getRange();
-    const nodes = textNodesInRange(r);
+    // Not the number of a note (the count rewrites it, so it is never bold and
+    // bold could never be taken off a run holding one: BUGS E8), not a reading
+    // over a word, not a letter of a formula -- which is MathML and cannot carry
+    // an HTML <strong> (E35).
+    const nodes = textNodesInRange(r).filter((n) => {
+      const up = n.parentNode;
+      return !(up && up.closest && up.closest('sup.eb-fnref, rt, rp'))
+        && !(up && up.namespaceURI === 'http://www.w3.org/1998/Math/MathML');
+    });
     if (!nodes.length) { return; }
     const allOn = nodes.every((n) => ancestorMatching(n, spec));
     nodes.forEach((n) => {
@@ -1783,6 +2931,7 @@ ${insideObjects('.eb-paper.boxed')} {
       }
     });
     reselectNodes(nodes);
+    if (caretBack != null) { setCaretOffset(caretBack); }
   }
 
   // ---- links ---------------------------------------------------------------------
@@ -1804,7 +2953,9 @@ ${insideObjects('.eb-paper.boxed')} {
   function tidyUrl(url) {
     const raw = String(url == null ? '' : url).trim();
     if (!raw) { return ''; }
-    if (/^\s*(javascript|vbscript|data):/i.test(raw)) { return ''; }
+    // Read the way the browser reads it (see unsafeUrl): a control character in
+    // front of `javascript:` is thrown away by the browser, not by this test.
+    if (unsafeUrl(raw) || /^[\u0000-\u0020]*data:/i.test(raw)) { return ''; }
     if (/^([a-z][a-z0-9+.-]*:|#|\/|\.\/|\.\.\/)/i.test(raw)) { return raw; }
     if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) { return 'mailto:' + raw; }
     return 'https://' + raw;
@@ -1816,7 +2967,7 @@ ${insideObjects('.eb-paper.boxed')} {
     const existing = linkAt();
     if (existing) {
       existing.setAttribute('href', href);
-      if (text && text !== existing.textContent) { existing.textContent = text; }
+      if (text && text !== existing.textContent) { retextLink(existing, String(text)); }
       return true;
     }
     const range = getRange();
@@ -1834,6 +2985,25 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const nodes = textNodesInRange(range);
     if (!nodes.length) { return false; }
+    // Words in one paragraph become one link, whatever they wear inside it. Each
+    // run of text was given a link of its own -- 会社の<strong>ホームページ</strong>
+    // became two links, and changing or removing one left the other (BUGS E29).
+    const blockOf = (n) => { let b = n.parentNode; while (b && b !== canvas() && !isBlock(b)) { b = b.parentNode; } return b; };
+    if (nodes.length > 1 && nodes.every((n) => blockOf(n) === blockOf(nodes[0]))
+      && !nodes.some((n) => ancestorMatching(n, { tag: 'A' }))) {
+      const a = document.createElement('a');
+      a.setAttribute('href', href);
+      a.appendChild(range.extractContents());
+      range.insertNode(a);
+      // What the choice cut out of a run of bold is left behind as an empty <strong>.
+      [a.previousSibling, a.nextSibling].forEach((n) => {
+        if (n && n.nodeType === 1 && !isBlock(n) && !n.textContent.replace(/\u200b/g, '') && !n.querySelector('img, math, br, .eb-anchor')) { n.remove(); }
+      });
+      const r = document.createRange();
+      r.selectNodeContents(a);
+      selectRange(r);
+      return true;
+    }
     if (text && nodes.length === 1 && text !== nodes[0].data) { nodes[0].data = text; }
     nodes.forEach((n) => {
       if (ancestorMatching(n, { tag: 'A' })) { return; }
@@ -1846,20 +3016,124 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
 
+  /**
+   * リンクの字を直す。変わった所だけを書き換え、変わらない所の書式（太字など）は
+   * 残す。字をまるごと入れ替えていたので、「会社の<strong>ホームページ</strong>」の
+   * 字を一つ足しただけで太字が消えた（BUGS #228）。
+   */
+  function retextLink(a, text) {
+    const walk = document.createTreeWalker(a, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) { nodes.push(n); }
+    const old = nodes.map((n) => n.data).join('');
+    if (!nodes.length || !old.length || old.length * text.length > 4000000) { a.textContent = text; return; }
+    // 元の字と新しい字の共通部分（最長共通部分列）を残し、消えた字を消し、増えた字を
+    // その前の字と同じ入れ物に入れる。
+    const n = old.length;
+    const m = text.length;
+    const L = new Uint16Array((n + 1) * (m + 1));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let k = m - 1; k >= 0; k -= 1) {
+        L[i * (m + 1) + k] = old[i] === text[k] ? L[(i + 1) * (m + 1) + k + 1] + 1
+          : Math.max(L[(i + 1) * (m + 1) + k], L[i * (m + 1) + k + 1]);
+      }
+    }
+    const ops = [];   // { at: 元の位置, del: 消すか, ins: 前に入れる字 }
+    let i = 0;
+    let k = 0;
+    let ins = '';
+    while (i < n || k < m) {
+      if (i < n && k < m && old[i] === text[k] && L[i * (m + 1) + k] === L[(i + 1) * (m + 1) + k + 1] + 1) {
+        if (ins) { ops.push({ at: i, ins }); ins = ''; }
+        i += 1; k += 1;
+      } else if (i < n && (k >= m || L[(i + 1) * (m + 1) + k] >= L[i * (m + 1) + k + 1])) {
+        if (ins) { ops.push({ at: i, ins }); ins = ''; }
+        ops.push({ at: i, del: true });
+        i += 1;
+      } else {
+        ins += text[k];
+        k += 1;
+      }
+    }
+    if (ins) { ops.push({ at: n, ins }); }
+    // 後ろから当てる（前の位置が変わらない）。
+    const place = (pos, before) => {
+      let q = pos;
+      for (let x = 0; x < nodes.length; x += 1) {
+        const len = nodes[x].data.length;
+        if (before ? q <= len && (q > 0 || x === 0) : q < len) { return [nodes[x], q]; }
+        q -= len;
+      }
+      const last = nodes[nodes.length - 1];
+      return [last, last.data.length];
+    };
+    for (let x = ops.length - 1; x >= 0; x -= 1) {
+      const op = ops[x];
+      if (op.del) { const [nd, off] = place(op.at, false); nd.deleteData(off, 1); }
+      else { const [nd, off] = place(op.at, true); nd.insertData(off, op.ins); }
+    }
+    // 空になった書式の入れ物は残さない。
+    Array.from(a.querySelectorAll('*')).forEach((el) => {
+      if (!el.textContent && !el.querySelector('img, br, math')) { el.remove(); }
+    });
+  }
+  /** 選んでいる写真（物として選んだ物）。 */
+  function takenPicture() {
+    if (!frameTaken || !frameEl || !canvas() || !canvas().contains(frameEl)) { return null; }
+    if (frameEl.nodeName === 'IMG') { return frameEl; }
+    return frameEl.querySelector ? frameEl.querySelector('img') : null;
+  }
+  /** 写真にリンクを付ける（LibreOffice と同じく、写真そのものがリンクになる）。 */
+  function linkPicture(img, url) {
+    const href = tidyUrl(url);
+    if (!img || !href) { return false; }
+    const own = img.parentNode && img.parentNode.nodeName === 'A' ? img.parentNode : null;
+    if (own) { own.setAttribute('href', href); return true; }
+    const a = document.createElement('a');
+    a.setAttribute('href', href);
+    img.parentNode.insertBefore(a, img);
+    a.appendChild(img);
+    return true;
+  }
   function removeLink() {
-    const a = linkAt();
+    const unwrap = (a) => {
+      const parent = a.parentNode;
+      while (a.firstChild) { parent.insertBefore(a.firstChild, a); }
+      parent.removeChild(a);
+      parent.normalize();
+    };
+    // 範囲を選んでいれば、範囲にかかるリンクをみな外す。最初の一つしか外れず、
+    // 残りはそのままだった（BUGS #228）。
+    const r = getRange();
+    const c = canvas();
+    if (r && !r.collapsed && c && c.contains(r.commonAncestorContainer)) {
+      const hit = Array.from(c.querySelectorAll('a[href]')).filter((a) => r.intersectsNode(a));
+      if (hit.length) { hit.forEach(unwrap); return true; }
+    }
+    const pic = takenPicture();
+    const a = linkAt() || (pic && pic.parentNode && pic.parentNode.nodeName === 'A' ? pic.parentNode : null);
     if (!a) { return false; }
-    const parent = a.parentNode;
-    while (a.firstChild) { parent.insertBefore(a.firstChild, a); }
-    parent.removeChild(a);
-    parent.normalize();
+    unwrap(a);
     return true;
   }
 
   /** Nothing is selected: start a wrapper and leave the caret inside it. */
+  /**
+   * The caret standing in a peg (.eb-anchor) itself rather than in anything
+   * written: a click on a placed thing can leave it there. Whatever is typed or
+   * applied there lands loose beside the thing and comes back as stray blank
+   * paragraphs and invisible spaces (owner, 2026-09-28, test2.html: 「文字色を
+   * 解除で、複数の段落が作成された」, BUGS #278/#281).
+   */
+  function caretInPeg(range) {
+    if (!range) { return false; }
+    const n = range.startContainer;
+    const el = n && (n.nodeType === 1 ? n : n.parentNode);
+    return !!(el && el.classList && el.classList.contains('eb-anchor'));
+  }
   function caretPlaceholder(spec) {
     const range = getRange();
-    if (!range) { return; }
+    if (!range || caretInPeg(range)) { return; }
     const el = makeInline(spec);
     el.appendChild(document.createTextNode('​'));
     range.insertNode(el);
@@ -1869,16 +3143,39 @@ ${insideObjects('.eb-paper.boxed')} {
     selectRange(r);
   }
 
+  /**
+   * The word a command with nothing chosen acts on: the word the caret stands
+   * INSIDE, as LibreOffice takes it. At the edge of a word (the caret just after
+   * the last letter, where a writer presses Ctrl+B to go on in bold) there is no
+   * word, and the command goes to what is typed next instead. Words are the
+   * browser's own word breaker's: in Japanese, where there are no spaces, the
+   * run up to the next space was the whole sentence -- it was chosen, left chosen,
+   * and the next letter typed replaced it (BUGS E1).
+   */
   function wordRangeAt(range) {
     const node = range.startContainer;
     if (node.nodeType !== 3) { return null; }
     const text = node.data;
-    let a = range.startOffset;
-    let b = range.startOffset;
-    const isWord = (ch) => ch && !/\s/.test(ch);
-    while (a > 0 && isWord(text[a - 1])) { a--; }
-    while (b < text.length && isWord(text[b])) { b++; }
-    if (a === b) { return null; }
+    const at = range.startOffset;
+    const isWord = (ch) => !!ch && !/[\s\u200b]/.test(ch);
+    if (!isWord(text[at - 1]) || !isWord(text[at])) { return null; }
+    let a = at;
+    let b = at;
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      const lang = document.documentElement.lang || 'ja';
+      for (const seg of new Intl.Segmenter(lang, { granularity: 'word' }).segment(text)) {
+        const end = seg.index + seg.segment.length;
+        if (seg.index < at && at < end) {
+          if (!seg.isWordLike) { return null; }
+          a = seg.index; b = end;
+          break;
+        }
+      }
+      if (a === b) { return null; }
+    } else {
+      while (a > 0 && isWord(text[a - 1])) { a--; }
+      while (b < text.length && isWord(text[b])) { b++; }
+    }
     const r = document.createRange();
     r.setStart(node, a);
     r.setEnd(node, b);
@@ -1898,13 +3195,60 @@ ${insideObjects('.eb-paper.boxed')} {
   function applyInlineStyle(prop, value) {
     const range = getRange();
     if (!range) { return; }
+    let caretBack = null;
     if (range.collapsed) {
       const word = wordRangeAt(range);
       if (!word) { return caretPlaceholder({ tag: 'SPAN', style: { [prop]: value } }); }
+      caretBack = caretOffset();
       selectRange(word);
     }
     const nodes = textNodesInRange(getRange());
-    nodes.forEach((n) => {
+    // ふりがな（ruby）は語ごとひとまとまりに扱う。ふりがなの字には書き込まない ――
+    // ふりがなは本文の半分（.5em）で表示しているので、語全体に付ければ本文と一緒に
+    // 同じ比率で大きくなる。以前はふりがなの字にも同じ大きさを書き、ふりがなが本文と
+    // 同じ大きさになった（オーナー 2026-09-22、BUGS #50）。前にそうして書き込まれた
+    // ぶんは、ここでふりがなから取り除く。
+    const rubies = [];
+    const plain = nodes.filter((n) => {
+      const up = n.parentNode;
+      // Not inside a formula: MathML cannot hold an HTML <span> (see toggleInline).
+      if (up && up.closest && up.closest('math')) { return false; }
+      const rt = up && up.closest ? up.closest('rt, rp') : null;
+      const ruby = up && up.closest ? up.closest('ruby') : null;
+      if (rt) {
+        for (let el = up; el && el !== rt.parentNode; el = el.parentNode) {
+          if (el.nodeType === 1 && el.style && el.style[prop]) {
+            el.style[prop] = '';
+            if (!el.getAttribute('style')) { el.removeAttribute('style'); if (el.nodeName === 'SPAN') { unwrapBareSpan(el); } }
+          }
+        }
+        return false;
+      }
+      if (ruby) { if (rubies.indexOf(ruby) < 0) { rubies.push(ruby); } return false; }
+      return true;
+    });
+    rubies.forEach((ruby) => {
+      // 語の中の字に付いていた同じ指定は外し、語全体に一つだけ付ける。
+      Array.from(ruby.querySelectorAll('[style]')).forEach((el) => {
+        if (el.closest('rt, rp') || !el.style[prop]) { return; }
+        el.style[prop] = '';
+        if (!el.getAttribute('style')) { el.removeAttribute('style'); if (el.nodeName === 'SPAN') { unwrapBareSpan(el); } }
+      });
+      const wrap = ruby.parentNode;
+      if (wrap && wrap.nodeName === 'SPAN' && wrap.childNodes.length === 1) {
+        wrap.style[prop] = value || '';
+        if (!wrap.getAttribute('style')) { wrap.removeAttribute('style'); unwrapBareSpan(wrap); }
+        return;
+      }
+      const owner = ancestorWithStyle(ruby, prop);
+      if (owner) { splitOut(ruby, owner); }
+      if (!value) { return; }
+      const el = document.createElement('span');
+      el.style[prop] = value;
+      ruby.parentNode.insertBefore(el, ruby);
+      el.appendChild(ruby);
+    });
+    plain.forEach((n) => {
       const owner = ancestorWithStyle(n, prop);
       if (owner && owner.childNodes.length === 1 && owner.firstChild === n && owner.nodeName === 'SPAN') {
         if (value) { owner.style[prop] = value; } else { owner.style[prop] = ''; }
@@ -1919,6 +3263,7 @@ ${insideObjects('.eb-paper.boxed')} {
       el.appendChild(n);
     });
     reselectNodes(nodes);
+    if (caretBack != null) { setCaretOffset(caretBack); }
   }
 
   /**
@@ -2009,22 +3354,226 @@ ${insideObjects('.eb-paper.boxed')} {
     parent.removeChild(el);
   }
 
+  /**
+   * The same words, in as few tags as say them.
+   *
+   * Every time a piece of writing is given a size or a typeface, the words it
+   * covers are wrapped in a span. Do it twice and the span is wrapped in another
+   * span; do it over a whole document and the file fills with them -- measured on
+   * the owner's own test.html: ten paragraphs carrying 503 spans, 443 of them
+   * with a style, 206 one inside another and 28 holding nothing at all (BUGS
+   * #82). None of it changes what is printed; it is the same sentence said four
+   * times over.
+   *
+   * So: a span holding nothing goes; a span with no attributes at all goes and
+   * leaves its words; a span whose only child is a span becomes one span wearing
+   * both styles (the inner one wins, because it was applied last); and two spans
+   * side by side that say exactly the same thing become one. Nothing that is not
+   * a plain span is touched -- a reading (ruby), the shims that hold a wrap, and
+   * anything the editor marks with an id or a data- attribute are left alone.
+   */
+  const PLAIN_SPAN_ATTRS = /^(style|class)$/;
+  function plainSpan(el) {
+    if (!el || el.nodeName !== 'SPAN') { return false; }
+    if (!Array.from(el.attributes).every((a) => PLAIN_SPAN_ATTRS.test(a.name))) { return false; }
+    const cls = el.getAttribute('class') || '';
+    return !cls || !/\beb-/.test(cls);
+  }
+  /**
+   * Whether a span inside another says something the two cannot say as one.
+   * One span with both styles is the same only where the inner one's style
+   * simply takes over from the outer's. Some do not: a size in % or em is of
+   * the size around it (80% inside 80% is 64%, one span of 80% is 80%), and
+   * lines under and through the words, a background, a border, a raise or a
+   * lowering are each drawn by every span that asks for them -- underline
+   * around line-through draws both, one span draws the last. Put together,
+   * those came out looking different (review D18); they are left nested.
+   */
+  const NEST_DRAWS = /^(text-decoration|vertical-align|opacity|filter|mix-blend-mode|transform|background|border|outline|padding|margin|box-shadow)/;
+  function nestedSaysMore(outer, inner) {
+    const decls = (v) => {
+      const m = new Map();
+      styleDecls(v).forEach((d) => {
+        const i = d.indexOf(':');
+        if (i > 0) { m.set(d.slice(0, i).trim().toLowerCase(), d.slice(i + 1).trim()); }
+      });
+      return m;
+    };
+    const o = decls(outer);
+    const n = decls(inner);
+    const family = (p) => { const m = NEST_DRAWS.exec(p); return m ? m[1] : p; };
+    const oFam = new Set(Array.from(o.keys()).map(family));
+    for (const [prop, val] of n) {
+      if (NEST_DRAWS.test(prop) && oFam.has(family(prop))) { return true; }
+      if ((prop === 'font' || prop === 'font-size') && (o.has('font') || o.has('font-size'))
+        && (prop === 'font' || /%|\d(em|ex|ch|cap|ic|lh)\b|^(larger|smaller)$|calc\(/i.test(val))) { return true; }
+      if (prop === 'font-weight' && o.has('font-weight') && /^(bolder|lighter)$/i.test(val)) { return true; }
+    }
+    // A size set inside changes what every em and % of the outer one is measured by.
+    if (n.has('font-size') || n.has('font')) {
+      for (const [prop, val] of o) {
+        if (prop !== 'font-size' && prop !== 'font' && /\d(em|ex|ch|cap|ic|lh|%)/i.test(val)) { return true; }
+      }
+    }
+    return false;
+  }
+  function sameSpan(a, b) {
+    return plainSpan(a) && plainSpan(b)
+      && (a.getAttribute('style') || '') === (b.getAttribute('style') || '')
+      && (a.getAttribute('class') || '') === (b.getAttribute('class') || '');
+  }
+  /**
+   * ソースの健全性を保つ（オーナー 2026-09-23「常にソースの健全性を保つための
+   * ルーチンを高速に走らせることが出来るようにする」）。
+   *
+   * 見た目を変えずに、ソースに溜まる無駄と崩れを取る。操作のたび・開いたとき・
+   * 保存のときに走る。直した数と、かかった時間を window.__eb_heal に残す。
+   *   page   … ページの区切り（.eb-page）の消し忘れ（保存したファイルにだけあるもの）
+   *   home   … 置いた物を移した印の残り（保存のときの写しでは消さない）
+   *   gap    … 表・リストの骨組みに直接入った空白と、中身の無い span（BUGS #73）
+   *   id     … 同じ id の二つ目以降
+   *   empty  … 中身の無い太字・斜体などの飾り
+   *   span   … 空の・何も言わない・入れ子の・隣り合う同じ span（tidySpans、BUGS #82）
+   */
+  const heal = { runs: 0, ms: 0, maxMs: 0, last: {}, total: {} };
+  function healSource(root, opts) {
+    if (!root || !root.querySelectorAll) { return 0; }
+    const t0 = (window.performance && performance.now()) || Date.now();
+    const keepMoves = !!(opts && opts.keepMoves);
+    const fixed = {};
+    const note = (k) => { fixed[k] = (fixed[k] || 0) + 1; };
+    // 書き手のいる所の要素は取らない（打とうとしている飾りかもしれない）。
+    const here = (() => {
+      try { const r = getRange(); return r && root.contains(r.startContainer) ? r.startContainer : null; } catch (e) { return null; }
+    })();
+    const holdsCaret = (el) => !!(here && (el === here || el.contains(here)));
+    root.querySelectorAll('div.' + PAGE_DIV).forEach((pg) => {
+      while (pg.firstChild) { pg.parentNode.insertBefore(pg.firstChild, pg); }
+      pg.remove();
+      note('page');
+    });
+    if (!keepMoves) {
+      root.querySelectorAll('[data-eb-home], [data-eb-top0]').forEach((el) => {
+        el.removeAttribute('data-eb-home');
+        el.removeAttribute('data-eb-top0');
+        note('home');
+      });
+    }
+    root.querySelectorAll('table, thead, tbody, tfoot, tr, colgroup, ul, ol').forEach((el) => {
+      Array.from(el.childNodes).forEach((k) => {
+        if (k.nodeType === 3) {
+          if (!k.data.trim() && !holdsCaret(k)) { k.remove(); note('gap'); }
+          return;
+        }
+        if (k.nodeType === 1 && k.nodeName === 'SPAN' && !String(k.textContent || '').trim()
+          && !k.querySelector('img, br, svg, math') && !holdsCaret(k)) { k.remove(); note('gap'); }
+      });
+    });
+    const seen = new Set();
+    root.querySelectorAll('[id]').forEach((el) => {
+      const id = el.getAttribute('id');
+      if (!id) { return; }
+      if (seen.has(id)) { el.removeAttribute('id'); note('id'); } else { seen.add(id); }
+    });
+    root.querySelectorAll('b, i, u, s, em, strong, font, mark, small, sub, sup').forEach((el) => {
+      if (!el.firstChild && el.parentNode && !holdsCaret(el)) { el.remove(); note('empty'); }
+    });
+    if (tidySpans(root)) { note('span'); }
+    const ms = ((window.performance && performance.now()) || Date.now()) - t0;
+    heal.runs += 1;
+    heal.ms = Math.round(ms * 10) / 10;
+    heal.maxMs = Math.max(heal.maxMs, heal.ms);
+    heal.last = fixed;
+    Object.keys(fixed).forEach((k) => { heal.total[k] = (heal.total[k] || 0) + fixed[k]; });
+    return Object.keys(fixed).length;
+  }
+  function tidySpans(root) {
+    if (!root || !root.querySelectorAll) { return false; }
+    // Where the writer is: a span holding the caret is never taken away under it.
+    const here = (() => {
+      try { const r = getRange(); return r && root.contains && root.contains(r.startContainer) ? r.startContainer : null; } catch (e) { return null; }
+    })();
+    // 選んだ範囲は、字の位置（文書の頭から何字目）で覚えておく。span をまとめると
+    // 入れ物の要素が変わるので、要素と番号で覚えている範囲はそこで縮んでしまう
+    // ―― 3字選んで大きさを変えたのに、1字にしか効かなかった（objtext-e2e）。
+    const live = root === canvas();
+    const held = (() => {
+      if (!live) { return null; }
+      const r = getRange();
+      if (!r || r.collapsed || !root.contains(r.startContainer)) { return null; }
+      const a = textCount(r.startContainer, r.startOffset);
+      const b = textCount(r.endContainer, r.endOffset);
+      return (a == null || b == null) ? null : { a: a, b: b };
+    })();
+    let changed = false;
+    for (let pass = 0; pass < 6; pass += 1) {
+      let again = false;
+      Array.from(root.querySelectorAll('span')).forEach((el) => {
+        if (!el.parentNode || !plainSpan(el)) { return; }
+        // Nothing in it at all. It goes, even when it carries a style: an empty
+        // run of 19pt left behind by an earlier edit still makes the line it sits
+        // in 19pt tall, and the writer never put a word there. Taking it out is
+        // what makes the line the height of the words that are actually in it.
+        // (The owner, 2026-09-23: 「タグを消して結果が変わるなら、それはバグ」)
+        // The one that is spared is the one the caret is in -- that is the span a
+        // style was just switched on in, waiting for the next letter.
+        if (!el.firstChild || (!String(el.textContent || '').length && !el.querySelector('img, br, svg, math'))) {
+          if (!(here && (el === here || el.contains(here)))) { el.remove(); again = true; return; }
+        }
+        // Nothing said by it.
+        if (!el.attributes.length || (!el.getAttribute('style') && !el.getAttribute('class'))) {
+          unwrapBareSpan(el); again = true; return;
+        }
+        // One span inside another: one span, both styles, the inner one last.
+        const only = el.childNodes.length === 1 ? el.firstChild : null;
+        if (only && only.nodeType === 1 && plainSpan(only)
+          && !nestedSaysMore(el.getAttribute('style') || '', only.getAttribute('style') || '')) {
+          const outer = el.getAttribute('style') || '';
+          const inner = only.getAttribute('style') || '';
+          const merged = outer && inner ? (outer.replace(/;\s*$/, '') + '; ' + inner) : (outer || inner);
+          const cls = [el.getAttribute('class') || '', only.getAttribute('class') || ''].filter(Boolean).join(' ');
+          if (merged) { el.setAttribute('style', cleanStyle(merged) || merged); } else { el.removeAttribute('style'); }
+          if (cls) { el.setAttribute('class', cls); }
+          while (only.firstChild) { el.insertBefore(only.firstChild, only); }
+          only.remove(); again = true; return;
+        }
+        // Two beside each other saying the same thing.
+        let next = el.nextSibling;
+        while (next && next.nodeType === 3 && !next.data) { const gone = next; next = next.nextSibling; gone.remove(); }
+        if (next && next.nodeType === 1 && sameSpan(el, next)) {
+          while (next.firstChild) { el.appendChild(next.firstChild); }
+          next.remove(); again = true;
+        }
+      });
+      if (!again) { break; }
+      changed = true;
+    }
+    if (changed && held) {
+      const a = pointAtCount(held.a);
+      const b = pointAtCount(held.b);
+      if (a && b) {
+        try {
+          const r = document.createRange();
+          r.setStart(a.node, a.at);
+          r.setEnd(b.node, b.at);
+          selectRange(r);
+        } catch (e) { /* the writing moved on */ }
+      }
+    }
+    return changed;
+  }
   function styleTextOrBlock(prop, value) {
     const range = getRange();
     if (!range) { return; }
-    if (!range.collapsed) { applyInlineStyle(prop, value); return; }
-    const name = dashed(prop);
-    selectedBlocks(true).forEach((block) => {
-      // Setting it on the block says nothing while the words inside carry their own.
-      Array.from(block.querySelectorAll('[style]')).forEach((el) => {
-        if (!el.style.getPropertyValue(name)) { return; }
-        el.style.removeProperty(name);
-        if (!el.getAttribute('style')) { el.removeAttribute('style'); unwrapBareSpan(el); }
-      });
-      if (value) { block.style.setProperty(name, value); } else { block.style.removeProperty(name); }
-      if (!block.getAttribute('style')) { block.removeAttribute('style'); }
-    });
+    // With nothing chosen, LibreOffice sets the size or the typeface on the word
+    // the caret is in, and at the edge of a word on what is typed next -- never on
+    // the whole paragraph (measured by PS, 2026-09-28: 「かき｜くけこ」 changed
+    // 「きく」 only). Setting it on the paragraph also wiped the sizes of the words
+    // in it (review Q1, BUGS #202). applyInlineStyle does exactly what LibreOffice
+    // does, chosen or not.
+    applyInlineStyle(prop, value);
   }
+
 
   /**
    * What the text under the caret actually prints at, in points -- read off the
@@ -2032,11 +3581,11 @@ ${insideObjects('.eb-paper.boxed')} {
    * document's default. The screen view draws the canvas at a reading size, and
    * the ratio between the two takes the number back to what the paper will print.
    */
-  function sizeAt(paperPt) {
+  function sizeAt(paperPt, at) {
     const c = canvas();
     const range = getRange();
-    if (!c || !range || !window.getComputedStyle) { return null; }
-    let n = range.startContainer;
+    if (!c || !(range || at) || !window.getComputedStyle) { return null; }
+    let n = at || range.startContainer;
     if (n && n.nodeType === 3) { n = n.parentNode; }
     if (!n || n.nodeType !== 1 || !inCanvas(n)) { return null; }
     const canvasPx = parseFloat(window.getComputedStyle(c).fontSize) || 0;
@@ -2047,10 +3596,10 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** The family the text under the caret is actually set in. */
-  function familyAt() {
+  function familyAt(at) {
     const range = getRange();
-    if (!range || !window.getComputedStyle) { return ''; }
-    let n = range.startContainer;
+    if (!(range || at) || !window.getComputedStyle) { return ''; }
+    let n = at || range.startContainer;
     if (n && n.nodeType === 3) { n = n.parentNode; }
     if (!n || n.nodeType !== 1 || !inCanvas(n)) { return ''; }
     const first = String(window.getComputedStyle(n).fontFamily || '').split(',')[0].trim();
@@ -2100,10 +3649,16 @@ ${insideObjects('.eb-paper.boxed')} {
       }
       return false;
     };
-    const nodes = textNodesInRange(range).filter((n) => !inReading(n));
+    // Nor are links and notes. LibreOffice's "clear direct formatting" keeps the
+    // hyperlinks and the footnotes; taking them apart here left the note's number
+    // as a bare "1", and the note itself was deleted with it at the next count
+    // (BUGS E7). A note's number is left entirely alone.
+    const inNoteRef = (n) => !!(n.parentNode && n.parentNode.closest && n.parentNode.closest('sup.eb-fnref, math'));
+    const kept = (el) => el.nodeName === 'RUBY' || el.nodeName === 'A' || (el.matches && el.matches('sup.eb-fnref'));
+    const nodes = textNodesInRange(range).filter((n) => !inReading(n) && !inNoteRef(n));
     nodes.forEach((n) => {
       let parent = n.parentNode;
-      while (parent && parent !== canvas() && !isBlock(parent) && parent.nodeName !== 'RUBY') {
+      while (parent && parent !== canvas() && !isBlock(parent) && !kept(parent)) {
         const up = parent.parentNode;
         splitOut(n, parent);
         parent = up === canvas() ? null : n.parentNode;
@@ -2149,6 +3704,316 @@ ${insideObjects('.eb-paper.boxed')} {
       return kids[Math.min(offset, kids.length - 1)];
     }
     return topBlockOf(container);
+  }
+  /**
+   * 改ページの消し方（LibreOffice と同じ）。次の段落の頭で Backspace、前の段落の
+   * 終わりで Delete を押すと、改ページだけが消える。印を押すと改ページが選ばれ、
+   * Delete か Backspace で消える。以前は Backspace で次の段落の文章が改ページの
+   * 中へ吸い込まれて見えなくなり、印を押すと前の段落の字が消えた（2026-09-22）。
+   */
+  /**
+   * ふりがなの語の直後で打った字が、ふりがな（読み）の中に入っていた（2026-09-22
+   * 点検で発見：End で行末へ行くとカーソルが <rt> の終わりに立つ）。読みは専用の
+   * 画面で直すものなので、打つ前にカーソルが読み・括弧の中、または語の終わりに
+   * あれば、ふりがなの直後へ出す。語の頭にあれば直前へ出す。
+   */
+  function caretOutOfRuby(ch) {
+    const r = getRange();
+    if (!r || !r.collapsed) { return; }
+    let n = r.startContainer;
+    let ruby = null;
+    let inReading = false;
+    for (let up = n.nodeType === 1 ? n : n.parentNode; up && up !== canvas(); up = up.parentNode) {
+      if (up.nodeName === 'RT' || up.nodeName === 'RP') { inReading = true; }
+      if (up.nodeName === 'RUBY') { ruby = up; break; }
+    }
+    if (!ruby) { return; }
+    // 直後（直前）に何も字が無いと、ブラウザはカーソルを読みの末尾へ戻してしまう。
+    // 幅の無い字（保存時に取り除かれる、この編集器のカーソルの支え）を置いて、
+    // そこにカーソルを立てる。
+    const place = (after) => {
+      // 打つ字が分かっていれば、その字をここで入れる（ブラウザに入れさせると
+      // カーソルがその字の前に残り、次の字が前に入る）。
+      const hold = document.createTextNode(ch || '\u200B');
+      if (after) { ruby.parentNode.insertBefore(hold, ruby.nextSibling); } else { ruby.parentNode.insertBefore(hold, ruby); }
+      const at = document.createRange();
+      at.setStart(hold, ch ? ch.length : (after ? 1 : 0));
+      at.collapse(true);
+      selectRange(at);
+    };
+    if (inReading) { place(true); return true; }
+    // 語の中。前後にまだ語の字があれば、語の途中なのでそのまま。
+    const before = document.createRange();
+    before.setStart(ruby, 0);
+    before.setEnd(r.startContainer, r.startOffset);
+    const base = rubyBase(ruby);
+    const done = String(before.cloneContents().textContent || '').length;
+    if (done >= base.length) { place(true); return true; }
+    if (done === 0) { place(false); return true; }
+    return false;
+  }
+  /**
+   * 回り込みの帯（eb-flow）と両側の空き（eb-gap）は、字の無い目に見えない部品。
+   * 矢印キーや Home で移った先がそこだと、カーソルが帯と帯の間に止まり、次の矢印
+   * キーが空回りし、打った字は帯の間に入った（2026-09-22 点検で発見：行頭で右矢印を
+   * 2回押しても動かない）。移ったあとで、押した向きのまま帯を越える。
+   */
+  function isBand(n) {
+    return !!(n && n.nodeType === 1 && n.classList && (n.classList.contains('eb-flow') || n.classList.contains('eb-gap')));
+  }
+  function atBand(r) {
+    if (!r || !r.collapsed) { return false; }
+    const n = r.startContainer;
+    if (n.nodeType !== 1) { return false; }
+    return isBand(n.childNodes[r.startOffset - 1]) || isBand(n.childNodes[r.startOffset]);
+  }
+  /** 段落（を含む要素 from）の前の段落の、最後の字の後ろへカーソルを置く。 */
+  function jumpToPrevBlockEnd(from) {
+    const sel = window.getSelection();
+    let block = from;
+    while (block && block.parentNode && !isBlock(block)) { block = block.parentNode; }
+    let prev = block ? block.previousSibling : null;
+    while (prev) {
+      if (prev.nodeType === 1 && !isBand(prev) && !(prev.classList && (prev.classList.contains('eb-pagespacer') || prev.classList.contains('eb-anchor')))) {
+        const w = document.createTreeWalker(prev, NodeFilter.SHOW_TEXT, {
+          acceptNode: (t) => ((t.parentNode && t.parentNode.closest && t.parentNode.closest('rt, rp, .eb-flow, .eb-gap, .eb-anchor')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+        });
+        let last = null;
+        for (let t = w.nextNode(); t; t = w.nextNode()) { last = t; }
+        const r = document.createRange();
+        if (last) { r.setStart(last, last.data.length); } else { r.setStart(prev, prev.childNodes.length); }
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return true;
+      }
+      prev = prev.previousSibling;
+    }
+    return false;
+  }
+  /** カーソルの前（同じ段落の中）が、見えない帯か空の字だけか。 */
+  function onlyBandsBefore(r) {
+    if (!r || !r.collapsed) { return null; }
+    let node = r.startContainer;
+    if (node.nodeType === 3) { if (r.startOffset > 0 && node.data.slice(0, r.startOffset).replace(/[\u200b]/g, '')) { return null; } }
+    else if (Array.from(node.childNodes).slice(0, r.startOffset).some((k) => !isBand(k) && (k.textContent || '').replace(/[\u200b\s]/g, ''))) { return null; }
+    let k = node;
+    while (k && k.parentNode) {
+      if (k.nodeType === 1 && isBlock(k)) { return k; }
+      let sib = k.previousSibling;
+      while (sib) {
+        if (!isBand(sib) && (sib.textContent || '').replace(/[\u200b\s]/g, '')) { return null; }
+        if (sib.nodeType === 1 && sib.querySelector && sib.querySelector('img, math, svg')) { return null; }
+        sib = sib.previousSibling;
+      }
+      k = k.parentNode;
+    }
+    return null;
+  }
+  /** 置いた物（.eb-anchor の中）を飛び越えて、次の段落の最初の字の前へ。 */
+  function jumpToNextBlockStart(from) {
+    const sel = window.getSelection();
+    let k = from;
+    while (k && k.parentNode && !(k.nodeType === 1 && k.classList && k.classList.contains('eb-anchor') && !k.parentNode.closest('.eb-anchor'))) { k = k.parentNode; }
+    let next = k ? k.nextSibling : null;
+    while (next) {
+      if (next.nodeType === 1 && !isBand(next) && !(next.classList && (next.classList.contains('eb-pagespacer') || next.classList.contains('eb-anchor')))) {
+        const w = document.createTreeWalker(next, NodeFilter.SHOW_TEXT, {
+          acceptNode: (t) => ((t.parentNode && t.parentNode.closest && t.parentNode.closest('rt, rp, .eb-flow, .eb-gap, .eb-anchor')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+        });
+        const first = w.nextNode();
+        const r = document.createRange();
+        if (first) { r.setStart(first, 0); } else { r.setStart(next, 0); }
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return true;
+      }
+      next = next.nextSibling;
+    }
+    return false;
+  }
+  function stepPastBands(dir, extend) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.modify) { return; }
+    // 後ろへ戻る向きで、段落の頭にある帯の上にいるなら、前の段落の終わりへ移る。
+    if (dir === 'backward' && !extend) {
+      const n = sel.focusNode;
+      if (n && n.nodeType === 1) {
+        const before = Array.from(n.childNodes).slice(0, sel.focusOffset);
+        if (before.length && before.every((k) => isBand(k) || (k.nodeType === 3 && !k.data.replace(/[\u200b\s]/g, '')))) {
+          jumpToPrevBlockEnd(n);
+          return;
+        }
+      }
+    }
+    for (let i = 0; i < 12; i += 1) {
+      const r = sel.getRangeAt(0);
+      const probe = document.createRange();
+      probe.setStart(sel.focusNode, sel.focusOffset);
+      probe.collapse(true);
+      if (!atBand(probe)) { return; }
+      sel.modify(extend ? 'extend' : 'move', dir, 'character');
+      if (r && sel.focusNode === probe.startContainer && sel.focusOffset === probe.startOffset) { return; }
+    }
+  }
+  /**
+   * ページの境目で切った段落（リスト・引用も）の継ぎ目。組み直しは段落を画面の
+   * 上で二つの要素に分け、間に詰め物（eb-pagespacer・編集できない div）を挟む。
+   * 継ぎ目はブラウザにとっては段落と段落の境なので、そのままにしておくと、
+   *   ・2枚目の頭で Backspace → 2枚目側が詰め物に吸い込まれて <p> でなくなり、
+   *     字が span のまま本文の直下に並んで保存された（#255）。
+   *   ・1枚目の最後で Delete → 何も起きなかった（#256）。
+   *   ・矢印キー → カーソルが詰め物の横（段落の外）に止まり、打った字は段落の外へ
+   *     入った。Shift+矢印の選択もそこで止まった（#257）。
+   * 書いた人にとっては一つの段落なので、継ぎ目は字と字の間でしかない。継ぎ目の
+   * 前後の位置は同じ一つの位置とみなして、キーはその向こうの字に効かせる。
+   *
+   * 答え：カーソル（node, offset）が切れ端の端にいて、押した向きに次の切れ端が
+   * あれば { a（前の切れ端）, x（その最後の塊）, y（後の切れ端の最初の塊）, inText } 。
+   * inText は、継ぎ目が字の途中（段落・項目の中で切れた）か。項目と項目の間で
+   * 切れたリストでは false ―― そこは本当の塊の境。
+   */
+  function cutSeamAt(node, offset, forward) {
+    const c = canvas();
+    if (!c || !node || node === c || !c.contains(node)) { return null; }
+    let top = node.nodeType === 3 ? node.parentNode : node;
+    while (top && top.parentNode !== c) { top = top.parentNode; }
+    // 表は行の間で切れ、セルの中で矢印・Backspace を押しても隣の切れには移らない。
+    if (!top || top.nodeType !== 1 || top.nodeName === 'TABLE' || !top.hasAttribute) { return null; }
+    let other = forward ? top.nextElementSibling : top.previousElementSibling;
+    while (isCutGap(other)) { other = forward ? other.nextElementSibling : other.previousElementSibling; }
+    if (!other || other.nodeName !== top.nodeName || !other.hasAttribute) { return null; }
+    if (!(forward ? top : other).hasAttribute(FLOWCUT)) { return null; }
+    const edge = document.createRange();
+    try {
+      if (forward) { edge.setStart(node, offset); edge.setEnd(top, top.childNodes.length); } else { edge.setStart(top, 0); edge.setEnd(node, offset); }
+    } catch (e) { return null; }
+    const bit = edge.cloneContents();
+    bit.querySelectorAll('rt, rp, .eb-flow, .eb-gap').forEach((k) => k.remove());
+    if (String(bit.textContent || '').replace(/[\s\u200b]/g, '') || bit.querySelector('img, svg, math, video, audio, iframe, object, table, hr')) { return null; }
+    const a = forward ? top : other;
+    let x = a;
+    let y = forward ? other : top;
+    while (x.lastElementChild && x.lastElementChild.getAttribute('data-split') === 'on'
+      && y.firstElementChild && y.firstElementChild.nodeName === x.lastElementChild.nodeName) {
+      x = x.lastElementChild;
+      y = y.firstElementChild;
+    }
+    const inText = !Array.from(x.children).some((k) => isBlock(k) || k.nodeName === 'TABLE');
+    return { a: a, x: x, y: y, inText: inText };
+  }
+  /** 塊の中の最初（first）か最後の字の位置。字が無ければ塊の頭か終わり。 */
+  function seamEdge(el, first) {
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (t) => ((t.parentNode && t.parentNode.closest && t.parentNode.closest('rt, rp, .eb-flow, .eb-gap, .eb-anchor'))
+        || !t.data.replace(/[\s\u200b]/g, '') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    let t = w.nextNode();
+    if (!first) { for (let k = t; k; k = w.nextNode()) { t = k; } }
+    if (!t) { return { node: el, at: first ? 0 : el.childNodes.length }; }
+    return { node: t, at: first ? 0 : t.data.length };
+  }
+  /**
+   * 継ぎ目でのキー（onKey から）。扱ったら true（そのときブラウザの既定の動きを
+   * 止めるかは kind による：矢印は止める。Backspace・Delete は、消す字を選んで
+   * からブラウザに消させる ―― 変更の記録も元に戻すも、ふつうの削除と同じに働く）。
+   */
+  function keyAtCutSeam(kind, forward, extend) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.modify) { return false; }
+    if (kind === 'arrow' && !extend && !sel.isCollapsed) { return false; }
+    if (kind === 'delete' && !sel.isCollapsed) { return false; }
+    const seam = cutSeamAt(sel.focusNode, sel.focusOffset, forward);
+    if (!seam) { return false; }
+    if (kind === 'delete' && !seam.inText) {
+      // 項目と項目の間：切れていないリストと同じに、ブラウザに二つの項目を一つに
+      // させる。そのために先に切れを一つに戻す（カーソルは同じ字の前に戻る）。
+      return joinCutsAround([seam.a]);
+    }
+    const to = forward ? seamEdge(seam.y, true) : seamEdge(seam.x, false);
+    if (kind === 'arrow' && extend) { sel.extend(to.node, to.at); } else { sel.collapse(to.node, to.at); }
+    if (kind === 'delete') {
+      // 向こうの切れ端の最初（最後）の1字を選ぶ。ブラウザがその選んだ字を消す。
+      sel.modify('extend', forward ? 'forward' : 'backward', 'character');
+      return true;
+    }
+    // 継ぎ目の前後は同じ位置：字の途中の継ぎ目なら、向こう側でさらに1字進める
+    // （ふつうの段落の中で1字動くのと同じ）。塊の間なら、隣の塊の端で止まる。
+    if (seam.inText) { sel.modify(extend ? 'extend' : 'move', forward ? 'forward' : 'backward', 'character'); }
+    return true;
+  }
+  /**
+   * 選んだ範囲がページの境目で切った段落にかかったまま、字を打つ・消す・貼る前に、
+   * 切れを一つに戻しておく。ブラウザは範囲を消すと、終わりの塊を始めの塊へ継ぐ。
+   * 継いだ塊に切った印が残ると、次の組み直しがその後ろの別の段落まで継いでしまい
+   * （継ぎ目をまたいで Shift+矢印で選んで打ったら、段落が一つ減った・#257）、
+   * 始めの塊が切れていない段落なら、今度は切れの後ろ半分が別の段落として残った。
+   */
+  function joinCutsUnderSelection() {
+    const r = getRange();
+    if (!r || r.collapsed) { return false; }
+    const a = topBlockOf(r.startContainer);
+    const b = topBlockOf(r.endContainer);
+    if (!a || !b || a === b) { return false; }
+    return joinCutsAround([a, b]);
+  }
+  /**
+   * キーを押さずに入る字（画面のキーボード・音声入力など。keydown が来ない）が、
+   * 継ぎ目にかかった範囲を置き換えたときの後始末。ブラウザは終わりの塊（b）を
+   * 始めの塊（a）へ継ぐ。継いだ a の切った印は、b が持っていた印に合わせる ――
+   * b が切れの途中なら a も続き、b が段落の終わりなら a もそこで終わる。
+   * beforeinput で覚え（noteCutMerge）、input で直す（settleCutMerge）。
+   */
+  let cutMerge = null;
+  function noteCutMerge() {
+    cutMerge = null;
+    const r = getRange();
+    if (!r || r.collapsed) { return; }
+    const a = topBlockOf(r.startContainer);
+    const b = topBlockOf(r.endContainer);
+    if (!a || !b || a === b) { return; }
+    if (cutPieces(a).length < 2 && cutPieces(b).length < 2) { return; }
+    cutMerge = { a: a, b: b, on: !!(b.hasAttribute && b.hasAttribute(FLOWCUT)) };
+  }
+  function settleCutMerge() {
+    const m = cutMerge;
+    cutMerge = null;
+    if (!m || !m.a.isConnected || m.b.isConnected || !m.a.hasAttribute) { return false; }
+    if (m.on) { m.a.setAttribute(FLOWCUT, 'on'); return true; }
+    if (!m.a.hasAttribute(FLOWCUT)) { return false; }
+    m.a.removeAttribute(FLOWCUT);
+    m.a.removeAttribute('data-split');
+    m.a.style.removeProperty('margin-block-end');
+    if (SLICED.test(m.a.nodeName)) {
+      m.a.style.removeProperty('padding-block-end');
+      m.a.style.removeProperty('border-block-end');
+    }
+    if (!m.a.getAttribute('style')) { m.a.removeAttribute('style'); }
+    return true;
+  }
+  let pickedBreak = null;
+  function pickBreak(pb) {
+    const c = canvas();
+    if (c) { c.querySelectorAll('.eb-pagebreak.eb-picked').forEach((x) => x.classList.remove('eb-picked')); }
+    pickedBreak = pb || null;
+    if (pb) { pb.classList.add('eb-picked'); }
+  }
+  function breakBeside(back) {
+    const c = canvas();
+    const r = getRange();
+    if (!c || !r || !r.collapsed || !c.contains(r.startContainer)) { return null; }
+    let block = r.startContainer.nodeType === 3 ? r.startContainer.parentNode : r.startContainer;
+    while (block && block.parentNode !== c) { block = block.parentNode; }
+    if (!block || block === c) { return null; }
+    const edge = document.createRange();
+    if (back) { edge.setStart(block, 0); edge.setEnd(r.startContainer, r.startOffset); } else { edge.setStart(r.startContainer, r.startOffset); edge.setEnd(block, block.childNodes.length); }
+    if (edge.toString().replace(/[\u200b\s]/g, '') !== '' || edge.cloneContents().querySelector('img, svg, math, .eb-anchor, br + *')) { return null; }
+    let n = back ? block.previousElementSibling : block.nextElementSibling;
+    while (n && n.classList && (n.classList.contains('eb-pagespacer') || n.classList.contains('eb-anchor'))) {
+      n = back ? n.previousElementSibling : n.nextElementSibling;
+    }
+    return n && n.classList && n.classList.contains('eb-pagebreak') ? n : null;
   }
   function isFurniture(el) {
     return !!(el && el.classList && (el.classList.contains('eb-pagespacer')));
@@ -2217,16 +4082,18 @@ ${insideObjects('.eb-paper.boxed')} {
 
   function replaceBlock(block, tag, cls, keepIdentity) {
     const el = document.createElement(tag);
-    if (cls) { el.className = cls; }
-    // A frame the writer put on the page is still that frame when its style
-    // changes: a 文字枠 set to Heading 1 stays a 文字枠, where it was and the size
-    // it was. Without this the box, its place and its width were all thrown away
-    // and the heading dropped into the flow of the text.
-    if (keepIdentity) {
-      if (block.className) { el.className = block.className; }
-      const style = block.getAttribute('style');
-      if (style) { el.setAttribute('style', style); }
+    // The paragraph keeps what was set on it by hand when its style changes -- its
+    // indents, spacing, line height, rule, shading, colour, the page break before
+    // it -- and its id, which a table of contents or a link points at. LibreOffice
+    // changes the style and leaves the direct formatting; here all of it went, and
+    // the contents lost where they jumped to (BUGS #235). A frame the writer put on
+    // the page is still that frame the same way: a 文字枠 set to Heading 1 stays a
+    // 文字枠, where it was and the size it was (keepIdentity, kept for the callers).
+    void keepIdentity;
+    if (block.attributes) {
+      Array.from(block.attributes).forEach((a) => { try { el.setAttribute(a.name, a.value); } catch (e) { /* a name a new element cannot take */ } });
     }
+    if (cls) { el.classList.add(...cls.split(/\s+/).filter(Boolean)); }
     while (block.firstChild) { el.appendChild(block.firstChild); }
     // carry alignment / indentation across a heading change
     ['eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3'].forEach((c) => {
@@ -2238,21 +4105,72 @@ ${insideObjects('.eb-paper.boxed')} {
 
   /** Turn the selected blocks into paragraphs, headings, quotes or code. */
   function setBlockType(tag) {
+    // In a table cell, the paragraph in the cell takes the style; the table stays.
+    // Nothing happened at all -- the "block" was the whole table (review Q4, BUGS
+    // #205). LibreOffice makes the paragraph in the cell a heading (PS 4-f).
+    const rc = getRange();
+    const cell = rc ? cellAt(rc.startContainer) : null;
+    if (cell && cell.contains(rc.endContainer)) {
+      let inner = rc.startContainer.nodeType === 1 ? rc.startContainer : rc.startContainer.parentNode;
+      while (inner && inner !== cell && !(inner.parentNode === cell && isBlock(inner))) { inner = inner.parentNode; }
+      if (inner && inner !== cell && /^(P|H[1-6])$/.test(inner.nodeName)) {
+        if (inner.nodeName !== tag) { placeCaretIn(replaceBlock(inner, tag)); }
+        return;
+      }
+      const blocksIn = Array.from(cell.children).filter((k) => isBlock(k));
+      if (!blocksIn.length && tag !== 'P') {
+        const el = document.createElement(tag);
+        while (cell.firstChild) { el.appendChild(cell.firstChild); }
+        cell.appendChild(el);
+        placeCaretIn(el);
+      }
+      return;
+    }
     const blocks = selectedBlocks();
     if (!blocks.length) { return; }
     const made = [];
-    blocks.forEach((b) => {
+    const one = (b) => {
+      // 段組みは入れ物。その中で選んだ段落だけがスタイルを変える。段組みごと見出しに
+      // 置き換えていたので、段組みが消えて1段に戻った（BUGS #236）。
+      if (b.matches && b.matches('div.eb-cols')) {
+        const r = getRange();
+        Array.from(b.children).filter((x) => isBlock(x) && r && r.intersectsNode(x)).forEach(one);
+        return;
+      }
       if (b.nodeName === 'UL' || b.nodeName === 'OL') {
-        // a list becomes one block per item
+        // The items the selection is in become blocks of their own; the others
+        // stay the list they were. The whole list was changed, when the caret
+        // was in one item (BUGS E10) -- LibreOffice changes that paragraph only.
         const items = Array.from(b.children);
+        const r = getRange();
+        const itemOf = (node) => {
+          let n = node && (node.nodeType === 1 ? node : node.parentNode);
+          while (n && n.parentNode !== b) { if (n === canvas()) { return null; } n = n.parentNode; }
+          return n && n.nodeName === 'LI' ? n : null;
+        };
+        let i0 = items.indexOf(itemOf(r ? r.startContainer : null));
+        let i1 = items.indexOf(itemOf(r ? r.endContainer : null));
+        if (i0 < 0) { i0 = 0; }
+        if (i1 < 0) { i1 = items.length - 1; }
+        if (i0 > i1) { const t = i0; i0 = i1; i1 = t; }
+        const after = items.slice(i1 + 1);
         const frag = document.createDocumentFragment();
-        items.forEach((li) => {
+        items.slice(i0, i1 + 1).forEach((li) => {
           const el = document.createElement(tag);
           while (li.firstChild) { el.appendChild(li.firstChild); }
+          li.remove();
           frag.appendChild(el);
           made.push(el);
         });
-        b.parentNode.replaceChild(frag, b);
+        if (after.length) {
+          const rest = document.createElement(b.nodeName);
+          ['class', 'style', 'type'].forEach((a) => { if (b.hasAttribute(a)) { rest.setAttribute(a, b.getAttribute(a)); } });
+          if (b.nodeName === 'OL') { rest.setAttribute('start', String((parseInt(b.getAttribute('start') || '1', 10) || 1) + i1 + 1)); }
+          after.forEach((li) => rest.appendChild(li));
+          frag.appendChild(rest);
+        }
+        b.parentNode.insertBefore(frag, b.nextSibling);
+        if (!b.children.length) { b.remove(); }
         return;
       }
       if (b.nodeName === 'TABLE' || b.nodeName === 'HR'
@@ -2266,12 +4184,128 @@ ${insideObjects('.eb-paper.boxed')} {
         return;
       }
       made.push(replaceBlock(b, tag, null, !!(b.matches && b.matches(OBJECT_SEL))));
-    });
+    };
+    blocks.forEach(one);
     if (made.length) { placeCaretIn(made[0]); }
   }
 
+  /**
+   * A list made or taken away inside one table cell. With the caret in a cell the
+   * chosen "block" was the whole table: its rows were moved into a list item and
+   * the table was gone -- saved and opened again, its words ran together on one
+   * line (BUGS E4). LibreOffice makes the paragraphs inside the cell a list.
+   */
+  function toggleListInCell(cell, tag) {
+    const at = caretOffset();
+    const kids = Array.from(cell.childNodes).filter((n) => n.nodeType !== 3 || n.data.trim());
+    const lists = kids.filter((n) => n.nodeName === 'UL' || n.nodeName === 'OL');
+    if (lists.length && lists.length === kids.length && lists.every((l) => l.nodeName === tag)) {
+      lists.forEach((list) => {
+        const frag = document.createDocumentFragment();
+        Array.from(list.children).forEach((li) => {
+          const p = document.createElement('p');
+          while (li.firstChild) { p.appendChild(li.firstChild); }
+          frag.appendChild(p);
+        });
+        list.parentNode.replaceChild(frag, list);
+      });
+    } else {
+      const list = document.createElement(tag);
+      let li = null;
+      Array.from(cell.childNodes).forEach((n) => {
+        if (n.nodeType === 1 && (n.nodeName === 'UL' || n.nodeName === 'OL')) {
+          Array.from(n.children).forEach((x) => list.appendChild(x));
+          n.remove();
+          li = null;
+          return;
+        }
+        if (n.nodeType === 1 && /^(P|DIV|H[1-6]|BLOCKQUOTE|PRE)$/.test(n.nodeName)) {
+          const item = document.createElement('li');
+          while (n.firstChild) { item.appendChild(n.firstChild); }
+          list.appendChild(item);
+          n.remove();
+          li = null;
+          return;
+        }
+        if (n.nodeType === 1 && n.nodeName === 'BR' && li) { n.remove(); li = null; return; }
+        if (n.nodeType === 3 && !n.data.trim() && !li) { n.remove(); return; }
+        if (!li) { li = document.createElement('li'); list.appendChild(li); }
+        li.appendChild(n);
+      });
+      if (!list.firstChild) { list.appendChild(document.createElement('li')).appendChild(document.createElement('br')); }
+      cell.appendChild(list);
+    }
+    if (at != null) { setCaretOffset(at); }
+  }
+  /**
+   * The list button with part of a list chosen acts on that part: the items the
+   * caret or the choice is in, at their own level. The rest stays the list it
+   * was, and one after the part goes on counting. It turned the whole list into
+   * paragraphs, or changed the outer list for an item nested in it (review Q2);
+   * LibreOffice changes the chosen paragraphs only.
+   */
+  function toggleListItems(tag) {
+    const rr = getRange();
+    if (!rr) { return false; }
+    const liOf = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentNode); return e && e.closest ? e.closest('li') : null; };
+    const la = liOf(rr.startContainer);
+    const lb = liOf(rr.endContainer);
+    if (!la || !lb || la.parentNode !== lb.parentNode || !canvas().contains(la)) { return false; }
+    const list = la.parentNode;
+    if (list.nodeName !== 'UL' && list.nodeName !== 'OL') { return false; }
+    const items = Array.from(list.children);
+    let i0 = items.indexOf(la);
+    let i1 = items.indexOf(lb);
+    if (i0 > i1) { const t = i0; i0 = i1; i1 = t; }
+    if (i0 <= 0 && i1 >= items.length - 1 && list.parentNode === canvas()) { return false; }
+    const at = caretOffset();
+    const start0 = parseInt(list.getAttribute('start') || '1', 10) || 1;
+    const make = (name, from) => {
+      const l = document.createElement(name);
+      if (name === list.nodeName) { ['class', 'style', 'type'].forEach((a) => { if (list.hasAttribute(a)) { l.setAttribute(a, list.getAttribute(a)); } }); }
+      if (name === 'OL' && from > 1) { l.setAttribute('start', String(from)); }
+      return l;
+    };
+    const mid = items.slice(i0, i1 + 1);
+    const after = items.slice(i1 + 1);
+    const frag = document.createDocumentFragment();
+    if (list.nodeName === tag) {
+      mid.forEach((li) => {
+        let run = null;
+        const empty = !li.childNodes.length;
+        Array.from(li.childNodes).forEach((n) => {
+          if (n.nodeType === 1 && isBlock(n)) { run = null; frag.appendChild(n); return; }
+          if (!run) { run = document.createElement('p'); frag.appendChild(run); }
+          run.appendChild(n);
+        });
+        if (empty) { frag.appendChild(document.createElement('p')).appendChild(document.createElement('br')); }
+        li.remove();
+      });
+    } else {
+      const l = make(tag, 1);
+      mid.forEach((li) => l.appendChild(li));
+      frag.appendChild(l);
+    }
+    if (after.length) {
+      const l = make(list.nodeName, start0 + i1 + 1);
+      after.forEach((li) => l.appendChild(li));
+      frag.appendChild(l);
+    }
+    list.parentNode.insertBefore(frag, list.nextSibling);
+    if (!list.children.length) { list.remove(); }
+    if (at != null) { setCaretOffset(at); }
+    return true;
+  }
   function toggleList(tag) {
+    const r0c = getRange();
+    const cell = r0c ? cellAt(r0c.startContainer) : null;
+    if (cell && cell.contains(r0c.endContainer)) { toggleListInCell(cell, tag); return; }
+    if (toggleListItems(tag)) { return; }
     let blocks = selectedBlocks();
+    if (!blocks.length) { return; }
+    // Never a whole table: a selection running out of a cell makes lists of the
+    // writing around the table, and leaves the table as it is (BUGS E4).
+    blocks = blocks.filter((b) => b.nodeName !== 'TABLE');
     if (!blocks.length) { return; }
     // A 文字枠 is a paragraph, and a paragraph cannot hold a list. The frame keeps
     // its place and its size and becomes one that can.
@@ -2280,6 +4314,11 @@ ${insideObjects('.eb-paper.boxed')} {
       const held = frameForBlocks(b);
       return held ? held.firstElementChild : b;
     });
+    // カーソルの位置（文書の頭からの字数）を覚えておき、組み替えたあとに戻す。
+    // 中身を移すとカーソルが消え、項目の頭へ置き直していたので、行を箇条書きに
+    // してすぐ Enter を押すと空の項目が上にでき、次の字が元の字の前に入った。
+    const r0 = getRange();
+    const at = (r0 && r0.collapsed && canvas() && canvas().contains(r0.startContainer)) ? caretOffset() : null;
     const allSame = blocks.every((b) => b.nodeName === tag);
     if (allSame) {
       blocks.forEach((list) => {
@@ -2291,6 +4330,7 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         list.parentNode.replaceChild(frag, list);
       });
+      if (at != null) { setCaretOffset(at); }
       return;
     }
     const list = document.createElement(tag);
@@ -2306,7 +4346,22 @@ ${insideObjects('.eb-paper.boxed')} {
       list.appendChild(li);
       b.remove();
     });
-    placeCaretIn(list.firstChild || list);
+    // Next to a list of the same kind, the new items join it and the numbers go
+    // on: a paragraph just after 1. 2. became a list of its own and was numbered
+    // 1 again (review Q3). LibreOffice carries the numbering on.
+    const before = list.previousElementSibling;
+    let whole = list;
+    if (before && before.nodeName === tag && before.parentNode === list.parentNode) {
+      while (list.firstChild) { before.appendChild(list.firstChild); }
+      list.remove();
+      whole = before;
+    }
+    const after = whole.nextElementSibling;
+    if (after && after.nodeName === tag && !after.hasAttribute('start')) {
+      while (after.firstChild) { whole.appendChild(after.firstChild); }
+      after.remove();
+    }
+    if (at != null) { setCaretOffset(at); } else { placeCaretIn(whole.firstChild || whole); }
   }
 
   /** Alignment and indentation live as classes, one per group. */
@@ -2392,7 +4447,72 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!list.children.length) { list.remove(); }
     return true;
   }
+  /**
+   * 空の項目で Enter：一段下げてある項目なら一段上げ、いちばん上の段なら箇条書きから
+   * 抜けて普通の段落にする（ワープロと同じ）。ブラウザに任せていたので、空の項目が
+   * 増え続けるか、箇条書きの直下に箇条書きができて形が崩れた（2026-09-22 点検で発見）。
+   */
+  function leaveEmptyItem() {
+    const r = getRange();
+    if (!r || !r.collapsed) { return false; }
+    let li = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
+    while (li && li !== canvas() && li.nodeName !== 'LI') { li = li.parentNode; }
+    if (!li || li.nodeName !== 'LI') { return false; }
+    const own = Array.from(li.childNodes).filter((n) => !(n.nodeType === 1 && (n.nodeName === 'UL' || n.nodeName === 'OL')));
+    const text = own.map((n) => n.textContent || '').join('').replace(/[\u200b\s]/g, '');
+    if (text || own.some((n) => n.nodeType === 1 && n.querySelector && n.querySelector('img, math, svg'))) { return false; }
+    const list = li.parentNode;
+    const place = (node) => { const at = document.createRange(); at.setStart(node, 0); at.collapse(true); selectRange(at); };
+    if (list.parentNode && list.parentNode.nodeName === 'LI') {
+      liftItem(li);
+      place(li);
+      return true;
+    }
+    // いちばん上の段：項目を段落にして、箇条書きをその場所で二つに分ける。
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    const tail = [];
+    let n = li.nextElementSibling;
+    while (n) { tail.push(n); n = n.nextElementSibling; }
+    list.parentNode.insertBefore(p, list.nextSibling);
+    if (tail.length) {
+      const rest = document.createElement(list.nodeName);
+      // The same kind of list, and a numbered one goes on counting where it left
+      // off: its items were numbered from 1 again (BUGS E11). LibreOffice and
+      // Word carry on at 3.
+      ['class', 'style', 'type'].forEach((a) => { if (list.hasAttribute(a)) { rest.setAttribute(a, list.getAttribute(a)); } });
+      if (list.nodeName === 'OL') {
+        const before = Array.from(list.children).indexOf(li);
+        const from = parseInt(list.getAttribute('start') || '1', 10) || 1;
+        rest.setAttribute('start', String(from + before));
+      }
+      tail.forEach((x) => rest.appendChild(x));
+      p.parentNode.insertBefore(rest, p.nextSibling);
+    }
+    li.remove();
+    if (!list.children.length) { list.remove(); }
+    place(p);
+    return true;
+  }
   function stepIndent(dir) {
+    // 項目を移すとカーソルが消える（取り外した要素の中の位置は失われる）。移す前の
+    // 位置を覚え、同じ場所へ戻す。戻さなかったので、Shift+Tab で上げた空の項目の
+    // 代わりに下の段の項目へ字が入った（2026-09-22 点検で発見）。
+    const r0 = getRange();
+    const keep = r0 ? { node: r0.startContainer, offset: r0.startOffset } : null;
+    const restore = () => {
+      if (!keep || !keep.node || !canvas() || !canvas().contains(keep.node)) { return; }
+      try {
+        const r = document.createRange();
+        r.setStart(keep.node, Math.min(keep.offset, keep.node.nodeType === 3 ? keep.node.data.length : keep.node.childNodes.length));
+        r.collapse(true);
+        selectRange(r);
+      } catch (e) { /* the place is gone */ }
+    };
+    stepIndentBlocks(dir);
+    restore();
+  }
+  function stepIndentBlocks(dir) {
     const order = ['', 'eb-in1', 'eb-in2', 'eb-in3'];
     // Out first and from the bottom up, in first and from the top down: an item
     // moved changes what the next one's neighbours are.
@@ -2438,10 +4558,97 @@ ${insideObjects('.eb-paper.boxed')} {
     selectRange(r);
   }
 
+  /**
+   * 段落の命令（見出し・箇条書き・揃え・字下げ・段落の設定・段落の移動）は、ページの
+   * 折り目で切った塊の片方ではなく、塊ぜんぶに効かせる。命令の前に一つに戻して
+   * おけば、あとでページ割りがまた同じ所で切る。表の命令は #29 で同じ手当てをして
+   * ある（tableCmd）。
+   *
+   * 戻さずにいたので、1ページ目側を見出しにすると前半だけが見出しになって以後ずっと
+   * 「見出し＋本文」の2段落に割れ、2ページ目側を中央揃えにすると次の組み直しで前半の
+   * 書式に戻されて指定が消え、段落を上下に動かすと自分の前半と後半が入れ替わって
+   * 次の段落がくっついた（D9）。
+   *
+   * 渡された塊のどれかが切れていれば、紙の上の切れをすべて一つに戻し、カーソルと
+   * 選んだ範囲は字の位置で戻す。
+   */
+  function joinCutsAround(blocks) {
+    const c = canvas();
+    if (!c) { return false; }
+    const cut = blocks.some((b) => b && b.parentNode === c && cutPieces(b).length > 1);
+    if (!cut) { return false; }
+    const r = getRange();
+    const at = (r && c.contains(r.startContainer)) ? caretOffset() : null;
+    if (!joinFlowCuts(c)) { return false; }
+    if (at != null) { setCaretOffset(at); }
+    return true;
+  }
+
+  /**
+   * Enter の直後：ページの折り目で切った段落の中で押された改段落を、組み直しで
+   * 消されないようにする（D8）。
+   *
+   * ブラウザは Enter で段落を二つに分け、新しい段落に元の段落の属性をそのまま写す
+   * ―― 切った印（data-eb-flowcut）も、切れ端に付けた余白の指定も。1ページ目側で
+   * 押すと、前の半分にも後ろの半分にも印が付き、次の組み直し（joinFlowCuts）が
+   * 二つを一つに戻して、改段落が消えた。2ページ目側で押すと、新しい段落が切れ端の
+   * 「上の余白なし」を持ったまま独立した段落になっていた。
+   *
+   * 分かれた二つのうち、前の半分（w）は一つ目の段落の終わり：印を外す。後ろの半分
+   * （x、カーソルのある方）は二つ目の段落の始まり：上の余白と字下げを、元の段落の
+   * 頭の切れ端と同じに戻す（切れ端で外していたもの）。後ろへ続く印はそのまま ――
+   * 二つ目の段落が次のページへ続く。2ページ目の切れ端の頭で押したときにブラウザが
+   * 前に作る空の段落は、一つ目の段落の終わりに付くだけの空行なので取り除く。
+   * LibreOffice でも、ページをまたぐ段落のどこで Enter を押しても、そこで段落が
+   * 二つに分かれるだけ。
+   */
+  function enterInCut(c) {
+    const r = getRange();
+    if (!c || !r || !r.collapsed || !c.contains(r.startContainer)) { return false; }
+    let x = r.startContainer;
+    while (x && x.parentNode !== c) { x = x.parentNode; }
+    const w = x && x.previousElementSibling;
+    if (!w || w.nodeType !== 1 || w.nodeName !== x.nodeName || !w.hasAttribute) { return false; }
+    const head = cutHead(w);
+    if (!w.hasAttribute(FLOWCUT) && head === w) { return false; }
+    const endOfFirst = (el) => {
+      el.removeAttribute(FLOWCUT);
+      el.removeAttribute('data-split');
+      el.style.removeProperty('margin-block-end');
+      if (!el.getAttribute('style')) { el.removeAttribute('style'); }
+    };
+    if (head !== w && !String(w.textContent || '').length && !w.querySelector('img, figure, table, svg, iframe, video, audio, math')) {
+      // The empty line made in front of a piece on the next page: it would only
+      // join on to the end of the first paragraph as a stray line break.
+      let back = w.previousElementSibling;
+      while (isCutGap(back)) { back = back.previousElementSibling; }
+      w.remove();
+      if (back) { endOfFirst(back); }
+    } else {
+      endOfFirst(w);
+    }
+    ['margin-block-start', 'text-indent'].forEach((k) => {
+      const v = head && head !== x ? head.style.getPropertyValue(k) : x.style.getPropertyValue(k);
+      if (v) { x.style.setProperty(k, v); } else { x.style.removeProperty(k); }
+    });
+    if (!x.getAttribute('style')) { x.removeAttribute('style'); }
+    return true;
+  }
+
   /** Move the paragraph the caret is in past the one above or below it. */
   function moveBlock(dir) {
-    const blocks = selectedBlocks().filter((b) => b && b.parentNode);
+    let blocks = selectedBlocks().filter((b) => b && b.parentNode);
     if (!blocks.length) { return false; }
+    // The block moved and the block it is moved past are each moved whole (D9).
+    const near = (n, back) => {
+      let k = n ? (back ? n.previousElementSibling : n.nextElementSibling) : null;
+      while (k && k.classList && k.classList.contains('eb-pagespacer')) { k = back ? k.previousElementSibling : k.nextElementSibling; }
+      return k;
+    };
+    if (joinCutsAround(blocks.concat([near(blocks[0], true), near(blocks[blocks.length - 1], false)]))) {
+      blocks = selectedBlocks().filter((b) => b && b.parentNode);
+      if (!blocks.length) { return false; }
+    }
     const first = blocks[0];
     const last = blocks[blocks.length - 1];
     const parent = first.parentNode;
@@ -2500,7 +4707,9 @@ ${insideObjects('.eb-paper.boxed')} {
   const TEXT_CASES = {
     upper: (t) => t.toUpperCase(),
     lower: (t) => t.toLowerCase(),
-    title: (t) => t.replace(/\b[a-z]/g, (ch) => ch.toUpperCase()),
+    // The first letter of each word, in any alphabet; a letter after an apostrophe
+    // is not the start of a word. \b knew only a-z: Don'T, O'Neil'S, éClair (BUGS E33).
+    title: (t) => t.replace(/(^|[^\p{L}\p{N}'’])(\p{Ll})/gu, (whole, before, ch) => before + ch.toUpperCase()),
     wide: toWide,
     narrow: toNarrow,
   };
@@ -2509,7 +4718,14 @@ ${insideObjects('.eb-paper.boxed')} {
     const fn = TEXT_CASES[kind];
     const range = getRange();
     if (!fn || !range || range.collapsed) { return false; }
-    const nodes = textNodesInRange(range);
+    // Not the reading over a word nor its brackets, and not a letter of a formula:
+    // they are not the writing (LibreOffice leaves the ruby as it is). 「半角へ」
+    // turned the readings into half-width kana, 「全角へ」 the brackets into
+    // full-width ones (review Q5).
+    const nodes = textNodesInRange(range).filter((n) => {
+      const up = n.parentNode;
+      return !(up && up.closest && up.closest('rt, rp')) && !(up && up.namespaceURI === 'http://www.w3.org/1998/Math/MathML');
+    });
     if (!nodes.length) { return false; }
     nodes.forEach((n) => { n.data = fn(n.data); });
     reselectNodes(nodes);
@@ -2528,19 +4744,48 @@ ${insideObjects('.eb-paper.boxed')} {
     if (value === '' || value == null) { el.style.removeProperty(prop); } else { el.style.setProperty(prop, value); }
   }
 
+  /**
+   * A length as the dialogue shows it, in the unit of its box. A length written in
+   * another unit used to read as nothing -- or, with no unit asked for, as its bare
+   * number -- and pressing OK then wrote that back: 150% became 150 times the line,
+   * a LibreOffice indent in cm was wiped (BUGS E6). What cannot be said in the box
+   * (em, %, auto) reads as '' and, not being changed, is not written back.
+   */
+  function lengthIn(value, unit) {
+    const m = String(value || '').trim().match(/^(-?[\d.]+)\s*(mm|cm|in|pt|pc|px|q)?$/i);
+    if (!m) { return ''; }
+    const n = parseFloat(m[1]);
+    if (!Number.isFinite(n)) { return ''; }
+    const mm = { mm: 1, cm: 10, in: 25.4, pt: 25.4 / 72, pc: 25.4 / 6, px: 25.4 / 96, q: 0.25 }[(m[2] || 'px').toLowerCase()];
+    const v = unit === 'pt' ? n * mm * 72 / 25.4 : n * mm;
+    return Math.round(v * 100) / 100;
+  }
+  /** A line spacing as a multiple of the line: 1.5 and 150% are the same thing. */
+  function lineMultiple(value) {
+    const m = String(value || '').trim().match(/^(-?[\d.]+)\s*(%?)$/);
+    if (!m) { return ''; }
+    const n = parseFloat(m[1]);
+    if (!Number.isFinite(n)) { return ''; }
+    return m[2] ? Math.round(n) / 100 : n;
+  }
+  /** The paragraph dialogue's boxes as they were when it opened (see applyPara). */
+  let paraOpened = null;
   /** What the dialog shows: only what the paragraph itself sets, not what it inherits. */
   function paragraphProps() {
-    const block = selectedBlocks(true)[0];
+    // Read off the head of a paragraph cut at a page foot: what the paragraph says
+    // is written there (the piece on the next page has the first line's indent
+    // taken off, because it does not begin the paragraph).
+    const block = cutHead(selectedBlocks(true)[0]);
     if (!block) { return null; }
     const s = block.style;
     return {
       align: s.getPropertyValue('text-align') || '',
-      lineHeight: numberIn(s.getPropertyValue('line-height'), ''),
-      before: numberIn(s.getPropertyValue('margin-top'), 'pt'),
-      after: numberIn(s.getPropertyValue('margin-bottom'), 'pt'),
-      left: numberIn(s.getPropertyValue('margin-left'), 'mm'),
-      right: numberIn(s.getPropertyValue('margin-right'), 'mm'),
-      firstLine: numberIn(s.getPropertyValue('text-indent'), 'mm'),
+      lineHeight: lineMultiple(s.getPropertyValue('line-height')),
+      before: lengthIn(s.getPropertyValue('margin-top'), 'pt'),
+      after: lengthIn(s.getPropertyValue('margin-bottom'), 'pt'),
+      left: lengthIn(s.getPropertyValue('margin-left'), 'mm'),
+      right: lengthIn(s.getPropertyValue('margin-right'), 'mm'),
+      firstLine: lengthIn(s.getPropertyValue('text-indent'), 'mm'),
       noLoneLines: Number(s.getPropertyValue('orphans')) >= 2 && Number(s.getPropertyValue('widows')) >= 2,
       pageBefore: s.getPropertyValue('break-before') === 'page',
       keepWithNext: s.getPropertyValue('break-after') === 'avoid',
@@ -2550,7 +4795,7 @@ ${insideObjects('.eb-paper.boxed')} {
       borderWidth: unitOf(s.getPropertyValue('border-top-width'), 'pt'),
       borderColour: rgbToHex(s.getPropertyValue('border-top-color')) || '#666666',
       fill: rgbToHex(s.getPropertyValue('background-color')) || '',
-      pad: numberIn(s.getPropertyValue('padding-top'), 'mm'),
+      pad: lengthIn(s.getPropertyValue('padding-top'), 'mm'),
     };
   }
   /** Which edges a paragraph's rule is drawn on, as the dialogue words it. */
@@ -2571,25 +4816,43 @@ ${insideObjects('.eb-paper.boxed')} {
    * Every property is written as an inline style, because that is what the saved
    * file carries: no class the reader would have to be given a stylesheet for.
    */
-  function setParagraphProps(v) {
+  /**
+   * @param {object} v  what the dialogue says
+   * @param {Set<string>} [changed]  the boxes the writer changed. Only those are
+   *   written: a box left alone leaves every paragraph as it was. With several
+   *   paragraphs chosen, the first one's values were written over all the others
+   *   -- their indents and tints were wiped by an OK that changed only the line
+   *   spacing (BUGS E6). LibreOffice changes only what was changed. Without the
+   *   set, everything is written, as before.
+   */
+  function setParagraphProps(v, changed) {
     const blocks = selectedBlocks(true);
     if (!blocks.length) { return false; }
     const num = (x) => (x === '' || x == null || Number.isNaN(Number(x)) ? '' : Number(x));
+    const did = (...keys) => !changed || keys.some((k) => changed.has(k));
     blocks.forEach((block) => {
-      styleOrClear(block, 'text-align', v.align || '');
-      styleOrClear(block, 'line-height', num(v.lineHeight) === '' ? '' : String(num(v.lineHeight)));
-      styleOrClear(block, 'margin-top', num(v.before) === '' ? '' : num(v.before) + 'pt');
-      styleOrClear(block, 'margin-bottom', num(v.after) === '' ? '' : num(v.after) + 'pt');
-      styleOrClear(block, 'margin-left', num(v.left) === '' ? '' : num(v.left) + 'mm');
-      styleOrClear(block, 'margin-right', num(v.right) === '' ? '' : num(v.right) + 'mm');
-      styleOrClear(block, 'text-indent', num(v.firstLine) === '' ? '' : num(v.firstLine) + 'mm');
-      styleOrClear(block, 'break-before', v.pageBefore ? 'page' : '');
-      styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : '');
-      styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : '');
-      styleOrClear(block, 'orphans', v.noLoneLines ? '2' : '');
-      styleOrClear(block, 'widows', v.noLoneLines ? '2' : '');
+      if (did('align')) { styleOrClear(block, 'text-align', v.align || ''); }
+      if (did('lineHeight')) { styleOrClear(block, 'line-height', num(v.lineHeight) === '' ? '' : String(num(v.lineHeight))); }
+      if (did('before')) { styleOrClear(block, 'margin-top', num(v.before) === '' ? '' : num(v.before) + 'pt'); }
+      if (did('after')) { styleOrClear(block, 'margin-bottom', num(v.after) === '' ? '' : num(v.after) + 'pt'); }
+      if (did('left')) { styleOrClear(block, 'margin-left', num(v.left) === '' ? '' : num(v.left) + 'mm'); }
+      if (did('right')) { styleOrClear(block, 'margin-right', num(v.right) === '' ? '' : num(v.right) + 'mm'); }
+      if (did('firstLine')) { styleOrClear(block, 'text-indent', num(v.firstLine) === '' ? '' : num(v.firstLine) + 'mm'); }
+      if (did('pageBefore')) { styleOrClear(block, 'break-before', v.pageBefore ? 'page' : ''); }
+      if (did('keepWithNext')) { styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : ''); }
+      if (did('keepTogether')) { styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : ''); }
+      if (did('noLoneLines')) {
+        styleOrClear(block, 'orphans', v.noLoneLines ? '2' : '');
+        styleOrClear(block, 'widows', v.noLoneLines ? '2' : '');
+      }
+      if (!did('border', 'borderSides', 'borderWidth', 'borderColour', 'pad', 'fill')) {
+        if (block.getAttribute('class') === '') { block.removeAttribute('class'); }
+        if (!block.getAttribute('style')) { block.removeAttribute('style'); }
+        return;
+      }
       // A rule round a paragraph, and a tint behind it -- the two things a notice
       // or a warning in a business document is always asking for.
+      if (did('border', 'borderSides', 'borderWidth', 'borderColour')) {
       ['border', 'border-top', 'border-bottom', 'border-left', 'border-right'].forEach((prop) => styleOrClear(block, prop, ''));
       if (v.border && v.border !== 'none') {
         const rule = (num(v.borderWidth) || 0.75) + 'pt ' + v.border + ' '
@@ -2601,15 +4864,20 @@ ${insideObjects('.eb-paper.boxed')} {
           if (sides === 'left') { styleOrClear(block, 'border-left', rule); }
         }
       }
-      const pad = num(v.pad);
-      ['padding-top', 'padding-bottom', 'padding-left', 'padding-right']
-        .forEach((prop) => styleOrClear(block, prop, pad === '' ? '' : pad + 'mm'));
-      if (/^#[0-9a-f]{6}$/i.test(v.fill || '')) {
-        styleOrClear(block, 'background-color', v.fill);
-        block.classList.add('eb-ink');
-      } else {
-        styleOrClear(block, 'background-color', '');
-        block.classList.remove('eb-ink');
+      }
+      if (did('pad')) {
+        const pad = num(v.pad);
+        ['padding-top', 'padding-bottom', 'padding-left', 'padding-right']
+          .forEach((prop) => styleOrClear(block, prop, pad === '' ? '' : pad + 'mm'));
+      }
+      if (did('fill')) {
+        if (/^#[0-9a-f]{6}$/i.test(v.fill || '')) {
+          styleOrClear(block, 'background-color', v.fill);
+          block.classList.add('eb-ink');
+        } else {
+          styleOrClear(block, 'background-color', '');
+          block.classList.remove('eb-ink');
+        }
       }
       if (block.getAttribute('class') === '') { block.removeAttribute('class'); }
       if (!block.getAttribute('style')) { block.removeAttribute('style'); }
@@ -2641,7 +4909,14 @@ ${insideObjects('.eb-paper.boxed')} {
   function buildToc(title) {
     const c = canvas();
     if (!c) { return false; }
-    const heads = Array.from(c.querySelectorAll('h1, h2, h3, h4')).filter((h) => !h.closest('nav.eb-toc'));
+    // 記録で消した見出し（字がみな消した印の中）は目次に出さない。LibreOffice も
+    // 消した印の付いた見出しは目次に入れない（BUGS #224）。
+    const kept = (h) => {
+      const words = h.cloneNode(true);
+      words.querySelectorAll('del.eb-del, rt, rp, sup.eb-fnref').forEach((x) => x.remove());
+      return !!String(words.textContent || '').replace(/[\s\u200b]/g, '');
+    };
+    const heads = Array.from(c.querySelectorAll('h1, h2, h3, h4')).filter((h) => !h.closest('nav.eb-toc') && kept(h));
     if (!heads.length) { return false; }
     const used = new Set();
     const nav = document.createElement('nav');
@@ -2658,19 +4933,25 @@ ${insideObjects('.eb-paper.boxed')} {
       li.className = 'eb-toc-l' + head.nodeName.slice(1);
       const a = document.createElement('a');
       a.setAttribute('href', '#' + headingId(head, used));
-      a.textContent = (head.textContent || '').trim();
+      // The heading's words, not the readings over them nor a note's number:
+      // 漢字(かんじ)の話 was written into the contents (BUGS E34).
+      const words = head.cloneNode(true);
+      words.querySelectorAll('rt, rp, sup.eb-fnref, del.eb-del').forEach((x) => x.remove());
+      a.textContent = (words.textContent || '').replace(/\u200b/g, '').trim();
       li.appendChild(a);
       list.appendChild(li);
     });
     nav.appendChild(list);
-    const old = c.querySelector('nav.eb-toc');
+    let old = c.querySelector('nav.eb-toc');
+    // ページで切れた目次は一つに戻してから置き換える（後ろの切れ端を残さない）。
+    if (old && old.hasAttribute(FLOWCUT)) { old = joinCutBlock(old); }
     if (old) {
       old.replaceWith(nav);
     } else {
       insertBlockNode(nav);
-      const after = document.createElement('p');
-      after.appendChild(document.createElement('br'));
-      if (nav.parentNode) { nav.parentNode.insertBefore(after, nav.nextSibling); }
+      // 後ろに書く所が無い時だけ、空の段落を足す（段落の途中に入れた時は後ろ半分が
+      // 続くので要らない。いつも足していたので空の段落が増えた：BUGS #224）。
+      if (nav.parentNode) { landingAfter(nav); }
     }
     return true;
   }
@@ -2766,6 +5047,35 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const blocks = selectedBlocks();
     const anchor = blocks.length ? blocks[blocks.length - 1] : null;
+    // With the caret in the middle of a paragraph, the paragraph is split there and
+    // the thing goes between the two halves, as LibreOffice does (PS 4-g: a table
+    // put in the middle of 「前半の文。｜後半の文。」 stands between them). It went
+    // after the whole paragraph (review Q7, BUGS #208). At the start of the
+    // paragraph it goes before it; at the end, after it, as before.
+    // Tables only, which is what was measured; a picture or a shape stands beside
+    // the paragraph without splitting it, in LibreOffice too.
+    // 目次も同じ：カーソルの所に入る（段落の後ろに入っていた：BUGS #224）。
+    const splits = node && (node.nodeName === 'TABLE' || (node.nodeName === 'NAV' && node.classList.contains('eb-toc')));
+    if (splits && anchor && range && range.collapsed && blocks.length === 1
+      && /^(P|H[1-6])$/.test(anchor.nodeName) && anchor.contains(range.startContainer)) {
+      const head = document.createRange();
+      head.setStart(anchor, 0);
+      head.setEnd(range.startContainer, range.startOffset);
+      const tail = document.createRange();
+      tail.setStart(range.startContainer, range.startOffset);
+      tail.setEnd(anchor, anchor.childNodes.length);
+      const words = (r) => r.toString().replace(/[\s\u200b]/g, '') || r.cloneContents().querySelector('img, math');
+      if (!words(head)) { anchor.parentNode.insertBefore(node, anchor); return node; }
+      if (words(tail)) {
+        const rest = anchor.cloneNode(false);
+        rest.removeAttribute('id');
+        rest.removeAttribute('data-eb-id');
+        rest.appendChild(tail.extractContents());
+        anchor.parentNode.insertBefore(rest, anchor.nextSibling);
+        anchor.parentNode.insertBefore(node, rest);
+        return node;
+      }
+    }
     if (anchor) {
       anchor.parentNode.insertBefore(node, anchor.nextSibling);
     } else if (range) {
@@ -2801,10 +5111,14 @@ ${insideObjects('.eb-paper.boxed')} {
     table.appendChild(tbody);
     headerGroup(table);
     insertBlockNode(table);
-    // somewhere to type after the table, or it traps the caret at the end of the document
-    const tail = document.createElement('p');
-    tail.appendChild(document.createElement('br'));
-    table.parentNode.insertBefore(tail, table.nextSibling);
+    // somewhere to type after the table, or it traps the caret at the end of the
+    // document -- unless the paragraph it was put in the middle of goes on there.
+    const next = table.nextElementSibling;
+    if (!next || !/^(P|H[1-6])$/.test(next.nodeName)) {
+      const tail = document.createElement('p');
+      tail.appendChild(document.createElement('br'));
+      table.parentNode.insertBefore(tail, table.nextSibling);
+    }
     placeCaretIn(table.querySelector('th, td'));
     return table;
   }
@@ -2891,8 +5205,14 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
 
+  let ctxPicture = null;
+  let cropFigure = null;
   function imageAt(node) {
     let n = node;
+    // 右クリックした画像があれば、それが相手（メニューを押す間に選択が外れても）。
+    if (!n && ctxPicture && ctxPicture.parentNode) { return ctxPicture; }
+    // 枠ごと選んでいる画像があれば、それが相手。
+    if (!n && frameTaken && frameEl && frameEl.matches && frameEl.matches('figure.eb-img') && frameEl.parentNode) { return frameEl; }
     if (!n) {
       const r = getRange();
       n = r ? r.startContainer : null;
@@ -2989,32 +5309,79 @@ ${insideObjects('.eb-paper.boxed')} {
     return c;
   }
 
+  /**
+   * The rows and columns of a table are counted as the table lays them out: a cell
+   * merged across two columns stands in both. Counting the elements in a row
+   * instead, a merged cell threw every count after it out -- "delete column"
+   * took a cell from another column, a new row came out a cell short (BUGS E5).
+   * LibreOffice counts the grid.
+   */
+  function spanOf(cell, name) { return Math.max(1, parseInt(cell.getAttribute(name) || '1', 10)); }
+  /** Put a cell into row r of the table so that it stands in grid column c. */
+  function putCellAt(grid, rows, r, c, cell) {
+    const row = rows[r];
+    const after = Array.from(row.children).find((k) => { const box = cellBox(grid, k); return box && box.c0 >= c; });
+    row.insertBefore(cell, after || null);
+  }
   function addRow(dir) {
     const cell = cellAt();
     if (!cell) { return; }
-    const row = cell.parentNode;
+    const table = tableOf(cell);
+    const rows = tableRows(table);
+    const grid = tableGrid(table);
+    const box = cellBox(grid, cell);
+    if (!box) { return; }
+    const at = dir < 0 ? box.r0 : box.r1 + 1;      // the new row goes in before this grid row
+    const width = grid.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
     const tr = document.createElement('tr');
-    // A new row is always body cells, even when copied from the header.
-    Array.from(row.children).forEach(() => tr.appendChild(blankCell('TD')));
-    row.parentNode.insertBefore(tr, dir < 0 ? row : row.nextSibling);
-    placeCaretIn(tr.firstChild);
+    const grown = new Set();
+    for (let c = 0; c < width; c += 1) {
+      const above = at > 0 && grid[at - 1] ? grid[at - 1][c] : null;
+      const below = grid[at] ? grid[at][c] : null;
+      // A cell merged down across the place where the row goes in grows by it.
+      if (above && above === below) {
+        if (!grown.has(above)) { above.setAttribute('rowspan', String(spanOf(above, 'rowspan') + 1)); grown.add(above); }
+        continue;
+      }
+      // A new row is always body cells, even when copied from the header.
+      tr.appendChild(blankCell('TD'));
+    }
+    const ref = rows[at] || null;
+    const parent = ref ? ref.parentNode : rows[rows.length - 1].parentNode;
+    parent.insertBefore(tr, ref && ref.parentNode === parent ? ref : null);
+    placeCaretIn(tr.firstChild || cell);
   }
   function addColumn(dir) {
     const cell = cellAt();
     if (!cell) { return; }
     const table = tableOf(cell);
-    const idx = cellIndex(cell);
     if (!table) { return; }
-    tableRows(table).forEach((row) => {
-      const ref = row.children[idx];
-      const fresh = blankCell(ref ? ref.nodeName : 'TD');
-      row.insertBefore(fresh, dir < 0 ? ref : (ref ? ref.nextSibling : null));
+    const rows = tableRows(table);
+    const grid = tableGrid(table);
+    const box = cellBox(grid, cell);
+    if (!box) { return; }
+    const at = dir < 0 ? box.c0 : box.c1 + 1;      // the new column goes in before this grid column
+    const grown = new Set();
+    const made = [];
+    rows.forEach((row, r) => {
+      const left = at > 0 && grid[r] ? grid[r][at - 1] : null;
+      const right = grid[r] ? grid[r][at] : null;
+      // A cell merged across the place the column goes in grows by it.
+      if (left && left === right) {
+        if (!grown.has(left)) { left.setAttribute('colspan', String(spanOf(left, 'colspan') + 1)); grown.add(left); }
+        return;
+      }
+      const ref = right || left;
+      const fresh = blankCell(ref && ref.parentNode === row ? ref.nodeName : 'TD');
+      putCellAt(grid, rows, r, at, fresh);
+      made.push(fresh);
     });
     // A width belongs to a column, so a new column needs one of its own, taken
     // out of the one it was put beside. Without this the widths land on the
     // wrong columns and the table goes crooked.
-    splitColumnWidth(table, idx, dir < 0 ? idx : idx + 1);
-    placeCaretIn(cell.parentNode.children[dir < 0 ? idx : idx + 1]);
+    splitColumnWidth(table, dir < 0 ? box.c0 : box.c1, at);
+    const mine = made.find((k) => k.parentNode === cell.parentNode);
+    placeCaretIn(mine || cell);
   }
   /** Halve one column's width and give the other half to the new one beside it. */
   function splitColumnWidth(table, from, to) {
@@ -3052,6 +5419,21 @@ ${insideObjects('.eb-paper.boxed')} {
     const table = tableOf(cell);
     const rows = tableRows(table);
     if (rows.length <= 1) { return deleteTable(); }
+    const grid = tableGrid(table);
+    const r = rows.indexOf(row);
+    const seen = new Set();
+    (grid[r] || []).forEach((k, c) => {
+      if (!k || seen.has(k)) { return; }
+      seen.add(k);
+      const box = cellBox(grid, k);
+      const rs = spanOf(k, 'rowspan');
+      if (rs <= 1) { return; }
+      // A cell merged down through this row is one row shorter; one that begins
+      // here carries on in the row below, where it now begins.
+      k.setAttribute('rowspan', String(rs - 1));
+      if (k.getAttribute('rowspan') === '1') { k.removeAttribute('rowspan'); }
+      if (box.r0 === r && rows[r + 1]) { putCellAt(grid, rows, r + 1, box.c0, k); }
+    });
     const next = row.nextElementSibling || row.previousElementSibling;
     row.remove();
     placeCaretIn(next && next.firstChild ? next.firstChild : table);
@@ -3060,14 +5442,31 @@ ${insideObjects('.eb-paper.boxed')} {
     const cell = cellAt();
     if (!cell) { return; }
     const table = tableOf(cell);
-    const idx = cellIndex(cell);
-    if (cell.parentNode.children.length <= 1) { return deleteTable(); }
-    tableRows(table).forEach((row) => {
-      if (row.children[idx]) { row.children[idx].remove(); }
+    const rows = tableRows(table);
+    const grid = tableGrid(table);
+    const box = cellBox(grid, cell);
+    if (!box) { return; }
+    const width = grid.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
+    if (width <= 1) { return deleteTable(); }
+    const c = box.c0;
+    const seen = new Set();
+    rows.forEach((row, r) => {
+      const k = grid[r] ? grid[r][c] : null;
+      if (!k || seen.has(k)) { return; }
+      seen.add(k);
+      // A cell merged across this column is one column narrower; any other cell
+      // in it goes.
+      const cs = spanOf(k, 'colspan');
+      if (cs > 1) {
+        k.setAttribute('colspan', String(cs - 1));
+        if (k.getAttribute('colspan') === '1') { k.removeAttribute('colspan'); }
+      } else {
+        k.remove();
+      }
     });
-    mergeColumnWidth(table, idx);
-    const row = tableRows(table)[0];
-    placeCaretIn(row ? (row.children[Math.min(idx, row.children.length - 1)] || row) : table);
+    mergeColumnWidth(table, c);
+    const first = tableRows(table)[0];
+    placeCaretIn(first ? (first.children[Math.min(c, first.children.length - 1)] || first) : table);
   }
   function deleteTable() {
     const cell = cellAt();
@@ -3101,7 +5500,14 @@ ${insideObjects('.eb-paper.boxed')} {
     const rows = tableRows(table);
     const first = rows[0];
     if (!first) { return; }
-    const isHeader = !!(first.children[0] && first.children[0].nodeName === 'TH');
+    // A header row is heading cells all the way across. A row that only starts
+    // with one -- <th scope="row"> naming the row, as every Wikipedia box does --
+    // is an ordinary row: taken for a head, the first row of each piece of a
+    // table carried over to the next page was moved up into the head when the
+    // pieces were put back together, and a table came back from the file in a
+    // different order (BUGS #76).
+    const cells = Array.from(first.children);
+    const isHeader = cells.length > 0 && cells.every((c) => c.nodeName === 'TH' && c.getAttribute('scope') !== 'row');
     // This table's own head, not one belonging to a table standing in one of its
     // cells. Unscoped, the head of a nested table was taken to be this table's,
     // and its rows were moved up into the outer table -- one more of them at
@@ -3216,12 +5622,19 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     if (ragged) { return false; }
     const keep = grid[r0][c0];
+    // Everything in the cells goes into the one that stays, as it was: its
+    // pictures, links and bold. Only the words were carried over, and the rest
+    // of what was in the cells was lost (BUGS E13). LibreOffice keeps it all.
+    const hasContent = (el) => !!(el.textContent.replace(/\u200b/g, '').trim() || el.querySelector('img, svg, math, table, .eb-anchor'));
     inside.forEach((cell) => {
       if (cell === keep) { return; }
-      const text = cell.textContent.replace(/\u200b/g, '').trim();
-      if (text) {
-        if (keep.textContent.trim()) { keep.appendChild(document.createElement('br')); }
-        keep.appendChild(document.createTextNode(text));
+      if (hasContent(cell)) {
+        if (hasContent(keep)) {
+          const last = keep.lastElementChild;
+          const blockish = last && /^(P|DIV|UL|OL|TABLE|FIGURE|BLOCKQUOTE|PRE|H[1-6])$/.test(last.nodeName);
+          if (!blockish) { keep.appendChild(document.createElement('br')); }
+        }
+        while (cell.firstChild) { keep.appendChild(cell.firstChild); }
       }
       cell.remove();
     });
@@ -3320,6 +5733,372 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
   /** A tint behind the cells the selection touches. */
+  /**
+   * The cell properties (BUGS #286): what the cell dialog shows, read off the cell
+   * the caret is in, and what it puts on every cell the selection touches -- its
+   * colour, where the words stand across it and up and down in it, the room round
+   * them, and the rule round it.
+   */
+  function readCellProps(cell) {
+    const st = cell && cell.style;
+    const pad = st ? String(st.getPropertyValue('padding-top') || '').match(/^([\d.]+)mm$/) : null;
+    const fam = st ? String(st.fontFamily || '').split(',')[0].replace(/["']/g, '').trim() : '';
+    const size = st ? String(st.fontSize || '').match(/^([\d.]+)pt$/) : null;
+    return {
+      font: fam,
+      size: size ? Number(size[1]) : '',
+      colour: (st && rgbToHex(st.color)) || '',
+      bold: !!(st && /^(bold|[6-9]00)$/.test(st.fontWeight)),
+      italic: !!(st && st.fontStyle === 'italic'),
+      underline: !!(st && /underline/.test(st.textDecoration || st.textDecorationLine || '')),
+      numFmt: cellNumFmt(cell),
+      fill: (st && rgbToHex(st.backgroundColor)) || '',
+      align: (st && st.textAlign) || '',
+      valign: (st && st.verticalAlign) || '',
+      pad: pad ? Number(pad[1]) : '',
+      rule: readCellBorder(cell),
+    };
+  }
+  function setCellProps(v) {
+    const cells = selectedCells();
+    if (!cells.length) { return false; }
+    const pad = v.pad === '' || v.pad == null ? NaN : Number(v.pad);
+    cells.forEach((cell) => {
+      if (/^#[0-9a-f]{6}$/i.test(v.fill || '')) { cell.style.backgroundColor = v.fill; cell.classList.add('eb-ink'); }
+      else { cell.style.removeProperty('background-color'); cell.classList.remove('eb-ink'); }
+      if (['left', 'center', 'right', 'justify'].indexOf(v.align) >= 0) { cell.style.textAlign = v.align; } else { cell.style.removeProperty('text-align'); }
+      if (['top', 'middle', 'bottom'].indexOf(v.valign) >= 0) { cell.style.verticalAlign = v.valign; } else { cell.style.removeProperty('vertical-align'); }
+      if (isFinite(pad)) { cell.style.padding = Math.min(20, Math.max(0, pad)) + 'mm'; } else { cell.style.removeProperty('padding'); }
+      if (cell.getAttribute('class') === '') { cell.removeAttribute('class'); }
+      if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+    });
+    if (v.rule) { setCellBorder(v.rule); }
+    // フォント（Excel の「フォント」タブ）：セルそのものに付ける。
+    if (v.font !== undefined) {
+      cells.forEach((cell) => {
+        if (v.font) { cell.style.fontFamily = fontStack(v.font, 'sans'); } else { cell.style.removeProperty('font-family'); }
+        const sz = Number(v.size);
+        if (v.size !== '' && v.size != null && sz >= 4 && sz <= 200) { cell.style.fontSize = sz + 'pt'; } else { cell.style.removeProperty('font-size'); }
+        if (/^#[0-9a-f]{6}$/i.test(v.colour || '')) { cell.style.color = v.colour; } else { cell.style.removeProperty('color'); }
+        if (v.bold) { cell.style.fontWeight = '700'; } else { cell.style.removeProperty('font-weight'); }
+        if (v.italic) { cell.style.fontStyle = 'italic'; } else { cell.style.removeProperty('font-style'); }
+        if (v.underline) { cell.style.textDecoration = 'underline'; } else { cell.style.removeProperty('text-decoration'); }
+        if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+      });
+    }
+    // 表示形式（BUGS #291）。数の入ったふつうのセルは、その数を覚えて形を付けて見せる。
+    if (v.numFmt !== undefined) {
+      const calc = window.EditBaseCalc;
+      cells.forEach((cell) => {
+        const code = String(v.numFmt || '');
+        if (code) { cell.setAttribute(NUMFMT_ATTR, code); } else { cell.removeAttribute(NUMFMT_ATTR); }
+        if (cellFormula(cell)) { return; }
+        const shown = cell.hasAttribute('data-eb-fxedit') ? String(cell.textContent || '').trim() : (cellRaw(cell) || String(cell.textContent || '').trim());
+        if (code && calc && typeof calc.literal(shown) === 'number') { cell.setAttribute(RAW_ATTR, shown); }
+        else if (cellRaw(cell)) { cell.textContent = cellRaw(cell); cell.removeAttribute(RAW_ATTR); }
+      });
+      const table = tableOf(cells[0]);
+      if (table) { recalcTable(table, fxCell); }
+    }
+    return true;
+  }
+  // ---- table calculation (BUGS #289) --------------------------------------
+  // A cell whose text starts with "=" is a formula, as in LibreOffice Calc. The
+  // formula is kept on the cell (data-eb-formula) and the cell shows its answer,
+  // so a saved file reads the answers without any program. The caret going into
+  // the cell shows the formula to be written in; leaving it works the table out
+  // again. The arithmetic itself is js/ebcalc.js, which knows nothing of pages.
+  const FORMULA_ATTR = 'data-eb-formula';
+  // A cell's number format (a Calc format code, BUGS #291), and the number a
+  // plain cell with a format holds -- it shows the number formatted, and the
+  // number itself when the caret goes in, as Calc does.
+  const NUMFMT_ATTR = 'data-eb-numfmt';
+  const RAW_ATTR = 'data-eb-value';
+  function cellRaw(cell) { return cell && cell.getAttribute ? cell.getAttribute(RAW_ATTR) || '' : ''; }
+  function cellNumFmt(cell) { return cell && cell.getAttribute ? cell.getAttribute(NUMFMT_ATTR) || '' : ''; }
+  /** A cell whose words are worked out by the program: a formula, or a formatted number. */
+  function cellCalculated(cell) { return !!(cellFormula(cell) || cellRaw(cell)); }
+  /** The formula cell the caret is in, showing its formula (null when none). */
+  let fxCell = null;
+  /**
+   * Cells chosen as a block with the mouse (BUGS #293): the table and the corners
+   * in its whole grid. The words are not touched to show it -- a tint is drawn over
+   * the cells -- and the commands that change words go through each cell in turn.
+   */
+  let cellSel = null;
+  function cellSelCells() {
+    if (!cellSel || !cellSel.table || !cellSel.table.isConnected) { return []; }
+    const grid = wholeGrid(cellSel.table);
+    const out = [];
+    for (let r = cellSel.r0; r <= cellSel.r1; r++) {
+      for (let c = cellSel.c0; c <= cellSel.c1; c++) {
+        const cell = grid[r] && grid[r][c];
+        if (cell && out.indexOf(cell) < 0) { out.push(cell); }
+      }
+    }
+    return out;
+  }
+  function gridPos(grid, cell) {
+    for (let r = 0; r < grid.length; r++) { const c = grid[r].indexOf(cell); if (c >= 0) { return { r, c }; } }
+    return null;
+  }
+  /** The cell the formula bar speaks for, and whether a cell is being picked into it. */
+  let fxBarCell = null;
+  let fxPicking = false;
+  function cellName(r, c) { return (window.EditBaseCalc ? window.EditBaseCalc.colName(c) : String.fromCharCode(65 + c)) + (r + 1); }
+  /** A cell's name in its table: A1, B3 … across the pieces a page foot has cut it into. */
+  function cellNameOf(cell) {
+    const table = cell ? tableOf(cell) : null;
+    if (!table) { return ''; }
+    const grid = wholeGrid(table);
+    for (let r = 0; r < grid.length; r++) {
+      const c = grid[r].indexOf(cell);
+      if (c >= 0) { return cellName(r, c); }
+    }
+    return '';
+  }
+  /** The whole table as one grid, across the pieces a page foot has cut it into. */
+  function wholeGrid(table) {
+    const pieces = cutPieces(table).filter((t) => t && t.nodeName === 'TABLE');
+    const rows = [];
+    (pieces.length ? pieces : [table]).forEach((t) => tableRows(t).forEach((tr) => {
+      if (!(tr.hasAttribute && tr.hasAttribute('data-eb-again'))) { rows.push(tr); }
+    }));
+    const grid = [];
+    rows.forEach((tr, r) => {
+      if (!grid[r]) { grid[r] = []; }
+      let c = 0;
+      Array.from(tr.children).forEach((cell) => {
+        if (!/^T[DH]$/.test(cell.nodeName)) { return; }
+        while (grid[r][c]) { c++; }
+        const cs = Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10));
+        const rs = Math.max(1, parseInt(cell.getAttribute('rowspan') || '1', 10));
+        for (let i = 0; i < rs; i++) {
+          if (!grid[r + i]) { grid[r + i] = []; }
+          for (let j = 0; j < cs; j++) { grid[r + i][c + j] = cell; }
+        }
+        c += cs;
+      });
+    });
+    return grid;
+  }
+  function cellFormula(cell) { return cell && cell.getAttribute ? cell.getAttribute(FORMULA_ATTR) || '' : ''; }
+  /** What a cell has written in it, for the calculation: its formula, or its words. */
+  function cellSource(cell, editing) {
+    if (!cell) { return ''; }
+    // The words on screen are the source only while the cell is open for writing:
+    // a formatted number about to be opened still shows "$4.50", and read as the
+    // source it made every formula that uses it #VALUE!.
+    if (cell === editing && (cell.hasAttribute('data-eb-fxedit') || !cellCalculated(cell))) { return String(cell.textContent || '').trim(); }
+    return cellFormula(cell) || cellRaw(cell) || String(cell.textContent || '').trim();
+  }
+  function tableHasFormulas(table) {
+    const pieces = cutPieces(table).filter((t) => t && t.nodeName === 'TABLE');
+    return (pieces.length ? pieces : [table]).some((t) => !!t.querySelector('[' + FORMULA_ATTR + '], [' + RAW_ATTR + ']'));
+  }
+  function computeTable(table, editing) {
+    const calc = window.EditBaseCalc;
+    if (!calc || !table) { return null; }
+    const grid = wholeGrid(table);
+    const src = grid.map((row) => row.map((cell, c) => (row.indexOf(cell) === c ? cellSource(cell, editing) : '')));
+    const fmts = grid.map((row) => row.map((cell) => cellNumFmt(cell)));
+    return { grid, out: calc.compute(src, fmts) };
+  }
+  /**
+   * Work the table out and write each formula cell's answer into it -- all but
+   * the cell being written in, which shows its formula. Returns true when a
+   * cell's words changed.
+   */
+  function recalcTable(table, editing) {
+    const got = computeTable(table, editing);
+    if (!got) { return false; }
+    let changed = false;
+    got.grid.forEach((row, r) => row.forEach((cell, c) => {
+      if (row.indexOf(cell) !== c || cell === editing || !cellCalculated(cell)) { return; }
+      const res = got.out[r][c];
+      if (String(cell.textContent) !== res.text) { cell.textContent = res.text; changed = true; }
+    }));
+    return changed;
+  }
+  /** The answer of the cell being written in, as the file is to show it. */
+  function fxAnswer(cell) {
+    const table = tableOf(cell);
+    const got = computeTable(table, cell);
+    if (!got) { return ''; }
+    for (let r = 0; r < got.grid.length; r++) {
+      const c = got.grid[r].indexOf(cell);
+      if (c >= 0) { return got.out[r][c].text; }
+    }
+    return '';
+  }
+  /** A cell being left: "=…" becomes its formula, anything else takes a formula off it. */
+  function commitFormulaCell(cell) {
+    if (!cell || !cell.isConnected) { return null; }
+    const text = String(cell.textContent || '').trim();
+    const calc = window.EditBaseCalc;
+    const number = calc && typeof calc.literal(text) === 'number';
+    if (text.charAt(0) === '=' && text.length > 1) { cell.setAttribute(FORMULA_ATTR, text); cell.removeAttribute(RAW_ATTR); }
+    else if (cellNumFmt(cell) && number) { cell.setAttribute(RAW_ATTR, text); cell.removeAttribute(FORMULA_ATTR); }
+    else if (cell.hasAttribute('data-eb-fxedit') || cellRaw(cell)) { cell.removeAttribute(FORMULA_ATTR); cell.removeAttribute(RAW_ATTR); }
+    cell.removeAttribute('data-eb-fxedit');
+    if (!cell.classList.length) { cell.removeAttribute('class'); }
+    return tableOf(cell);
+  }
+  /** A formula cell being entered: it shows its formula, to be written in. */
+  function openFormulaCell(cell) {
+    const f = cellFormula(cell) || cellRaw(cell);
+    if (!f) { return false; }
+    cell.setAttribute('data-eb-fxedit', 'on');
+    if (String(cell.textContent) !== f) { cell.textContent = f; }
+    return true;
+  }
+
+  /**
+   * The width of each column as it stands now, in millimetres, measured off the
+   * cells that take one column only (BUGS #288).
+   */
+  function columnWidthsMm(table) {
+    const grid = tableGrid(table);
+    const n = grid.length ? Math.max(...grid.map((r) => r.length)) : 0;
+    const out = [];
+    for (let c = 0; c < n; c++) {
+      let w = 0;
+      grid.forEach((row) => {
+        const cell = row[c];
+        if (cell && Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10)) === 1) { w = Math.max(w, cell.offsetWidth); }
+      });
+      out.push(w * MM);
+    }
+    return out;
+  }
+  /** Each column's share of the table, in per cent to one decimal (the table dialog). */
+  function columnPercents(table) {
+    const w = columnWidthsMm(table);
+    const sum = w.reduce((a, b) => a + b, 0) || 1;
+    return w.map((x) => round1(x / sum * 100));
+  }
+  /**
+   * The rows all the same height, the least that holds the fullest of them (owner
+   * 2026-09-29: 「各行を同じ高さで最低サイズをみつけて調整する高さの最適化」). A height
+   * given to the whole table -- a table drawn on the page -- is let go, so the table
+   * is as tall as its rows.
+   */
+  function fitRowHeights(table) {
+    if (!table) { return false; }
+    const rows = tableRows(table);
+    if (!rows.length) { return false; }
+    table.style.removeProperty('height');
+    rows.forEach((tr) => tr.style.removeProperty('height'));
+    const h = Math.max(...rows.map((tr) => tr.offsetHeight));
+    if (!(h > 0)) { return false; }
+    rows.forEach((tr) => {
+      tr.style.height = round1(h * MM) + 'mm';
+      if (!tr.getAttribute('style')) { tr.removeAttribute('style'); }
+    });
+    if (!table.getAttribute('style')) { table.removeAttribute('style'); }
+    return true;
+  }
+  /**
+   * The columns shared out by what is written in them (LibreOffice's optimal
+   * column width): each column as wide as its longest line wants, scaled so that
+   * the table keeps its own width.
+   */
+  function fitColumnWidths(table) {
+    if (!table) { return false; }
+    const cg = tableColumns(table);
+    if (!cg) { return false; }
+    const keep = { layout: table.style.tableLayout, width: table.style.width, cols: Array.from(cg.children).map((col) => col.style.width) };
+    Array.from(cg.children).forEach((col) => col.style.removeProperty('width'));
+    table.style.tableLayout = 'auto';
+    table.style.width = 'max-content';
+    // A little room over each column's own need: set again as a share of a fixed
+    // table, the rules take their part and a column measured exactly to its words
+    // folded its last character onto a second line.
+    const natural = columnWidthsMm(table).map((w) => (w > 0 ? w + 1.5 : 0));
+    table.style.width = keep.width;
+    if (!keep.width) { table.style.removeProperty('width'); }
+    table.style.tableLayout = keep.layout || 'fixed';
+    const total = table.offsetWidth * MM;
+    const sum = natural.reduce((a, b) => a + b, 0);
+    if (!(sum > 0)) {
+      Array.from(cg.children).forEach((col, i) => { if (keep.cols[i]) { col.style.width = keep.cols[i]; } });
+      table.style.tableLayout = keep.layout;
+      return false;
+    }
+    // A column whose words fit in less than an even share keeps just what they
+    // need; what is left goes to the long ones in proportion. Shared out by the
+    // one-line widths alone, a long paragraph took nearly all of it and a two-
+    // character column was folded into one character a line.
+    const width = new Array(natural.length).fill(0);
+    let open = natural.map((w, i) => i);
+    let room = total > 0 ? total : sum;
+    for (;;) {
+      const fair = room / open.length;
+      const small = open.filter((i) => natural[i] <= fair);
+      if (!small.length) { break; }
+      small.forEach((i) => { width[i] = natural[i]; room -= natural[i]; });
+      open = open.filter((i) => natural[i] > fair);
+      if (!open.length) { break; }
+    }
+    if (open.length) {
+      const rest = open.reduce((a, i) => a + natural[i], 0);
+      open.forEach((i) => { width[i] = room * natural[i] / rest; });
+    } else if (room > 0) {
+      // Everything fits with room over: the room is shared out in proportion.
+      const used = width.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < width.length; i++) { width[i] += room * width[i] / used; }
+    }
+    const all = width.reduce((a, b) => a + b, 0);
+    return applyColumnShares(table, width.map((w) => w / all));
+  }
+  /**
+   * One column to a width in millimetres; the others give or take the difference
+   * in proportion, so the table keeps its width (the cell dialog's width).
+   */
+  function setColumnWidthMm(table, index, mm) {
+    const w = columnWidthsMm(table);
+    if (!(index >= 0 && index < w.length) || !(mm > 0)) { return false; }
+    const total = w.reduce((a, b) => a + b, 0);
+    const others = total - w[index];
+    const want = Math.max(5, Math.min(mm, total - 5 * (w.length - 1)));
+    if (w.length > 1 && others > 0) {
+      const k = (total - want) / others;
+      for (let i = 0; i < w.length; i++) { w[i] = i === index ? want : w[i] * k; }
+    } else { w[index] = want; }
+    return setColumnWidths(table, w.map(round1));
+  }
+  /**
+   * Lines on a block of cells as Excel draws them: the outline (top, bottom, left,
+   * right of the block) and the lines inside it. An edge 'keep' is left as it is,
+   * 'off' is taken off, 'on' is drawn with the chosen line.
+   */
+  function applyBorderEdges(cells, b) {
+    if (!cells.length) { return false; }
+    const table = tableOf(cells[0]);
+    const grid = wholeGrid(table);
+    const pos = cells.map((cell) => { for (let r = 0; r < grid.length; r++) { const c = grid[r].indexOf(cell); if (c >= 0) { const bx = cellBox(grid, cell) || { r0: r, r1: r, c0: c, c1: c }; return { cell, ...bx }; } } return null; }).filter(Boolean);
+    if (!pos.length) { return false; }
+    const R0 = Math.min(...pos.map((p) => p.r0)); const R1 = Math.max(...pos.map((p) => p.r1));
+    const C0 = Math.min(...pos.map((p) => p.c0)); const C1 = Math.max(...pos.map((p) => p.c1));
+    const thick = b.style === 'solid-thick';
+    const kind = b.style === 'solid-thick' ? 'solid' : b.style;
+    const w = thick ? Math.max(2, Number(b.width) || 2) : (b.style === 'double' ? Math.max(2.25, Number(b.width) || 2.25) : (Number(b.width) || 0.75));
+    const line = kind === 'none' ? 'none' : w + 'pt ' + kind + ' ' + (/^#[0-9a-f]{6}$/i.test(b.colour || '') ? b.colour : '#000000');
+    const put = (cell, side, state) => {
+      if (state === 'keep') { return; }
+      const prop = 'border-' + side;
+      if (state === 'off' || line === 'none') { cell.style.setProperty(prop, 'none'); } else { cell.style.setProperty(prop, line); }
+    };
+    pos.forEach((p) => {
+      const E = b.edges;
+      put(p.cell, 'top', p.r0 === R0 ? E.top : E.insideH);
+      put(p.cell, 'bottom', p.r1 === R1 ? E.bottom : E.insideH);
+      put(p.cell, 'left', p.c0 === C0 ? E.left : E.insideV);
+      put(p.cell, 'right', p.c1 === C1 ? E.right : E.insideV);
+      if (!p.cell.getAttribute('style')) { p.cell.removeAttribute('style'); }
+    });
+    return true;
+  }
   function setCellFill(colour) {
     const cells = selectedCells();
     if (!cells.length) { return false; }
@@ -3363,6 +6142,73 @@ ${insideObjects('.eb-paper.boxed')} {
     out.pop();
     return out;
   }
+  /**
+   * The lines between columns as they are drawn: for each line (the index of the
+   * column to its left, as columnEdges numbers it), the runs of rows it actually
+   * runs through. A merged cell breaks the line where it covers it.
+   */
+  /**
+   * The column letters and row numbers of a table (BUGS #292), for the piece of it
+   * on screen: where each column and each row stands, and its name in the whole
+   * table -- a piece past a page foot goes on counting, and a header row the
+   * layout repeats there keeps its own number.
+   */
+  function tableHeadings(table) {
+    const grid = tableGrid(table);
+    const width = grid.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
+    const cols = [];
+    for (let c = 0; c < width; c++) {
+      let hit = null;
+      grid.forEach((row) => {
+        const cell = row && row[c];
+        if (!hit && cell && Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10)) === 1) { hit = cell; }
+      });
+      if (!hit) { continue; }
+      const r = hit.getBoundingClientRect();
+      cols.push({ c, name: cellName(0, c).replace(/\d+$/, ''), left: r.left, right: r.right });
+    }
+    const first = cutPieces(table).filter((t) => t && t.nodeName === 'TABLE')[0] || table;
+    const all = [];
+    (cutPieces(table).filter((t) => t && t.nodeName === 'TABLE').length ? cutPieces(table).filter((t) => t && t.nodeName === 'TABLE') : [table])
+      .forEach((t) => tableRows(t).forEach((tr) => { if (!(tr.hasAttribute && tr.hasAttribute('data-eb-again'))) { all.push(tr); } }));
+    let again = 0;
+    const rows = tableRows(table).map((tr) => {
+      const r = tr.getBoundingClientRect();
+      let n = all.indexOf(tr) + 1;
+      if (tr.hasAttribute && tr.hasAttribute('data-eb-again')) { again += 1; n = again; }
+      return { n, top: r.top, bottom: r.bottom, tr };
+    }).filter((x) => x.n > 0 && x.bottom > x.top);
+    return { cols, rows, first };
+  }
+  function gripSegments(table) {
+    const grid = tableGrid(table);
+    const width = grid.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
+    const byIndex = new Map();
+    tableRows(table).forEach((tr) => {
+      Array.from(tr.children).forEach((cell) => {
+        const box = cellBox(grid, cell);
+        if (!box || box.c1 >= width - 1) { return; }
+        const r = cell.getBoundingClientRect();
+        if (!r.height) { return; }
+        if (!byIndex.has(box.c1)) { byIndex.set(box.c1, []); }
+        byIndex.get(box.c1).push({ x: r.right, top: r.top, bottom: r.bottom });
+      });
+    });
+    const out = [];
+    byIndex.forEach((list, index) => {
+      list.sort((p, q) => p.top - q.top);
+      let run = null;
+      let n = 0;
+      list.forEach((seg) => {
+        if (run && seg.top <= run.bottom + 2 && Math.abs(seg.x - run.x) < 3) { run.bottom = Math.max(run.bottom, seg.bottom); return; }
+        if (run) { out.push(run); }
+        run = { index: index, n: n, x: seg.x, top: seg.top, bottom: seg.bottom };
+        n += 1;
+      });
+      if (run) { out.push(run); }
+    });
+    return out;
+  }
   /** What each column is at this moment, in millimetres. */
   function columnWidths(table, zoom) {
     const rows = tableRows(table);
@@ -3379,6 +6225,38 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** A rule on the cells the selection touches, on the edges asked for. */
+  /**
+   * The rule a cell has now, in the terms of the rule dialog, so the dialog opens
+   * on it: opened and applied without a change, it put the default rule in place
+   * of the cell's own (BUGS #238). A cell without a rule of its own reads as
+   * "as the style says".
+   */
+  function readCellBorder(cell) {
+    const out = { style: '', sides: 'all', width: 0.75, colour: '#666666' };
+    if (!cell || !cell.style) { return out; }
+    const st = cell.style;
+    const has = {};
+    ['top', 'bottom', 'left', 'right'].forEach((k) => {
+      const v = st.getPropertyValue('border-' + k + '-style');
+      if (v) { has[k] = v; }
+    });
+    const keys = Object.keys(has);
+    if (!keys.length) { return out; }
+    const same = (a, b) => ['style', 'width', 'color'].every((q) =>
+      st.getPropertyValue('border-' + a + '-' + q) === st.getPropertyValue('border-' + b + '-' + q));
+    if (keys.length === 4 && same('top', 'bottom') && same('top', 'left') && same('top', 'right')) { out.sides = 'all'; }
+    else if (keys.length === 2 && has.top && has.bottom && same('top', 'bottom')) { out.sides = 'topbottom'; }
+    else if (keys.length === 1 && (has.top || has.bottom || has.left)) { out.sides = keys[0]; }
+    const side = keys[0];
+    const style = has[side];
+    out.style = ['none', 'solid', 'dashed', 'dotted', 'double'].indexOf(style) >= 0 ? style : 'solid';
+    const w = st.getPropertyValue('border-' + side + '-width');
+    const m = String(w).match(/^([\d.]+)(pt|px)$/);
+    if (m) { out.width = m[2] === 'px' ? Math.round(Number(m[1]) * 0.75 * 100) / 100 : Number(m[1]); }
+    out.colour = rgbToHex(st.getPropertyValue('border-' + side + '-color')) || out.colour;
+    return out;
+  }
+
   function setCellBorder(v) {
     const cells = selectedCells();
     if (!cells.length) { return false; }
@@ -3401,10 +6279,29 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
 
+  /**
+   * The cells of a table in the order Tab walks them -- all of it, where a page
+   * foot has cut it into pieces, and not the header rows the layout repeats at
+   * the head of each piece. Walked piece by piece, the last cell on page one was
+   * taken for the last cell of the table, and Tab put an empty row in the middle
+   * of it (BUGS E14).
+   */
+  function walkCells(table) {
+    const pieces = cutPieces(table).filter((t) => t && t.nodeName === 'TABLE');
+    const out = [];
+    (pieces.length ? pieces : [table]).forEach((t) => {
+      t.querySelectorAll('th, td').forEach((c) => {
+        const row = c.parentNode;
+        if (row && row.hasAttribute && row.hasAttribute('data-eb-again')) { return; }
+        if (tableOf(c) === t) { out.push(c); }
+      });
+    });
+    return out;
+  }
   function atLastCell() {
     const cell = cellAt();
     if (!cell) { return false; }
-    const cells = Array.from(tableOf(cell).querySelectorAll('th, td'));
+    const cells = walkCells(tableOf(cell));
     return cells.indexOf(cell) === cells.length - 1;
   }
 
@@ -3413,9 +6310,9 @@ ${insideObjects('.eb-paper.boxed')} {
     const cell = cellAt();
     if (!cell) { return false; }
     const table = tableOf(cell);
-    const cells = Array.from(table.querySelectorAll('th, td'));
+    const cells = walkCells(table);
     const at = cells.indexOf(cell);
-    const next = cells[at + dir];
+    const next = at >= 0 ? cells[at + dir] : null;
     if (next) { placeCaretIn(next); return true; }
     if (dir > 0) {
       addRow(1);
@@ -3430,6 +6327,10 @@ ${insideObjects('.eb-paper.boxed')} {
     const range = getRange();
     if (!range || range.collapsed) { return false; }
     if (!String(range.toString()).trim()) { return false; }
+    // Not across paragraphs: the paragraphs would go inside the reading (BUGS E18).
+    const blockOf = (n) => { let b = n && (n.nodeType === 1 ? n : n.parentNode); while (b && b !== canvas() && !isBlock(b)) { b = b.parentNode; } return b; };
+    if (blockOf(range.startContainer) !== blockOf(range.endContainer)) { return false; }
+    if (range.cloneContents().querySelector && range.cloneContents().querySelector('p, div, li, h1, h2, h3, h4, h5, h6, table, ul, ol, blockquote, pre')) { return false; }
     const ruby = document.createElement('ruby');
     ruby.appendChild(range.extractContents());
     // A reading already inside the chosen words would be a reading over a
@@ -3474,9 +6375,10 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   function writingIn(root) {
     if (!root) { return ''; }
-    if (!root.querySelector || !root.querySelector('rt, rp')) { return root.textContent || ''; }
+    // The ¶ standing for a struck-out paragraph end (markJoin) is not writing either.
+    if (!root.querySelector || !root.querySelector('rt, rp, del.eb-join')) { return root.textContent || ''; }
     const copy = root.cloneNode(true);
-    Array.from(copy.querySelectorAll('rt, rp')).forEach((n) => n.remove());
+    Array.from(copy.querySelectorAll('rt, rp, del.eb-join')).forEach((n) => n.remove());
     return copy.textContent || '';
   }
   function rubyAt(node) {
@@ -3504,19 +6406,33 @@ ${insideObjects('.eb-paper.boxed')} {
   // what a printed report does with endnotes anyway, and the file numbers itself.
   let noteSeq = 0;
   function noteId() {
-    noteSeq += 1;
-    return 'ebn' + noteSeq + '-' + Math.floor(noteSeq * 7919 % 997);
+    // 数えるのは開いた後から。開き直した文書にはもう ebn1・ebn2 があり、0 から
+    // 数えると足した注が前の注と同じ名前になって、次に開くと本文が消えた
+    // （BUGS #211）。文書に今ある注の番号より先から数え、それでも同じ名前が
+    // あれば飛ばす。
+    const c = canvas();
+    if (c) {
+      Array.from(c.querySelectorAll('section.eb-notes li[id], sup.eb-fnref[id], sup.eb-fnref a[href^="#"]')).forEach((el) => {
+        const m = /^r?#?ebn(\d+)-/.exec(el.getAttribute('id') || el.getAttribute('href') || '');
+        if (m && Number(m[1]) > noteSeq) { noteSeq = Number(m[1]); }
+      });
+    }
+    let id = '';
+    do {
+      noteSeq += 1;
+      id = 'ebn' + noteSeq + '-' + Math.floor(noteSeq * 7919 % 997);
+    } while (document.getElementById(id) || document.getElementById('r' + id));
+    return id;
   }
   function notesBox(title) {
     const c = canvas();
     let box = c.querySelector('section.eb-notes');
-    if (box) { return box; }
+    if (box) { return joinCutBlock(box); }
     box = document.createElement('section');
     box.className = 'eb-notes';
-    const head = document.createElement('p');
-    head.className = 'eb-notes-title';
-    head.textContent = title || 'Notes';
-    box.appendChild(head);
+    // 見出しは付けない。LibreOffice の文末脚注と同じく、区切りの線だけ（線は CSS）。
+    // 以前は「ノート」という見出しを書いていた。今ある文書の見出しはそのまま残す。
+    void title;
     box.appendChild(document.createElement('ol'));
     c.appendChild(box);
     return box;
@@ -3533,7 +6449,15 @@ ${insideObjects('.eb-paper.boxed')} {
     a.setAttribute('href', '#' + id);
     a.textContent = '*';
     sup.appendChild(a);
-    range.deleteContents();
+    // The chosen words stay: the note goes after them, as LibreOffice and Word put
+    // it. They were deleted and the note stood in their place (BUGS E19).
+    range.collapse(false);
+    // Not inside a link: a link in a link does not survive being read back -- the
+    // outer one is closed, the note's number falls out of its <sup>, and the note
+    // was deleted on the next open (E20). The note goes just after the link.
+    const inLink = range.startContainer && (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentNode);
+    const link = inLink && inLink.closest ? inLink.closest('a') : null;
+    if (link && c.contains(link)) { range.setStartAfter(link); range.collapse(true); }
     range.insertNode(sup);
     const li = document.createElement('li');
     li.setAttribute('id', id);
@@ -3554,9 +6478,14 @@ ${insideObjects('.eb-paper.boxed')} {
   function renumberNotes() {
     const c = canvas();
     if (!c) { return; }
-    const box = c.querySelector('section.eb-notes');
+    let box = c.querySelector('section.eb-notes');
+    // ページで切れた注の一覧は、並べ直す前に一つに戻す（後ろの切れ端の注を
+    // 行き先の無い物として消さない）。
+    if (box && box.hasAttribute(FLOWCUT)) { box = joinCutBlock(box); }
     const refs = Array.from(c.querySelectorAll('sup.eb-fnref'));
-    if (!box) { return; }
+    // 注の一覧が無いのに番号だけある（本文の見つからない番号を貼った）なら、
+    // 一覧がある時と同じく番号を外す。飛び先の無い小さな「1」が残っていた。
+    if (!box) { refs.forEach((sup) => sup.remove()); return; }
     const list = box.querySelector('ol');
     if (!list) { box.remove(); return; }
     const byId = {};
@@ -3579,6 +6508,113 @@ ${insideObjects('.eb-paper.boxed')} {
     if (box.parentNode === c && c.lastElementChild !== box) { c.appendChild(box); }
   }
 
+  // 注は本文と一緒に動く（LibreOffice と同じ）。注の番号を写したり切り取ったり
+  // すると、クリップボードに載るのは番号の <sup> だけで、注の本文は文書の末尾に
+  // 残る。貼ると番号の飛び先（#ebn…）が外され、行き先の無い番号として消え、
+  // 注の本文も一緒に消えていた（BUGS #212）。写した・切り取った時の注の本文を
+  // 覚えておき、貼るときに番号と組にして戻す。
+  let noteClip = null;
+  function rememberNotes(range) {
+    const c = canvas();
+    if (!c || !range || range.collapsed || !c.contains(range.commonAncestorContainer)) { return; }
+    const box = c.querySelector('section.eb-notes');
+    if (!box) { return; }
+    const frag = range.cloneContents();
+    const refs = Array.from(frag.querySelectorAll('sup.eb-fnref a[href^="#"]'));
+    if (!refs.length) { return; }
+    const kept = new Map();
+    refs.forEach((a) => {
+      const id = String(a.getAttribute('href') || '').slice(1);
+      const li = id ? Array.from(box.querySelectorAll('li[id]')).find((x) => x.getAttribute('id') === id) : null;
+      if (li) { kept.set(id, li.cloneNode(true)); }
+    });
+    if (kept.size) { noteClip = kept; }
+  }
+  const noteNum = (id) => { const m = /^ebn(\d+)-/.exec(id || ''); return m ? Number(m[1]) : 0; };
+  /**
+   * この文書の中への飛び先なら '#名前' を返す。ブラウザは写した HTML のアドレスを
+   * みな完全な形に書き直す（#ebn1-7 → https://…/apps/editbase/…#ebn1-7）ので、
+   * この画面と同じページを指す物も文書の中への飛び先として読む。
+   */
+  function ownHash(href) {
+    const raw = String(href == null ? '' : href).trim();
+    if (/^#[^\s#]+$/.test(raw)) { return raw; }
+    if (!/#[^\s#]+$/.test(raw) || !window.location) { return ''; }
+    try {
+      const u = new URL(raw, window.location.href);
+      const here = window.location;
+      return u.origin === here.origin && u.pathname === here.pathname && /^#[^\s#]+$/.test(u.hash) ? u.hash : '';
+    } catch (e) { return ''; }
+  }
+  /**
+   * 貼る物の中の注の番号に、本文を見つけて組にする。本文を探す順は、貼る物に
+   * 付いてきた注の一覧、文書の注の一覧（切り取ったばかりでまだ残っている）、
+   * 写した時に覚えた物。同じ注が文書の中でまだ番号を持っていれば（写して貼った）、
+   * 新しい名前の注にする。本文が見つからない番号は、これまでどおり外れる。
+   * holder の中の注の一覧の li は、この後の片付けを通してから取り出す。
+   */
+  function carryNotes(holder) {
+    const c = canvas();
+    const docLi = (id) => (c ? Array.from(c.querySelectorAll('section.eb-notes li[id]')).find((x) => x.getAttribute('id') === id) : null) || null;
+    const cited = (id) => !!(c && Array.from(c.querySelectorAll('sup.eb-fnref a[href^="#"]')).some((a) => a.getAttribute('href') === '#' + id));
+    const pasted = Array.from(holder.querySelectorAll('section.eb-notes li[id]'));
+    const found = [];
+    Array.from(holder.querySelectorAll('sup.eb-fnref')).forEach((sup) => {
+      const a = sup.querySelector('a[href]');
+      const id = a ? ownHash(a.getAttribute('href')).slice(1) : '';
+      if (!id) { return; }
+      const own = pasted.find((x) => x.getAttribute('id') === id) || null;
+      const inDoc = docLi(id);
+      const remembered = noteClip && noteClip.get(id);
+      if (!own && !inDoc && !remembered) { return; }
+      found.push({ a, id, own, inDoc, remembered });
+    });
+    // 残す名前より先から新しい名前を数える（同じ名前を二度作らない）。
+    found.forEach((f) => { if (noteNum(f.id) > noteSeq) { noteSeq = noteNum(f.id); } });
+    const used = new Set();
+    return found.map((f) => {
+      const again = cited(f.id) || used.has(f.id);
+      const id = again ? noteId() : f.id;
+      used.add(id);
+      f.a.setAttribute('href', '#' + id);
+      // 切り取ったばかりで本文がまだ文書にあるなら、それをそのまま使う。
+      const reuse = !again && f.inDoc;
+      return { id, own: f.own, li: reuse ? null : (f.own ? null : (f.inDoc || f.remembered).cloneNode(true)) };
+    });
+  }
+  /** carryNotes の続き：片付けの後、番号に名前を付け直し、本文を取り出す。 */
+  function takeCarriedNotes(holder, carried) {
+    if (!carried || !carried.length) { return []; }
+    const byId = new Map(carried.map((n) => [n.id, n]));
+    holder.querySelectorAll('sup.eb-fnref').forEach((sup) => {
+      const a = sup.querySelector('a[href^="#"]');
+      const id = a ? String(a.getAttribute('href') || '').slice(1) : '';
+      if (byId.has(id)) { sup.setAttribute('id', 'r' + id); }
+    });
+    const out = [];
+    carried.forEach((n) => {
+      let li = n.li;
+      if (n.own) {
+        li = n.own;
+        const list = li.parentNode;
+        li.remove();
+        if (list && !list.querySelector('li') && list.parentNode) { list.remove(); }
+      }
+      if (li) { li.setAttribute('id', n.id); out.push(li); }
+    });
+    return out;
+  }
+
+  /** 消した後、番号と注の本文の数が合わなければ並べ直す（行き先の無い本文を消す）。 */
+  function notesAfterDelete() {
+    const c = canvas();
+    const box = c ? c.querySelector('section.eb-notes') : null;
+    if (!box) { return; }
+    const refs = c.querySelectorAll('sup.eb-fnref').length;
+    const notes = c.querySelectorAll('section.eb-notes li[id]').length;
+    if (refs !== notes) { renumberNotes(); }
+  }
+
   /** Lay a passage out in columns, or take the columns off it. */
   function setColumns(count, gapMm) {
     const blocks = selectedBlocks().filter((b) => b && b.parentNode);
@@ -3596,14 +6632,14 @@ ${insideObjects('.eb-paper.boxed')} {
         return true;
       }
       host.style.columnCount = String(count);
-      if (gapMm) { host.style.columnGap = gapMm + 'mm'; }
+      if (gapMm != null && isFinite(gapMm)) { host.style.columnGap = gapMm + 'mm'; }
       return true;
     }
     if (!count || count < 2) { return false; }
     const box = document.createElement('div');
     box.className = 'eb-cols';
     box.style.columnCount = String(count);
-    if (gapMm) { box.style.columnGap = gapMm + 'mm'; }
+    if (gapMm != null && isFinite(gapMm) && gapMm !== 8) { box.style.columnGap = gapMm + 'mm'; }
     blocks[0].parentNode.insertBefore(box, blocks[0]);
     blocks.forEach((b) => box.appendChild(b));
     placeCaretIn(box.firstElementChild);
@@ -3698,6 +6734,27 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const p = document.createElement('p');
     const range = getRange();
+    // Chosen across paragraphs, the words go into the box as the paragraphs they
+    // are, and the box stands where the choice began: between what is left of the
+    // first paragraph and what is left of the last. It was put after the last,
+    // and the words ran out of order (BUGS E22).
+    const firstBlock = range && !range.collapsed ? topBlockOf(range.startContainer) : null;
+    const lastBlock = range && !range.collapsed ? topBlockOf(range.endContainer) : null;
+    if (range && !range.collapsed && firstBlock && lastBlock && firstBlock !== lastBlock) {
+      const frag = range.extractContents();
+      let run = null;
+      Array.from(frag.childNodes).forEach((n) => {
+        if (n.nodeType === 1 && isBlock(n)) { run = null; if (n.textContent.trim() || n.querySelector('img, math, table')) { box.appendChild(n); } return; }
+        if (!run) { run = document.createElement('p'); box.appendChild(run); }
+        run.appendChild(n);
+      });
+      if (!box.querySelector('p, h1, h2, h3, h4, h5, h6, ul, ol, table, blockquote, pre')) { box.appendChild(p).appendChild(document.createElement('br')); }
+      const c = canvas();
+      if (firstBlock.parentNode === c) { c.insertBefore(box, firstBlock.nextSibling); } else { insertBlockNode(box); }
+      [firstBlock, lastBlock].forEach((b) => { if (b.parentNode && !b.textContent.replace(/[\s\u200b]/g, '') && !b.querySelector('img, math, table, .eb-anchor')) { b.remove(); } });
+      placeCaretIn(box.querySelector('p, h1, h2, h3, h4, h5, h6, li') || box);
+      return box;
+    }
     if (range && !range.collapsed) {
       p.appendChild(range.extractContents());
     } else {
@@ -4024,7 +7081,13 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!el || !ref || !ref.parentNode) { return false; }
     const host = objectFree(el) ? el.parentNode : el;
     if (host === ref || host.contains(ref)) { return false; }
-    ref.parentNode.insertBefore(host, after ? ref.nextSibling : ref);
+    // 次のページへ続く枠は、続きの部分もひとまとまりで動かす（BUGS #61）。
+    const group = chainable(el) && !isCont(el)
+      ? chainOf(el).map((f) => chainHost(f)).filter((h, i, a) => h && a.indexOf(h) === i)
+      : [host];
+    if (group.some((h) => h === ref || h.contains(ref))) { return false; }
+    const at = after ? ref.nextSibling : ref;
+    group.forEach((h) => { ref.parentNode.insertBefore(h, at); });
     return true;
   }
   /**
@@ -4055,16 +7118,115 @@ ${insideObjects('.eb-paper.boxed')} {
     if (cls && cls.contains('eb-math-block')) { return true; }
     if (el.nodeName === 'FIGURE') { return !(target.closest && target.closest('figcaption')); }
     if (el.nodeName === 'TABLE') { return !(target.closest && target.closest('td, th')); }
+    // 文字を書く枠（まとめ枠・文字枠・囲み記事）は LibreOffice と同じく、中を押せば
+    // どこでも文字にカーソルが入る。枠そのものを掴むのは縁か取っ手を押したときだけ。
+    // 以前は字の無い所（余白・最後の行の下・行末の先）を押すと枠が選ばれ、そのまま
+    // バックスペースで枠ごと中身が消えた（オーナー 2026-09-22、BUGS #45）。
+    if (writtenFrame(el)) { return onEdge(el, x, y, 6); }
     // A box or a frame is written in: the click has to miss the words to take
     // hold of the thing itself.
     return !onText(el, x, y);
   }
+  /** 枠の縁の線の上（内側 px まで）を押したか。LibreOffice でも枠は縁の線を押して選ぶ。 */
+  function onEdge(el, x, y, px) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || x < r.left - 1 || x > r.right + 1 || y < r.top - 1 || y > r.bottom + 1) { return false; }
+    return x - r.left <= px || r.right - x <= px || y - r.top <= px || r.bottom - y <= px;
+  }
+  /** 中に文字を書く枠：押せばカーソルが入り、縁でしか掴めないもの。 */
+  function writtenFrame(el) {
+    if (!el || !el.classList || el.nodeName === 'SPAN') { return false; }
+    if (!(el.classList.contains('eb-frame') || el.classList.contains('eb-textbox')
+      || (el.nodeName === 'ASIDE' && el.classList.contains('eb-box')))) { return false; }
+    return !!caretSpotIn(el);
+  }
+  /** 枠の中で文字を書ける段落（中に置いた別の物の中は除く）。 */
+  function caretSpotIn(el) {
+    if (el.classList.contains('eb-textbox')) { return el; }
+    return Array.from(el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, figcaption'))
+      .find((b) => !b.querySelector('p, h1, h2, h3, h4, h5, h6, li, td, th')
+        && (b.closest('.eb-anchor, .eb-textbox, aside.eb-box, .eb-frame') === el
+          || (el.contains(b) && !b.closest('.eb-anchor')))) || null;
+  }
+  /**
+   * 枠の中の字の無い所を押したとき、カーソルを押した所にいちばん近い字の位置へ置く。
+   * ブラウザは余白を押されると枠の外へカーソルを置くことがあり、それでは続けて打った
+   * 字もバックスペースも枠の外に効いてしまう。
+   */
+  function caretIntoFrameAt(el, x, y) {
+    const sel = window.getSelection();
+    const now = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    // なぞって字を選んだあとは、選んだ範囲をそのまま残す。置き直すのは、押しただけで
+    // カーソルが枠の外などへ行ったときだけ（なぞった範囲まで消していた。BUGS #49）。
+    if (now && !now.collapsed) { return; }
+    const inside = (n) => n && el.contains(n.nodeType === 3 ? n.parentNode : n)
+      && !((n.nodeType === 3 ? n.parentNode : n).closest('.eb-anchor') && !el.closest('.eb-anchor')
+        && (n.nodeType === 3 ? n.parentNode : n).closest('.eb-anchor') !== el.closest('.eb-anchor')
+        && el.contains((n.nodeType === 3 ? n.parentNode : n).closest('.eb-anchor')));
+    if (now && inside(now.startContainer)) { return; }
+    const blocks = el.classList.contains('eb-textbox') ? [el]
+      : Array.from(el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, pre, figcaption'))
+        .filter((b) => !b.querySelector('p, h1, h2, h3, h4, h5, h6, li, td, th')
+          && !(b.closest('.eb-anchor') && el.contains(b.closest('.eb-anchor'))));
+    if (!blocks.length) { return; }
+    // 押した高さにいちばん近い段落
+    let best = blocks[0]; let gap = Infinity;
+    blocks.forEach((b) => { const r = b.getBoundingClientRect();
+      const d = y < r.top ? r.top - y : (y > r.bottom ? y - r.bottom : 0);
+      if (d < gap) { gap = d; best = b; } });
+    const r = best.getBoundingClientRect();
+    const cx = Math.min(Math.max(x, r.left + 1), r.right - 1);
+    const cy = Math.min(Math.max(y, r.top + 1), r.bottom - 1);
+    let rg = document.caretRangeFromPoint ? document.caretRangeFromPoint(cx, cy) : null;
+    if (!rg || !best.contains(rg.startContainer)) {
+      rg = document.createRange();
+      rg.selectNodeContents(best);
+      rg.collapse(y < r.top);
+    }
+    rg.collapse(true);
+    selectRange(rg);
+    if (canvas() && document.activeElement !== canvas()) { canvas().focus(); }
+  }
   let frameTaken = false;
+  /** リンクの窓を開いた時に選んでいた写真（BUGS #228）。 */
+  let linkPic = null;
+  // 道具の列が出入りしたときに、紙を画面の同じ所に留めるため送った時刻。
+  let paperKeptAt = -1e9;
+  // 紙（本文の画面）を最後に押した時刻。
+  let canvasPressedAt = -1e9;
+  // 右クリックのメニューのためだけに掴んだ枠（キーでは消さない）。
+  let ctxTookFrame = null;
   // Objects held alongside the one with the bar on it. Shift adds and removes.
   let frameMore = [];
   const frameAll = () => [frameEl].concat(frameMore).filter((el) => el && el.parentNode);
   function deleteObject(el) {
     if (!el) { return; }
+    // A table cut at a page foot is one table in the same way: whichever piece of
+    // it is picked, the table goes -- as the layer bar deletes a cut paragraph, and
+    // as "Delete table" does (#29). Deleting the piece alone left the other piece
+    // standing, and at the next turn of the layout it was joined on to whatever
+    // came next: the table after it became part of this one (D9).
+    const c = canvas();
+    if (c && el.parentNode === c) {
+      const pieces = cutPieces(el);
+      if (pieces.length > 1) {
+        const last = pieces[pieces.length - 1];
+        let near = last.nextElementSibling;
+        while (near && near.classList && near.classList.contains('eb-pagespacer')) { near = near.nextElementSibling; }
+        if (!near) { near = pieces[0].previousElementSibling; }
+        pieces.forEach((p, i) => {
+          let gap = p.nextElementSibling;
+          while (i < pieces.length - 1 && gap && gap !== pieces[i + 1]) {
+            const next = gap.nextElementSibling;
+            if (gap.classList && gap.classList.contains('eb-pagespacer')) { gap.remove(); }
+            gap = next;
+          }
+          p.remove();
+        });
+        if (near && near.isConnected) { placeCaretIn(near); }
+        return;
+      }
+    }
     // A frame carried over two pages is one frame: deleting it deletes all of it,
     // not the first page of it with the rest left standing on the next.
     const lead = chainLead(el);
@@ -4184,7 +7346,10 @@ ${insideObjects('.eb-paper.boxed')} {
   // give it -1 and it disappears behind the page's own white. A browser paints
   // the root background under everything, so there is no layer between the paper
   // and the writing to put anything in. Measured, both ways, before it was cut.
-  const WRAP_MODES = ['none', 'left', 'right', 'through'];
+  const WRAP_MODES = ['none', 'left', 'right', 'through', 'both'];
+  // 両側に流すとき、図のどちらかの側がこれより狭ければ、そちらには文字を置かない（mm）。
+  // 片側の回り込みと同じ LibreOffice の決まり（下の WRAP_MIN_COLUMN）に揃える。
+  const WRAP_BOTH_MIN = 20;
   const WRAP_GAP = 3;
   // LibreOffice's own rule for the optimal wrap, read off its source: a side is
   // only wrapped on if at least TEXT_MIN of column is left there, and TEXT_MIN is
@@ -4200,7 +7365,14 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   function wrapMode(el) {
     const m = el && el.getAttribute ? (el.getAttribute('data-wrap') || '') : '';
-    return WRAP_MODES.indexOf(m) >= 0 ? m : 'none';
+    if (WRAP_MODES.indexOf(m) >= 0) { return m; }
+    // 以前の「本文の回り込み」（プロパティ下段のプルダウン、2026-09-22 に一本化して
+    // 廃止）で回り込ませた枠は data-wrap を持たず float だけを持つ。左に寄せた枠は
+    // 「右に文章」、右に寄せた枠は「左に文章」として読む。
+    const f = el && el.style ? (el.style.cssFloat || el.style.float || '') : '';
+    if (f === 'left') { return 'right'; }
+    if (f === 'right') { return 'left'; }
+    return 'none';
   }
   function wrapGap(el) {
     const g = parseFloat(el && el.getAttribute ? el.getAttribute('data-wrap-gap') : '');
@@ -4311,7 +7483,12 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   function clearWrapSpacers(root) {
-    if (root) { Array.from(root.querySelectorAll('span.eb-flow')).forEach((s) => s.remove()); }
+    if (!root) { return; }
+    Array.from(root.querySelectorAll('span.eb-flow')).forEach((s) => s.remove());
+    // 両側に流すための空きも。空きを入れるときに割った文字のつながりは戻す。
+    const parents = new Set();
+    Array.from(root.querySelectorAll('span.eb-gap')).forEach((s) => { if (s.parentNode) { parents.add(s.parentNode); } s.remove(); });
+    parents.forEach((p) => { try { p.normalize(); } catch (e) { /* nothing to join */ } });
   }
   /**
    * Write the spacers. Measured, so it must run after the page has been laid out.
@@ -4438,43 +7615,150 @@ ${insideObjects('.eb-paper.boxed')} {
       let height = 0;
       runs.forEach((s2) => { if ((side === 'left' ? s2.l : s2.r) > 0.05) { height = Math.max(height, s2.to); } });
       if (height <= 0) { return; }
-      const pt = (x, y) => mm(x) + 'mm ' + mm(y) + 'mm';
-      const points = [];
-      const within = runs.filter((s2) => s2.from < height - 0.01);
-      if (side === 'left') {
-        points.push(pt(0, 0));
-        within.forEach((s2) => {
-          const w = Math.min(s2.l, width);
-          points.push(pt(w, s2.from));
-          points.push(pt(w, Math.min(s2.to, height)));
-        });
-        points.push(pt(0, height));
-      } else {
-        points.push(pt(width, 0));
-        within.forEach((s2) => {
-          const w = Math.min(s2.r, width);
-          points.push(pt(width - w, s2.from));
-          points.push(pt(width - w, Math.min(s2.to, height)));
-        });
-        points.push(pt(width, height));
-      }
-      out[side] = 'float:' + side + ';width:' + mm(width) + 'mm;height:' + mm(height) + 'mm;'
-        + 'shape-outside:polygon(' + points.join(',') + ');';
+      // 帯そのものを返す。どの向きの CSS にするかは wrapStyle が決める ――
+      // 「幅」と「高さ」は、行に沿った長さと行が積まれる向きの深さであって、
+      // 画面の横幅・縦幅ではない。縦書きでは入れ替わる。
+      out[side] = { side: side, width: width, height: height,
+        runs: runs.filter((s2) => s2.from < height - 0.01)
+          .map((s2) => ({ from: s2.from, to: s2.to, w: side === 'left' ? s2.l : s2.r })) };
     });
     return out;
   }
+  /**
+   * 帯を CSS にする。
+   *
+   * 行に沿った長さは inline-size、行が積まれる向きの深さは block-size ―― 横書き
+   * では width と height そのもの、縦書きでは入れ替わる。浮きも inline-start /
+   * inline-end で言う。縦書きでは行が縦に並ぶので、左右に浮かせても本文はよけない。
+   * 実測（Chrome 140・vertical-rl）：inline-start と shape-outside はどちらも効く。
+   *
+   * @param drop 帯が実際には頭より下がって置かれた分。その分だけ形を引き上げる。
+   */
+  function wrapStyle(band, tate, mm, drop) {
+    const d = Math.max(0, drop || 0);
+    const deep = Math.max(0, band.height - d);
+    if (deep <= 0.05) { return ''; }
+    // 点は（行に沿った長さ, 行の向きの深さ）で作り、最後に画面の x y へ直す。
+    const pt = tate
+      ? (w, b2) => mm(deep - Math.max(0, Math.min(b2, band.height) - d)) + 'mm ' + mm(w) + 'mm'
+      : (w, b2) => mm(w) + 'mm ' + mm(Math.max(0, Math.min(b2, band.height) - d)) + 'mm';
+    const width = band.width;
+    const points = [];
+    if (band.side === 'left') {
+      points.push(pt(0, d));
+      band.runs.forEach((s2) => {
+        const w = Math.min(s2.w, width);
+        points.push(pt(w, s2.from));
+        points.push(pt(w, s2.to));
+      });
+      points.push(pt(0, band.height));
+    } else {
+      points.push(pt(width, d));
+      band.runs.forEach((s2) => {
+        const w = Math.min(s2.w, width);
+        points.push(pt(width - w, s2.from));
+        points.push(pt(width - w, s2.to));
+      });
+      points.push(pt(width, band.height));
+    }
+    return 'float:' + (band.side === 'left' ? 'inline-start' : 'inline-end')
+      + ';inline-size:' + mm(width) + 'mm;block-size:' + mm(deep) + 'mm;'
+      + 'shape-outside:polygon(' + points.join(',') + ');';
+  }
 
-  function applyWrap(root, zoom) {
+  /**
+   * An object told to keep "above and below" (上下) does not stand over another
+   * object either (owner 2026-09-29, BUGS #295: 「上下によける指定なのに、重なるのは
+   * だめだろ」). Of two that overlap in the same box -- the page, or one まとめ枠 --
+   * the one later in the document is moved down below the other, by its gap. The
+   * new place is written into its style (top), so the saved file shows them apart
+   * with no program to move them. Horizontal writing only; an object being dragged
+   * is left where the hand has it.
+   */
+  function separatePlaced(root, z) {
+    if (!root || !root.querySelectorAll) { return false; }
+    const tate = !!(root.classList && root.classList.contains('eb-tategaki')) || !!(root.closest && root.closest('.eb-tategaki'));
+    if (tate) { return false; }
+    const all = Array.from(root.querySelectorAll('.eb-anchor > *')).filter((o) => o.nodeType === 1
+      && !(o.classList && (o.classList.contains('eb-flow') || o.classList.contains('eb-gap')))
+      && objectFree(o) && (!window.getComputedStyle || window.getComputedStyle(o).visibility !== 'hidden'));
+    if (all.length < 2) { return false; }
+    const home = (o) => (o.parentNode && o.parentNode.parentNode) || null;
+    let moved = false;
+    for (let round = 0; round < 8; round += 1) {
+      let any = false;
+      for (let j = 1; j < all.length; j += 1) {
+        const b = all[j];
+        if (frameDrag && frameEl === b) { continue; }
+        for (let i = 0; i < j; i += 1) {
+          const a = all[i];
+          if (home(a) !== home(b) || a.contains(b) || b.contains(a)) { continue; }
+          // 重ね合わせ（自由配置・DTP のように置く）は例外：重なってよい（オーナー 2026-09-29）。
+          if (wrapMode(a) === 'through' || wrapMode(b) === 'through') { continue; }
+          if (wrapMode(a) !== 'none' && wrapMode(b) !== 'none') { continue; }
+          const ra = a.getBoundingClientRect();
+          const rb = b.getBoundingClientRect();
+          if (!ra.width || !ra.height || !rb.width || !rb.height) { continue; }
+          const gap = Math.max(wrapGap(a), wrapGap(b)) / MM * z;
+          const apart = rb.left >= ra.right || rb.right <= ra.left || rb.top >= ra.bottom + gap - 0.5 || rb.bottom <= ra.top;
+          if (apart) { continue; }
+          const down = (ra.bottom + gap) - rb.top;
+          if (!(down > 0.5)) { continue; }
+          const was = parseFloat(b.style.top) || 0;
+          b.style.top = round1(was + down / z * MM) + 'mm';
+          any = true;
+          moved = true;
+        }
+      }
+      if (!any) { break; }
+    }
+    return moved;
+  }
+  function applyWrap(root, zoom, opts) {
     if (!root) { return; }
     const z = zoom || 1;
+    separatePlaced(root, z);
+    // 両側に流すのは、JavaScript の文書だけ（オーナー 2026-09-21）。そうでない文書では
+    // 「両側」は「左に文章」として扱う ―― 設定を切っても、図に付けた選択は残しておき、
+    // もう一度入れれば元に戻る。
+    const bothOn = !!(opts && opts.both);
+    // プログラムの無い文書では、両側の代わりに空きの広い側へ回り込ませる
+    // （LibreOffice の「最適」と同じ考え方）。常に左にしていたので、図が右寄りだと
+    // 左に細い列ができて文章が崩れた（オーナー 2026-09-21）。
+    const side = new Map();
+    const modeOf = (o) => {
+      const m = wrapMode(o);
+      if (m !== 'both' || bothOn) { return m; }
+      if (!side.has(o)) {
+        const r = o.getBoundingClientRect();
+        const col = contentBox(root);
+        const t = !!(root.classList && root.classList.contains('eb-tategaki')) || !!(root.closest && root.closest('.eb-tategaki'));
+        const before = t ? r.top - col.top : r.left - col.left;
+        const after = t ? col.bottom - r.bottom : col.right - r.right;
+        side.set(o, before >= after ? 'left' : 'right');
+      }
+      return side.get(o);
+    };
     const mm = (px) => Math.round(px / z * MM * 10) / 10;
-    for (let pass = 0; pass < 4; pass += 1) {
+    // 行に沿った向き（inline）と、行が積まれる向き（block）。横書きでは前者が
+    // 左右・後者が上下、縦書きでは前者が上下・後者が右から左。以下の計算は
+    // どちらでも同じで、読む軸だけが変わる。block は右から左へ進むので、
+    // 縦書きでは x を符号反転して「進むほど大きい」に揃える。
+    const tate = !!(root.classList && root.classList.contains('eb-tategaki'))
+      || !!(root.closest && root.closest('.eb-tategaki'));
+    const inFrom = (r) => (tate ? r.top : r.left);
+    const inTo = (r) => (tate ? r.bottom : r.right);
+    const blFrom = (r) => (tate ? -r.right : r.top);
+    const blTo = (r) => (tate ? -r.left : r.bottom);
+    for (let pass = 0; pass < 6; pass += 1) {
       // Every object standing over the page, not only the ones that have been
       // told what to do: standing clear of the writing is the default.
       const objects = Array.from(root.querySelectorAll('.eb-anchor > *'))
-        .filter((o) => o.nodeType === 1 && ['none', 'left', 'right'].indexOf(wrapMode(o)) >= 0);
+        .filter((o) => o.nodeType === 1 && ['none', 'left', 'right', 'both'].indexOf(modeOf(o)) >= 0)
+        // 目のマークで隠した物（とそのレイヤー）は、字をよけさせない。
+        .filter((o) => !window.getComputedStyle || window.getComputedStyle(o).visibility !== 'hidden');
       if (!objects.length) { clearWrapSpacers(root); return; }
-      const before = objects.map((o) => o.getBoundingClientRect().top);
+      const before = objects.map((o) => blFrom(o.getBoundingClientRect()));
       // Writing that is itself standing on the page counts too. It was left out,
       // so a picture laid over a piece of writing that had been placed freely --
       // a text object, with its own box -- went straight through it: the words
@@ -4514,20 +7798,22 @@ ${insideObjects('.eb-paper.boxed')} {
           const side = st.cssFloat || st.float || '';
           if (side !== 'left' && side !== 'right') { return; }
           const r = el.getBoundingClientRect();
-          if (!r.width || r.bottom <= box.top || r.top >= box.bottom) { return; }
+          if (!r.width || blTo(r) <= blFrom(box) || blFrom(r) >= blTo(box)) { return; }
           // Measured against the edge of the writing, not from the float's own
           // width: what a float takes is everything between it and the margin it
           // sits against, its own margins included. Counting the width alone left
           // the band a few millimetres too wide to fit beside it -- and a float
           // that does not fit drops below, which is the whole trouble.
+          const m0 = parseFloat(tate ? st.marginBottom : st.marginRight) || 0;
+          const m1 = parseFloat(tate ? st.marginTop : st.marginLeft) || 0;
           const w = side === 'left'
-            ? (r.right + (parseFloat(st.marginRight) || 0)) - box.left
-            : box.right - (r.left - (parseFloat(st.marginLeft) || 0));
+            ? (inTo(r) + m0) - inFrom(box)
+            : inTo(box) - (inFrom(r) - m1);
           // Where it intrudes as well as by how much: a float that touches the top
           // of a paragraph takes nothing from the lines below it, and treating it
           // as if it took the whole column left an object further down the same
           // paragraph with no room at all -- the words ran straight through it.
-          if (w > 0) { out[side].push({ from: Math.max(0, r.top - box.top), to: r.bottom - box.top, w: w }); }
+          if (w > 0) { out[side].push({ from: Math.max(0, blFrom(r) - blFrom(box)), to: blTo(r) - blFrom(box), w: w }); }
         };
         Array.from(b.children).forEach(look);
         let prev = b.previousElementSibling;
@@ -4542,11 +7828,14 @@ ${insideObjects('.eb-paper.boxed')} {
       };
       // Nearest first, so two objects over the same paragraph reserve their room
       // one after the other instead of both measuring from the same edge.
-      objects.slice().sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+      objects.slice().sort((a, b) => blFrom(a.getBoundingClientRect()) - blFrom(b.getBoundingClientRect()))
         .forEach((o) => {
           const or = o.getBoundingClientRect();
           if (!or.width || !or.height) { return; }
-          const mode = wrapMode(o);
+          const mode = modeOf(o);
+          // 両側に流す図は帯では作れない（帯は行の端にしか立たない）。行の途中の
+          // 空きで作る ―― 帯を立て終えたあとで、wrapBothSides が。
+          if (mode === 'both') { return; }
           const gapPx = wrapGap(o) / MM * z;
           const done = new Set();
           const mine = stackRank(o);
@@ -4554,7 +7843,13 @@ ${insideObjects('.eb-paper.boxed')} {
           blocks.forEach((b) => {
             if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
             // Only what is underneath moves. See stackRank.
-            if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
+            // The pile only decides between things standing apart. The writing of a
+            // frame keeps clear of what is placed inside that same frame, whatever
+            // the frame's own place in the pile: a table put "above and below" in a
+            // まとめ枠 had the frame's paragraph run beside it (owner 2026-09-29,
+            // test2.html, BUGS #294) -- the paragraph took the frame's rank, 1000.
+            const home = b.closest ? b.closest('.eb-anchor') : null;
+            if (!(home && home.contains(o)) && stackRank(b) >= mine && stackRank(b) >= 0) { return; }
             // Only the writing from the line the thing hangs on, and only where
             // that writing is in the flow: pushing writing that stands above the
             // line would move the line itself, and the thing hanging from it,
@@ -4563,8 +7858,8 @@ ${insideObjects('.eb-paper.boxed')} {
             if (peg && peg.compareDocumentPosition && !b.closest('.eb-anchor')
               && (peg.compareDocumentPosition(b) & 2)) { return; }
             const cb = contentBox(b);
-            if (cb.bottom <= or.top - gapPx || cb.top >= or.bottom + gapPx) { return; }
-            if (cb.right <= or.left - gapPx || cb.left >= or.right + gapPx) { return; }
+            if (blTo(cb) <= blFrom(or) - gapPx || blFrom(cb) >= blTo(or) + gapPx) { return; }
+            if (inTo(cb) <= inFrom(or) - gapPx || inFrom(cb) >= inTo(or) + gapPx) { return; }
             // One band to each box the words are written in: the same paragraph
             // asked twice by the same object would reserve the room twice.
             // A band for each PARAGRAPH the thing lies over, and each one kept
@@ -4577,22 +7872,22 @@ ${insideObjects('.eb-paper.boxed')} {
             // it, and the words ending 76mm short of the circle they made room for.
             if (done.has(b)) { return; }
             done.add(b);
-            const room = cb.right - cb.left;
+            const room = inTo(cb) - inFrom(cb);
             let how = mode;
             // A column too narrow to write in is no wrap at all: LibreOffice's own
             // rule is twenty millimetres (TEXT_MIN, 1134 twips), and below that it
             // puts the words above and below instead. See WRAP_MIN_COLUMN.
             if (mode === 'left' || mode === 'right') {
               const beside = mode === 'left'
-                ? (or.left - gapPx - cb.left) * MM / z
-                : (cb.right - (or.right + gapPx)) * MM / z;
+                ? (inFrom(or) - gapPx - inFrom(cb)) * MM / z
+                : (inTo(cb) - (inTo(or) + gapPx)) * MM / z;
               if (beside < WRAP_MIN_COLUMN) { how = 'none'; }
             }
             const side = how === 'none' ? 'left' : (mode === 'right' ? 'left' : 'right');
             const width = how === 'none' ? room
-              : (side === 'left' ? (or.right + gapPx) - cb.left : cb.right - (or.left - gapPx));
-            const top = Math.max(0, (or.top - gapPx) - cb.top);
-            const bottom = Math.min((or.bottom + gapPx) - cb.top, cb.bottom - cb.top);
+              : (side === 'left' ? (inTo(or) + gapPx) - inFrom(cb) : inTo(cb) - (inFrom(or) - gapPx));
+            const top = Math.max(0, (blFrom(or) - gapPx) - blFrom(cb));
+            const bottom = Math.min((blTo(or) + gapPx) - blFrom(cb), blTo(cb) - blFrom(cb));
             if (width <= 0 || bottom <= top) { return; }
             need(b, side, { top: top, bottom: bottom, width: Math.min(width, room), room: room });
           });
@@ -4601,52 +7896,170 @@ ${insideObjects('.eb-paper.boxed')} {
       plan.forEach((rows, b) => {
         const pair = wrapPair(rows, rows.room, mm, rows.taken);
         ['left', 'right'].forEach((side) => {
-          const style = pair[side];
-          if (!style) { return; }
+          const band = pair[side];
+          if (!band) { return; }
           const spacer = document.createElement('span');
           spacer.className = 'eb-flow';
           spacer.setAttribute('contenteditable', 'false');
           spacer.setAttribute('aria-hidden', 'true');
-          spacer.setAttribute('style', style);
+          spacer.setAttribute('style', wrapStyle(band, tate, mm, 0));
           b.insertBefore(spacer, b.firstChild);
-          // The outline is drawn from the head of the paragraph, because that is
-          // where the spacer is put. But a float may not stand higher than the
-          // foot of a float that came before it, so a band belonging to an object
-          // further up the page pushed this one down -- and the room then opened
-          // below the thing it was made for, with the words running straight
-          // through the thing itself. Measured on the owner's page: a circle at
-          // 41.7mm down the paragraph, its room opened at 67.9mm, 26mm too low.
-          // The spacer is pulled back up to the head it was drawn from.
-          // The outline is drawn from the head of the paragraph, because that is
-          // where the spacer is put. But a float may not stand higher than the
-          // foot of a float that came before it, so a band belonging to an object
-          // further up the page pushes this one down -- and the room then opens
-          // below the thing it was made for, with the words running straight
-          // through the thing itself. Measured on a page of the owner's: a circle
-          // 41.7mm down the paragraph, its room opened at 67.9mm, 26mm too low.
-          //
-          // The spacer is not moved back up: shape-outside is measured from the
-          // float's own margin box, so a negative margin carries the outline with
-          // it and nothing is gained. What is redrawn is the outline itself, from
-          // where the float actually stands.
-          const head = contentBox(b).top;
-          const drop = spacer.getBoundingClientRect().top - head;
+          // 帯は段落の頭から描くが、先に置かれた浮きより前には立てないので、
+          // 実際には頭より深いところに置かれることがある。そのぶん形を引き上げる
+          // ―― さもないと、よけるための空きが物より先へずれて、物の上を文字が
+          // 通る。実測：段落の 41.7mm のところにある丸に対し、空きが 67.9mm に
+          // 開いた（26mm 下）。帯そのものは動かさない（shape-outside は帯の
+          // 外枠から測るので、負の余白では形ごと動いてしまう）。
+          const head = blFrom(contentBox(b));
+          const drop = blFrom(spacer.getBoundingClientRect()) - head;
           if (drop > 0.5) {
-            const d = mm(drop);
-            const shifted = (spacer.getAttribute('style') || '')
-              .replace(/polygon\(([^)]*)\)/, (all, pts) => 'polygon(' + pts.split(',').map((pt) => {
-                const q = pt.trim().split(/\s+/);
-                return q[0] + ' ' + Math.max(0, Math.round((parseFloat(q[1]) - d) * 10) / 10) + 'mm';
-              }).join(',') + ')')
-              .replace(/height:\s*([\d.]+)mm/, (all, h) =>
-                'height:' + Math.max(0, Math.round((parseFloat(h) - d) * 10) / 10) + 'mm');
-            spacer.setAttribute('style', shifted);
+            const redo = wrapStyle(band, tate, mm, drop);
+            if (redo) { spacer.setAttribute('style', redo); } else { spacer.remove(); }
           }
         });
       });
-      const after = objects.map((o) => o.getBoundingClientRect().top);
-      if (after.every((t, i) => Math.abs(t - before[i]) < 0.5)) { return; }
+      wrapBothSides(root, objects.filter((o) => modeOf(o) === 'both'), z, tate);
+      const after = objects.map((o) => blFrom(o.getBoundingClientRect()));
+      // 物が動かなくても、帯を立てたあとでまだ物の下に潜る行があれば、立てた帯の上で
+      // 測り直してもう一度組む。帯の高さは段落のもとの高さまでに抑えて決めるので、
+      // 写真が三つの段落にまたがると、一度では押し下げた行がまた写真にかかった
+      // （2026-09-22 点検で発見：「上下」で写真の下に 56 字が潜った）。
+      if (after.every((t, i) => Math.abs(t - before[i]) < 0.5) && !wordsUnder(objects, blocks, modeOf, tate)) { return; }
     }
+  }
+  /** 回り込ませる物（上下・左・右）の下に、まだ潜っている文字の行があるか。 */
+  function wordsUnder(objects, blocks, modeOf, tate) {
+    const rg = document.createRange();
+    for (let i = 0; i < objects.length; i += 1) {
+      const o = objects[i];
+      const m = modeOf(o);
+      if (m !== 'none' && m !== 'left' && m !== 'right') { continue; }
+      // 文章を持ってページをまたいで続く物（図形・枠）は、繰り返すと中の文章の配置が
+      // 崩れる（shapeflow で本文が版面から 27.9mm はみ出した）。写真などに限る。
+      if (chainable(o)) { continue; }
+      const or = o.getBoundingClientRect();
+      if (!or.width || !or.height) { continue; }
+      const mine = stackRank(o);
+      for (let j = 0; j < blocks.length; j += 1) {
+        const b = blocks[j];
+        if (o.contains(b) || b.contains(o)) { continue; }
+        if (stackRank(b) >= mine && stackRank(b) >= 0) { continue; }
+        const br = b.getBoundingClientRect();
+        if (br.bottom <= or.top || br.top >= or.bottom || br.right <= or.left || br.left >= or.right) { continue; }
+        const w = document.createTreeWalker(b, NodeFilter.SHOW_TEXT, null);
+        for (let t = w.nextNode(); t; t = w.nextNode()) {
+          if (!t.data.trim() || (t.parentNode.closest && t.parentNode.closest('.eb-anchor, .eb-flow, .eb-gap, rt'))) { continue; }
+          rg.selectNodeContents(t);
+          const rects = rg.getClientRects();
+          for (let k = 0; k < rects.length; k += 1) {
+            const r = rects[k];
+            if (r.width < 1 || r.height < 1) { continue; }
+            if (r.right > or.left + 1 && r.left < or.right - 1 && r.bottom > or.top + 1 && r.top < or.bottom - 1) { return true; }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 両側に流す ―― 図の左にも右にも文章を回す（LibreOffice の「並列」）。
+   *
+   * CSS の浮き（float）は行の端にしか立たないので、行の途中に空きを作れない。
+   * そこで、図の下に潜っている行ごとに、潜り始める文字の手前へ図の幅だけの
+   * 見えない空き（span.eb-gap）を入れる。その行の文章は図の手前で止まり、図の
+   * 先から続く。一つ入れると後の行の折り返しが変わるので、上の行から一つずつ
+   * 入れて測り直す。
+   *
+   * 図のどちらかの側が WRAP_BOTH_MIN より狭ければ、そちらには文字を置かない
+   * （細い隙間に一文字ずつ並ぶのを避ける。LibreOffice の最適の回り込みと同じ考え）。
+   *
+   * 縦書きでも同じ。行に沿った向き（inline）が上下になるだけで、計算は変わらない。
+   * 空きの大きさは mm で書くので、保存した文書でも同じ姿で読める。見る人の書体で
+   * 折り返しが変わったときは、文書のプログラムが計算し直す。
+   */
+  const NO_LINE_START = '、。，．・：；？！ゝゞーｰ）］｝〕〉》」』】〙〗〟’”ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ';
+  function wrapBothSides(root, objects, z, tate) {
+    if (!objects.length) { return; }
+    const inFrom = (r) => (tate ? r.top : r.left);
+    const inTo = (r) => (tate ? r.bottom : r.right);
+    const blFrom = (r) => (tate ? -r.right : r.top);
+    const blTo = (r) => (tate ? -r.left : r.bottom);
+    const pxPerMm = z / MM;
+    const minPx = WRAP_BOTH_MIN * pxPerMm;
+    const blocks = Array.from(root.querySelectorAll(TEXT_SEL))
+      .filter((b) => !b.closest('header.eb-header, footer.eb-footer'));
+    // 文字一つずつの箱。空き・帯・物の中の文字は数えない。
+    const boxesOf = (b) => {
+      const out = [];
+      const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT, {
+        acceptNode(t) {
+          for (let up = t.parentNode; up && up !== b; up = up.parentNode) {
+            if (up.classList && (up.classList.contains('eb-gap') || up.classList.contains('eb-flow')
+              || up.classList.contains('eb-anchor'))) { return NodeFilter.FILTER_REJECT; }
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      const rg = document.createRange();
+      let t = walk.nextNode();
+      while (t) {
+        for (let i = 0; i < t.data.length; i += 1) {
+          rg.setStart(t, i);
+          rg.setEnd(t, i + 1);
+          const r = rg.getBoundingClientRect();
+          if (r.width > 0 || r.height > 0) { out.push({ node: t, i: i, r: r }); }
+        }
+        t = walk.nextNode();
+      }
+      return out;
+    };
+    objects.forEach((o) => {
+      const or = o.getBoundingClientRect();
+      if (!or.width || !or.height) { return; }
+      const g = wrapGap(o) * pxPerMm;
+      const mine = stackRank(o);
+      const peg = o.parentNode;
+      blocks.forEach((b) => {
+        if (o.contains(b) || b.contains(o) || !b.parentNode) { return; }
+        if (stackRank(b) >= mine && stackRank(b) >= 0) { return; }
+        if (peg && peg.compareDocumentPosition && !b.closest('.eb-anchor')
+          && (peg.compareDocumentPosition(b) & 2)) { return; }
+        for (let guard = 0; guard < 300; guard += 1) {
+          const r0 = o.getBoundingClientRect();
+          const x0 = inFrom(r0) - g;
+          const x1 = inTo(r0) + g;
+          const y0 = blFrom(r0) - g;
+          const y1 = blTo(r0) + g;
+          const cb = contentBox(b);
+          if (blTo(cb) <= y0 || blFrom(cb) >= y1) { break; }
+          const all = boxesOf(b);
+          // 図の下に潜っている最初の文字。
+          const hit = all.find((c) => blTo(c.r) > y0 && blFrom(c.r) < y1
+            && inTo(c.r) > x0 + 0.5 && inFrom(c.r) < x1 - 0.5);
+          if (!hit) { break; }
+          const mid = (blFrom(hit.r) + blTo(hit.r)) / 2;
+          const line = all.filter((c) => blFrom(c.r) <= mid && blTo(c.r) >= mid);
+          let at = hit;
+          if (x0 - inFrom(cb) < minPx && line.length) { at = line[0]; }
+          // 行頭に来てはいけない字（。、」っ など）で分かれるときは、前の一字と一緒に
+          // 送る。「。」だけが写真の反対側に一字で残っていた（2026-09-22）。
+          const k = line.indexOf(hit);
+          if (at === hit && k > 0 && NO_LINE_START.indexOf(hit.node.data.charAt(hit.i)) >= 0) { at = line[k - 1]; }
+          const from = inFrom(at.r);
+          const width = (inTo(cb) - x1 < minPx) ? inTo(cb) - from : x1 - from;
+          if (!(width > 0.5)) { break; }
+          const gap = document.createElement('span');
+          gap.className = 'eb-gap';
+          gap.setAttribute('contenteditable', 'false');
+          gap.setAttribute('aria-hidden', 'true');
+          gap.setAttribute('style', 'display: inline-block; inline-size: ' + round1(width / z * MM)
+            + 'mm; block-size: 0; vertical-align: baseline;');
+          const where = at.i > 0 ? at.node.splitText(at.i) : at.node;
+          where.parentNode.insertBefore(gap, where);
+        }
+      });
+    });
   }
 
   function unitOf(value, unit) {
@@ -4855,6 +8268,30 @@ ${insideObjects('.eb-paper.boxed')} {
   // stack of real sheets, and a spacer is pushed in wherever a block would straddle
   // the join, so what is on screen is what comes out of the printer.
   const PAGE_GAP = 16;
+  /**
+   * How far a block may hang past the foot of a page before it is said to
+   * straddle the fold.
+   *
+   * Half a pixel was the old answer, and it is tighter than the paper itself.
+   * A box is a little longer than the writing in it -- a table's closing border
+   * is about a pixel -- and a browser printing a table that breaks across two
+   * pages draws that border on the boundary instead of sending a whole row over
+   * for it. Held to half a pixel, the editor moved a piece that the printer
+   * kept, and came out a row short: 13 rows on page one where the paper had 14,
+   * 7.7mm apart. A pixel and a half is 0.4mm on the paper -- below what can be
+   * seen, and below what printmatch can tell from the noise of its own camera.
+   *
+   * That is a table's allowance, and only a table's. A line of writing has no
+   * border for the printer to draw on the fold: a line whose box ends past the
+   * foot of the page goes to the next page on paper, however little past. Given
+   * the table's pixel and a half (and the half pixel the sheet was then read
+   * short by), a line 1.21px past the foot stayed on page one on the screen and
+   * printed at the top of page two (点検 L8). Everything else gets the half
+   * pixel the cut itself allows (cutOffsetIn), so the plan and the cut agree.
+   */
+  const FOLD_SLACK = 1.5;
+  const LINE_SLACK = 0.5;
+  function foldSlack(el) { return el && el.nodeName === 'TABLE' ? FOLD_SLACK : LINE_SLACK; }
   /** The colours the other people writing in a document are drawn in. */
   const MATE_COLOURS = ['#2563eb', '#c2410c', '#0f766e', '#7c3aed', '#b91c1c', '#0369a1'];
 
@@ -4909,16 +8346,382 @@ ${insideObjects('.eb-paper.boxed')} {
    * wrote, and the browser cuts it again in the same place when it prints it.
    */
   const FLOWCUT = 'data-eb-flowcut';
+  /**
+   * ページの区切り。保存するファイルでは、1ページの中身を1つの
+   * <div class="eb-page" id="page-1"> に入れる。次のページは page-2、page-3 …
+   * （オーナー 2026-09-23「それがそのページの最上位のタグだ」）。
+   *
+   * ページの境目をまたぐ段落・表・リストは、画面と同じ所で2つに分けて、それぞれの
+   * ページに入れる。分けた前の方に data-eb-flowcut="on" を付けておき、開くときに
+   * 一つに戻す（joinFlowCuts）。
+   */
+  const PAGE_DIV = 'eb-page';
+  /** ページの区切りを外し、中身を元の並びのまま親へ戻す。 */
+  function unpage(root) {
+    if (!root || !root.querySelectorAll) { return false; }
+    let any = false;
+    Array.from(root.querySelectorAll(':scope > div.' + PAGE_DIV)).forEach((pg) => {
+      while (pg.firstChild) { pg.parentNode.insertBefore(pg.firstChild, pg); }
+      pg.remove();
+      any = true;
+    });
+    return any;
+  }
+  /**
+   * 本文の直下の物が、それぞれ何ページ目に描かれているか（1から）。画面の詰め物は
+   * null。並びは崩さない：前の物より前のページとは答えない。改ページの印は、それが
+   * 終わらせるページに入る（続けて並んだ印は、その間の白紙のページに1つずつ）。
+   */
+  function pageNumbersOf(c) {
+    const g = pageGeometry();
+    if (!c || !g) { return null; }
+    let last = 1;
+    let prevBreak = false;
+    const list = Array.from(c.children).map((el) => {
+      if (el.classList && el.classList.contains('eb-pagespacer')) { return null; }
+      let n;
+      if (el.classList && el.classList.contains('eb-pagebreak')) {
+        n = prevBreak ? last + 1 : last;
+        prevBreak = true;
+      } else {
+        const top = g.tate ? (c.offsetWidth - el.offsetLeft - el.offsetWidth - g.mt) : (el.offsetTop - g.mt);
+        n = sheetIndexAt(top, g) + 1;
+        prevBreak = false;
+      }
+      if (!(n >= last)) { n = last; }
+      last = n;
+      return n;
+    });
+    return { list: list, pages: Math.max(g.pages || 1, last) };
+  }
+  /**
+   * ページで切った段落の2つ目以降と、枠の続きの部品は、組み直すたびに作り直され、
+   * そのたびに新しい名前（data-eb-id）がでたらめに付く。ファイルに書く名前は、元の
+   * 物の名前に番号を足した決まった名前にする ―― 同じ文書を開き直して保存しても、
+   * ファイルが変わらないように。開くときには一つに戻るので、この名前は残らない。
+   */
+  function stableNames(root) {
+    let base = '';
+    let k = 0;
+    let prevCut = false;
+    let prevName = '';
+    const conts = new Map();
+    Array.from(root.children).forEach((el) => {
+      if (!el.getAttribute) { return; }
+      if (prevCut && el.nodeName === prevName && base) {
+        k += 1;
+        el.setAttribute('data-eb-id', base + '-' + k);
+      } else {
+        base = el.getAttribute('data-eb-id') || '';
+        k = 0;
+      }
+      prevCut = el.hasAttribute(FLOWCUT);
+      prevName = el.nodeName;
+      // 続きの部品は、鎖の頭（本体、または本体の入れ物）の名前＋番号。置いたまとめ
+      // 枠の続きだけでなく、本文の中の枠の続き・図形と文字枠の続きも ―― それらは
+      // 組み直すたびにでたらめな名前が付き、開き直して保存するたびにファイルが
+      // 変わっていた（L22）。
+      const inner = hungOn(el);
+      if (inner && isCont(inner) && inner.matches && inner.matches(CHAIN_SEL)) {
+        const lead = chainLead(inner);
+        const name = lead && lead !== inner ? (chainHost(lead).getAttribute('data-eb-id') || '') : '';
+        if (name) {
+          const n = (conts.get(name) || 0) + 1;
+          conts.set(name, n);
+          el.setAttribute('data-eb-id', name + '-' + n);
+        }
+      }
+    });
+  }
+  /**
+   * 置いた物（写真・図形・枠）は、本文の中の入れ物（.eb-anchor）からの距離で描かれる。
+   * 入れ物が1ページ目にあって、物が3ページ目に描かれていることがある（test.html の
+   * 楕円・まとめ枠の続き）。ファイルでは、物を描かれているページの div に入れる：
+   * 入れ物をそのページの頭へ移し、移した先の入れ物の位置を画面で測って、その差だけ
+   * 距離を付け替える。描かれる場所は変わらない。
+   *
+   * 移した入れ物には、元の場所（前にあった物の名前）と元の距離を書いておき、開くとき
+   * に homeAnchors で元へ戻す。編集の中は保存の前とまったく同じになる ―― 枠の本体と
+   * 続きの並びも崩れない。縦書きはこの段階では移さない。
+   *
+   * 答え：本文の直下の番号 → { page, off（移した先からの距離 mm）, was（元の距離） }
+   */
+  function anchorMoves(c, pageNos) {
+    const geom = pageGeometry();
+    const out = new Map();
+    if (!c || !geom || geom.tate || !pageNos) { return out; }
+    // 何枚目の紙かは、紙と紙の間のまん中で分ける（sheetIndexAt）。ページの頭に
+    // 置いた仮の入れ物は、測ると紙の頭より 0.6px 上（1138.4 と 1139）に出ることが
+    // あり、「+0.5px まで」の決め方では前の紙と読まれた。移した物の top が折り目
+    // 1つ分（205px＝54mm）小さく書かれ、印刷で前のページに出ていた（点検 L11）。
+    const paperTopOf = (el) => {
+      const top = topOnPaper(el) - geom.mt;
+      return top - sheetIndexAt(top, geom) * geom.extra;
+    };
+    const kids = Array.from(c.children);
+    const wants = [];
+    kids.forEach((a, i) => {
+      if (!a.classList || !a.classList.contains('eb-anchor') || a.nodeName !== 'DIV') { return; }
+      const o = a.firstElementChild;
+      if (!o || !objectFree(o) || isTate(o)) { return; }
+      const was = freeOff(o);
+      if (!was) { return; }
+      const paper = paperTopOf(a) + lengthPx(was);
+      const page = Math.max(1, Math.floor((paper + 0.5) / geom.usable) + 1);
+      if (page === pageNos.list[i]) { return; }
+      wants.push({ i: i, page: page, paper: paper, was: was });
+    });
+    if (!wants.length) { return out; }
+    // 移した先に、中身の無い入れ物を仮に置いて測る。高さの無い物なので、ほかの物は
+    // 動かない。測ったらすぐ外す。
+    const probes = wants.map((w) => {
+      let before = null;
+      for (let j = 0; j < kids.length; j += 1) {
+        const n = pageNos.list[j];
+        if (n == null || j === w.i) { continue; }
+        if (n >= w.page) { before = kids[j]; break; }
+      }
+      const probe = document.createElement('div');
+      probe.className = 'eb-anchor';
+      if (before) { c.insertBefore(probe, before); }
+      else {
+        // 最後の物のすぐ後ろ（後ろに並ぶ画面の詰め物より前）。
+        let last = null;
+        for (let j = kids.length - 1; j >= 0; j -= 1) { if (pageNos.list[j] != null) { last = kids[j]; break; } }
+        c.insertBefore(probe, last ? last.nextSibling : c.firstChild);
+      }
+      return probe;
+    });
+    wants.forEach((w, k) => {
+      const off = w.paper - paperTopOf(probes[k]);
+      out.set(w.i, { page: w.page, off: round1(off * MM) + 'mm', was: w.was });
+    });
+    probes.forEach((p) => p.remove());
+    return out;
+  }
+  /**
+   * 保存したファイルを画面で開くと、紙は1枚ずつ（.eb-page）に分けて描く（BUGS #88）。
+   * 置いた物は入れ物からの距離（top）で描かれるが、紙を分けると入れ物の位置が編集の
+   * 画面とずれることがある。そこで本文の直下の入れ物の物には、描かれている紙の字の
+   * 書き始めからの距離（--eb-st）を書き添え、画面ではそれで描く。
+   *
+   * 枠の中などに結び付けた物は、その入れ物のあるページの紙から、別の紙へはみ出して
+   * 描かれていることがある（test.html：まとめ枠の最後に結び付けた写真が2ページ目に
+   * 描かれる）。紙を分けると紙と紙の間の分（上下の余白と紙の間）だけずれるので、何枚
+   * 先の紙に描かれているか（--eb-sp）を書き添え、画面ではその分だけ下げる。編集の画面
+   * が --eb-shift で下げているのと同じ。
+   *
+   * 印刷は top のまま（どちらも使わない）。開くとき・貼るときは cleanStyle が捨てる。
+   *
+   * 答え：本文の直下の番号 → { st: '12.3mm' | null, sp: [[何番目の物, 何枚先]] }
+   */
+  function sheetTops(c, pageNos, moves) {
+    const geom = pageGeometry();
+    const out = new Map();
+    if (!c || !geom || geom.tate || !pageNos) { return out; }
+    // 紙の決め方は anchorMoves と同じ（紙と紙の間のまん中で分ける）。
+    const paperOf = (top) => top - sheetIndexAt(top, geom) * geom.extra;
+    Array.from(c.children).forEach((el, i) => {
+      if (!el.querySelectorAll) { return; }
+      const mv = moves && moves.get(i);
+      const n = mv ? mv.page : pageNos.list[i];
+      if (!n) { return; }
+      let st = null;
+      const direct = el.classList.contains('eb-anchor') && el.nodeName === 'DIV' ? el.firstElementChild : null;
+      if (direct && !isTate(direct)) {
+        const paper = paperOf(topOnPaper(el) - geom.mt) + lengthPx(freeOff(direct));
+        st = round1((paper - (n - 1) * geom.usable) * MM) + 'mm';
+      }
+      const sp = [];
+      Array.from(el.querySelectorAll('.eb-anchor > *')).forEach((o, j) => {
+        if (o === direct || isTate(o)) { return; }
+        // 描かれている紙は、編集の画面に描かれている所から（--eb-shift で下げた後）。
+        const page = sheetIndexAt(topOnPaper(o) - geom.mt, geom) + 1;
+        if (page !== n) { sp.push([j, page - n]); }
+      });
+      if (st || sp.length) { out.set(i, { st: st, sp: sp }); }
+    });
+    return out;
+  }
+  /**
+   * 縦書きの文書で、紙に分けた画面の --eb-sp（sheetTops の縦書き版）。縦書きでは
+   * 入れ物を移さないので、本文の直下の入れ物の物も含めて、描かれている紙がページの
+   * div と違う物に、何枚先かを書き添える。紙の数え方は横書きと同じ（向きだけ違う）。
+   *
+   * 答え：本文の直下の番号 → { st: null, sp: [[何番目の物, 何枚先]] }
+   */
+  function sheetShiftsTate(c, pageNos) {
+    const geom = pageGeometry();
+    const out = new Map();
+    if (!c || !geom || !geom.tate || !pageNos) { return out; }
+    Array.from(c.children).forEach((el, i) => {
+      if (!el.querySelectorAll) { return; }
+      const n = pageNos.list[i];
+      if (!n) { return; }
+      const sp = [];
+      Array.from(el.querySelectorAll('.eb-anchor > *')).forEach((o, j) => {
+        // 紙の決め方は横書きと同じ（sheetIndexAt：紙と紙の間のまん中で分ける）。
+        const page = sheetIndexAt(topOnPaper(o) - geom.mt, geom) + 1;
+        if (page !== n) { sp.push([j, page - n]); }
+      });
+      if (sp.length) { out.set(i, { st: null, sp: sp }); }
+    });
+    return out;
+  }
+  /** 保存するときに移した入れ物を、元の場所・元の距離へ戻す（開くとき・貼るとき）。 */
+  function homeAnchors(root) {
+    if (!root || !root.querySelectorAll) { return false; }
+    let left = Array.from(root.querySelectorAll(':scope > .eb-anchor[data-eb-home]'));
+    const any = left.length > 0;
+    for (let pass = 0; pass < 20 && left.length; pass += 1) {
+      const still = [];
+      left.forEach((a) => {
+        const home = a.getAttribute('data-eb-home');
+        let after = null;
+        if (home !== '^') {
+          after = Array.from(root.children).find((k) => k !== a && k.getAttribute && k.getAttribute('data-eb-id') === home) || null;
+          // 前にあった物も移されていて、まだ戻っていない：次の回に。
+          if (!after || after.hasAttribute('data-eb-home')) { still.push(a); return; }
+        }
+        // 先頭（^）は、最初の要素の前。ファイルの冒頭の改行などの字の前には入れない。
+        const first = Array.from(root.children).find((k) => k !== a) || null;
+        root.insertBefore(a, after ? after.nextSibling : first);
+        const o = a.firstElementChild;
+        const was = a.getAttribute('data-eb-top0');
+        if (o && o.style && was) { o.style.setProperty('top', was); }
+        a.removeAttribute('data-eb-home');
+        a.removeAttribute('data-eb-top0');
+      });
+      if (still.length === left.length) {
+        // 元の場所が見つからない（ほかのソフトで直された）。今の場所に置いたまま印だけ外す。
+        still.forEach((a) => { a.removeAttribute('data-eb-home'); a.removeAttribute('data-eb-top0'); });
+        break;
+      }
+      left = still;
+    }
+    return any;
+  }
+  /** 印（data-eb-pg）の付いた直下の物を、ページごとの div に入れる。空のページも書く。 */
+  function intoPages(root, pages) {
+    const kids = Array.from(root.children);
+    const made = [];
+    const pageDiv = (n) => {
+      while (made.length < n) {
+        const d = root.ownerDocument.createElement('div');
+        d.className = PAGE_DIV;
+        d.id = 'page-' + (made.length + 1);
+        made.push(d);
+      }
+      return made[n - 1];
+    };
+    let at = 1;
+    const moved = [];
+    kids.forEach((el) => {
+      const n = parseInt(el.getAttribute && el.getAttribute('data-eb-pg'), 10);
+      if (el.removeAttribute) { el.removeAttribute('data-eb-pg'); }
+      if (el.hasAttribute && el.hasAttribute('data-eb-home')) { moved.push({ el: el, n: n || 1 }); return; }
+      if (n > at) { at = n; }
+      pageDiv(at).appendChild(el);
+    });
+    pageDiv(Math.max(pages || 1, at, 1));
+    // 移した入れ物は、そのページの頭へ（測ったのもそこ）。並びは元の順のまま。
+    moved.reverse().forEach((m) => { const d = pageDiv(m.n); d.insertBefore(m.el, d.firstChild); });
+    made.forEach((d) => root.appendChild(d));
+  }
+  /**
+   * ページの折り目で切った塊（段落・表・リスト）の切れ端をたどる。切れ端の間に
+   * 立つのは画面の詰め物と、置いた物の入れ物（高さの無い杭）だけ。
+   */
+  function isCutGap(n) {
+    return !!(n && n.classList && (n.classList.contains('eb-pagespacer') || n.classList.contains('eb-anchor')));
+  }
+  /** 切った塊の頭の切れ端。切れていない塊・切れの頭ならそれ自身。 */
+  function cutHead(el) {
+    let n = el;
+    while (n && n.nodeType === 1) {
+      let back = n.previousElementSibling;
+      while (isCutGap(back)) { back = back.previousElementSibling; }
+      if (!back || !back.hasAttribute || !back.hasAttribute(FLOWCUT) || back.nodeName !== n.nodeName) { break; }
+      n = back;
+    }
+    return n;
+  }
+  /** 切った塊の切れ端すべて（頭から順に）。切れていなければ [el]。 */
+  function cutPieces(el) {
+    const head = cutHead(el);
+    if (!head || head.nodeType !== 1) { return el ? [el] : []; }
+    const out = [head];
+    let n = head;
+    while (n.hasAttribute && n.hasAttribute(FLOWCUT)) {
+      let next = n.nextElementSibling;
+      while (isCutGap(next)) { next = next.nextElementSibling; }
+      if (!next || next.nodeName !== n.nodeName) { break; }
+      out.push(next);
+      n = next;
+    }
+    return out;
+  }
+  /**
+   * 置いた物の入れ物が、切った塊の切れ端と切れ端の間に立っていれば、塊の頭の前へ
+   * 移す。物は描かれている所から動かさない（入れ物からの距離を測り直す）。
+   *
+   * 間に入れ物が立ったまま一つに戻そうとすると、隣が別の物なので「つなげない」と
+   * 判断され、しかも切った印はもう外してあるので、段落が以後ずっと二つに割れた
+   * まま保存された（L13・D10：後ろの切れ端の上に写真を置いたとき）。入れ物は
+   * 高さの無い杭なので、動かしても字の並びは変わらない ―― だから全部を先に移し、
+   * 測り終えてから一つに戻す（戻すと下の字が動き、測る値が変わる）。
+   */
+  function liftPegsOutOfCuts(root) {
+    const geom = pageGeometry();
+    if (!geom) { return false; }
+    let moved = false;
+    Array.from(root.querySelectorAll(':scope > [' + FLOWCUT + ']')).forEach((first) => {
+      let n = first.nextElementSibling;
+      const pegs = [];
+      while (isCutGap(n)) { if (n.classList.contains('eb-anchor')) { pegs.push(n); } n = n.nextElementSibling; }
+      if (!pegs.length || !n || n.nodeName !== first.nodeName) { return; }
+      const head = cutHead(first);
+      pegs.forEach((peg) => {
+        const things = Array.from(peg.children).filter((o) => objectFree(o));
+        const drawn = things.map((o) => topOnPaper(o) - geom.mt);
+        head.parentNode.insertBefore(peg, head);
+        things.forEach((o, i) => { placeFreeAt(o, geom, drawn[i]); });
+        moved = true;
+      });
+    });
+    return moved;
+  }
   /** Put every paragraph the editor cut at a page foot back together again. */
   function joinFlowCuts(root) {
     if (!root || !root.querySelector) { return false; }
+    // On the page, where things can be measured: pegs standing between two pieces
+    // go ahead of the whole block first (see liftPegsOutOfCuts).
+    const live = root === canvas();
+    if (live) { liftPegsOutOfCuts(root); }
     let any = false;
+    // Pieces that cannot be put back yet, because a peg stands between them and
+    // there is no page here to measure where to move it to (a file being opened,
+    // a copy being written out). They keep their mark and are put back on the
+    // page, at the next turn of the layout.
+    const held = new Set();
     for (let guard = 0; guard < 2000; guard += 1) {
-      const first = root.querySelector('[' + FLOWCUT + ']');
+      let first = root.querySelector('[' + FLOWCUT + ']');
+      if (first && held.has(first)) {
+        first = Array.prototype.find.call(root.querySelectorAll('[' + FLOWCUT + ']'), (el) => !held.has(el)) || null;
+      }
       if (!first) { break; }
+      let peek = first.nextElementSibling;
+      let pegged = false;
+      while (isCutGap(peek)) { if (peek.classList.contains('eb-anchor')) { pegged = true; } peek = peek.nextElementSibling; }
+      if (pegged && peek && peek.nodeName === first.nodeName) { held.add(first); continue; }
       first.removeAttribute(FLOWCUT);
       first.removeAttribute('data-split');
       first.style.removeProperty('margin-block-end');
+      // The edge sliceEdge drew open at the cut (only boxes it opens).
+      if (SLICED.test(first.nodeName)) {
+        first.style.removeProperty('padding-block-end');
+        first.style.removeProperty('border-block-end');
+      }
       if (!first.getAttribute('style')) { first.removeAttribute('style'); }
       let rest = first.nextElementSibling;
       while (rest && rest.classList && rest.classList.contains('eb-pagespacer')) {
@@ -4936,6 +8739,44 @@ ${insideObjects('.eb-paper.boxed')} {
       any = true;
     }
     return any;
+  }
+  /**
+   * 切った塊を一つだけ一つに戻す（joinFlowCuts の一つ分）。注の一覧と目次は
+   * 「文書に一つ」として探して書き換えるので、ページで切れたまま触ると、前の
+   * 切れ端だけが書き換わる：注の番号を振り直すと後ろの切れ端の注が行き先の無い
+   * 物として消え、目次を作り直すと後ろの切れ端が古い目次として残る。書き換える
+   * 前に一つに戻す。次の組み直しでまた切る。
+   */
+  function joinCutBlock(el) {
+    if (!el || !el.parentNode) { return el; }
+    const pieces = cutPieces(el);
+    const head = pieces[0];
+    if (!head) { return el; }
+    if (pieces.length > 1) {
+      const pegged = pieces.slice(1).some((p) => {
+        for (let n = p.previousElementSibling; isCutGap(n); n = n.previousElementSibling) {
+          if (n.classList.contains('eb-anchor')) { return true; }
+        }
+        return false;
+      });
+      if (pegged && head.parentNode === canvas()) { liftPegsOutOfCuts(head.parentNode); }
+      pieces.slice(1).forEach((rest) => {
+        let n = head.nextElementSibling;
+        while (n && n !== rest && n.classList && n.classList.contains('eb-pagespacer')) { const gone = n; n = n.nextElementSibling; gone.remove(); }
+        rest.style.removeProperty('margin-block-start');
+        if (head.nodeName === 'TABLE') { mergeTableInto(head, rest); } else { mergeCut(head, rest); }
+        rest.remove();
+      });
+    }
+    head.removeAttribute(FLOWCUT);
+    head.removeAttribute('data-split');
+    head.style.removeProperty('margin-block-end');
+    if (SLICED.test(head.nodeName)) {
+      head.style.removeProperty('padding-block-end');
+      head.style.removeProperty('border-block-end');
+    }
+    if (!head.getAttribute('style')) { head.removeAttribute('style'); }
+    return head;
   }
   /**
    * Put a block back together with the rest of it, however deep the cut went. A
@@ -4978,9 +8819,53 @@ ${insideObjects('.eb-paper.boxed')} {
     if (own) { return own === 'avoid' || own === 'avoid-page'; }
     return !!(el && KEEP_WITH_NEXT.test(el.nodeName));
   }
-  /** What a page foot may be allowed to fall inside, and what it may not. */
-  const FLOW_BOXES = /^(UL|OL)$/;
-  function flowCuttable(el) {
+  /**
+   * Whether the writer asked for a new page before (or after) this block, in the
+   * block's own style -- what the paragraph dialogue's 「この段落の前で改ページ」
+   * writes (break-before: page). A browser printing the file breaks the page
+   * there, so the editor has to as well: it only ever looked at its own marks
+   * (eb-pagebreak, eb-cont, eb-blankpage), and a paragraph told to start a page
+   * went on down the same one -- 11 lines on one page on the screen, 6 and 5 on
+   * paper (点検 L7). Read from the markup, like keepsWithNext, and for the same
+   * reason.
+   */
+  const PAGE_BREAK_VALUES = /^(page|always|left|right|recto|verso)$/;
+  function breaksBefore(el) {
+    const own = el && el.style ? (el.style.breakBefore || el.style.pageBreakBefore) : '';
+    return !!own && PAGE_BREAK_VALUES.test(own);
+  }
+  function breaksAfter(el) {
+    const own = el && el.style ? (el.style.breakAfter || el.style.pageBreakAfter) : '';
+    return !!own && PAGE_BREAK_VALUES.test(own);
+  }
+  /**
+   * What a page foot may be allowed to fall inside, and what it may not.
+   *
+   * A list, a quotation and a definition list are cut between the blocks inside
+   * them, and inside the one the cut falls in. A browser printing the file cuts
+   * all three; the editor cut only lists, and a quotation or a 人物一覧 (a dl)
+   * crossing a fold went over whole on the screen -- 509px of white at the foot
+   * of page one where the paper had twelve more lines -- or, longer than a page,
+   * ran on through the folds: nine lines of a quotation in the margins, three
+   * definition lists of 源氏物語 across four sheets (点検 L6).
+   */
+  // 目次（nav）と注の一覧（section）も、中の物の間で切る。1ページより長い目次や
+  // 注の一覧は切られず、下の余白や紙の間に字が出て、印刷とページの中身が違った
+  // （BUGS #220）。LibreOffice でも目次と注はページをまたいで続く。
+  const FLOW_BOXES = /^(UL|OL|BLOCKQUOTE|DL|NAV|SECTION)$/;
+  /** The items of those: cut at a line when they hold only words, between their blocks when they hold blocks. */
+  const FLOW_ITEMS = /^(LI|DD|DT)$/;
+  /** What makes an item one that holds blocks rather than a line of words. */
+  const BLOCK_TAGS = /^(P|DIV|UL|OL|DL|DT|DD|LI|TABLE|BLOCKQUOTE|PRE|H[1-6]|FIGURE|FIGCAPTION|SECTION|ARTICLE|ASIDE|NAV|HEADER|FOOTER|MAIN|ADDRESS|HR|FORM|FIELDSET|DETAILS|SUMMARY|MENU|CENTER)$/;
+  function holdsBlocks(el) {
+    return Array.from(el.children).some((k) => BLOCK_TAGS.test(k.nodeName));
+  }
+  /** Whether the stylesheet says a box is not to be broken. */
+  function keptWhole(el) {
+    const keep = window.getComputedStyle(el).getPropertyValue('break-inside');
+    return keep === 'avoid' || keep === 'avoid-page';
+  }
+  function flowCuttable(el, longer) {
     if (!el || el.nodeType !== 1 || !el.matches) { return false; }
     if (el.classList.contains('eb-cont') || el.classList.contains('eb-textbox')) { return false; }
     if (el.hasAttribute('data-frame-height')) { return false; }
@@ -4988,12 +8873,18 @@ ${insideObjects('.eb-paper.boxed')} {
     // column: it has a page because of where it is drawn, and the frame chain
     // is what carries it over.
     if (objectFree(el)) { return false; }
-    // A box the stylesheet says is never to be broken -- a quotation, a callout,
-    // a picture with its caption -- is not broken here either, because the
-    // printer will not break it. What the printer does is the measure.
-    const keep = window.getComputedStyle(el).getPropertyValue('break-inside');
-    if (keep === 'avoid' || keep === 'avoid-page') { return false; }
-    return el.matches(TEXT_BLOCKS) || FLOW_BOXES.test(el.nodeName) || el.nodeName === 'TABLE';
+    // A box the stylesheet says is never to be broken -- a program listing, a
+    // callout, a picture with its caption, a paragraph told to keep together --
+    // is not broken here either, because the printer will not break it. What the
+    // printer does is the measure -- and a box of these that is longer than a
+    // page, the printer breaks all the same: it takes the listing to the head of
+    // the next page and cuts it at that page's foot. The editor let it run
+    // through the fold where it stood, nine lines of it in the margins, where
+    // the paper had one line on page one and the listing on pages two and three
+    // (点検 L6). `longer` says the block is longer than a page.
+    if (!longer && keptWhole(el)) { return false; }
+    return el.matches(TEXT_BLOCKS) || el.nodeName === 'PRE' || FLOW_BOXES.test(el.nodeName) || el.nodeName === 'TABLE'
+      || el.matches('div.eb-cols');
   }
   /**
    * Where a block may be cut so that neither page is left with a single line of
@@ -5024,38 +8915,90 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   function carveAt(el, limit) {
     if (!el || el.nodeType !== 1 || limit <= 0) { return null; }
-    if (el.matches(TEXT_BLOCKS)) {
+    if (el.nodeName === 'DIV' && el.classList.contains('eb-cols')) { return carveCols(el, limit); }
+    // A paragraph, a program listing, and an item of a list that holds nothing
+    // but words, are all cut at a line. An item used to be cut nowhere at all --
+    // carveAt answered null for anything that was not a paragraph -- so a long
+    // item crossing a fold went over whole (30 32 8 lines on the screen, 30 36 4
+    // on paper) and one longer than a page ran through the margins (点検 L5).
+    if (el.matches(TEXT_BLOCKS) || el.nodeName === 'PRE' || (FLOW_ITEMS.test(el.nodeName) && !holdsBlocks(el))) {
       // Two lines have to stay and two have to go, the same rule the printer
       // keeps of its own accord. Cutting an item of a list one line too late is
       // how the screen and the paper came apart by 6.3mm in 縦書き.
       const want = widowSafe(limit, sizeAlong(el, isTate(el)), lineOf(el));
       if (want < 0) { return null; }
       const at = cutOffsetIn(el, want);
-      return at > 0 ? splitBlockAt(el, at) : null;
+      const rest = at > 0 ? splitBlockAt(el, at) : null;
+      // A listing's lines end in a newline of their own. Cut just before it, the
+      // newline went to the head of the rest and the next page began with an
+      // empty line the printer does not draw; it ends the line before it.
+      if (rest && el.nodeName === 'PRE') { newlineBack(el, rest); }
+      return rest;
     }
     const tate = isTate(el);
     // A table is cut between its rows, along whichever axis the writing runs.
-    // 2026-09-08 に縦書きへ回したが、画面と紙が合わなかったので戻した。
-    // printmatch「縦書きの長い表」1ページ目 左21.7mm / 2ページ目 左-51.6mm。
-    // 合うようにしてから、また回す。それまでは縦書きで表は丸ごと扱う。
-    if (el.nodeName === 'TABLE') { return tate ? null : splitTableAt(el, limit); }
-    if (!FLOW_BOXES.test(el.nodeName)) { return null; }
+    // Left whole in 縦書き, a table longer than a page ran straight through the
+    // folds: on the owner's own 見本3_議事録と表, 21 lines of it were drawn in
+    // the gaps between the sheets -- 「第35号議案」「事業計画の報告」「可決」
+    // sitting on the join, half on one sheet and half on the next.
+    if (el.nodeName === 'TABLE') { return splitTableAt(el, limit); }
+    // An item holding blocks (paragraphs, a list within the list) is cut like
+    // the list itself: between those blocks, and inside the one the cut falls in.
+    if (!FLOW_BOXES.test(el.nodeName) && !FLOW_ITEMS.test(el.nodeName)) { return null; }
     const kids = Array.from(el.children);
     if (kids.length < 1) { return null; }
     const box = el.getBoundingClientRect();
-    const scale = scaleOf(el, box, tate);
+    const scale = paperZoom(el);
     const at = (k) => startIn(box, k.getBoundingClientRect(), tate) / scale;
+    const size = (k) => { const r = k.getBoundingClientRect(); return (tate ? r.width : r.height) / scale; };
     let first = -1;
     for (let i = 0; i < kids.length; i += 1) {
-      if (at(kids[i]) + sizeAlong(kids[i], tate) > limit + 0.5) { first = i; break; }
+      if (at(kids[i]) + size(kids[i]) > limit + 0.5) { first = i; break; }
+    }
+    // 中の物は全部入るのに、箱の終わりの内側の余白（引用の padding-block-end など）
+    // だけが入らない。印刷は箱の終わりの余白だけを次の紙へ送らず、最後の物の終わりの
+    // 行（孤立行の決まりで2行）を一緒に送る。ここで切らずにいると、箱は丸ごと次の
+    // 紙へ送られた（#263：1段落の引用が1〜2行はみ出すと、画面では丸ごと次の紙、
+    // 印刷では切って続けた）。最後の物を、少なくとも1行は残らない深さで切る ――
+    // 何行送るかは widowSafe が決める（2行）。
+    if (first < 0 && kids.length && (tate ? box.width : box.height) / scale > limit + 0.5) {
+      const last = kids.length - 1;
+      const lastTop = at(kids[last]);
+      if (lastTop < limit - 2 && !keptWhole(kids[last])) {
+        first = last;
+        const rest = carveAt(kids[last], Math.min(limit - lastTop, size(kids[last]) - 0.5));
+        if (!rest) { return null; }
+        kids[last].setAttribute('data-split', 'on');
+        if (rest.nodeName === 'LI') { rest.style.setProperty('list-style-type', 'none'); }
+        if (last === 0 && !String(kids[0].textContent || '').replace(/\s/g, '')) { return null; }
+        const shell0 = el.cloneNode(false);
+        shell0.removeAttribute('id');
+        shell0.removeAttribute('data-eb-id');
+        if (el.nodeName === 'OL') {
+          const start = Number(el.getAttribute('start') || 1) || 1;
+          shell0.setAttribute('start', String(start + Math.max(0, kids.length - 1)));
+        }
+        shell0.appendChild(rest);
+        return shell0;
+      }
     }
     if (first < 0) { return null; }
+    // Only elements are carried over. Words standing loose after them in the
+    // same box would be left behind, ahead of what came before them.
+    for (let n = kids[first].nextSibling; n; n = n.nextSibling) {
+      if (n.nodeType === 3 && n.data.trim()) { return null; }
+    }
     let carry = kids.slice(first);
     const top = at(kids[first]);
-    if (top < limit - 2) {
+    // Not a block the stylesheet keeps whole: the printer takes it over whole.
+    if (top < limit - 2 && !keptWhole(kids[first])) {
       const rest = carveAt(kids[first], limit - top);
       if (rest) {
         kids[first].setAttribute('data-split', 'on');
+        // The rest of an item is not a new item: on paper the bullet or the
+        // number is drawn once, on the page the item begins on. It still counts
+        // (it IS that item), so a numbered list goes on from the right number.
+        if (rest.nodeName === 'LI') { rest.style.setProperty('list-style-type', 'none'); }
         carry = [rest].concat(kids.slice(first + 1));
       }
     }
@@ -5063,20 +9006,158 @@ ${insideObjects('.eb-paper.boxed')} {
     const shell = el.cloneNode(false);
     shell.removeAttribute('id');
     shell.removeAttribute('data-eb-id');
-    // A numbered list carried on goes on counting where it left off.
+    // A numbered list carried on goes on counting where it left off. An item cut
+    // in two is counted in the rest of the list as well -- its number is not
+    // drawn there -- so the count is of the items wholly left behind.
     if (el.nodeName === 'OL') {
       const start = Number(el.getAttribute('start') || 1) || 1;
-      const stayed = kids.length - carry.length + (carry[0] !== kids[first] ? 1 : 0);
+      const stayed = kids.length - carry.length;
       shell.setAttribute('start', String(start + Math.max(0, stayed)));
     }
     carry.forEach((k) => shell.appendChild(k));
     return shell;
   }
   /**
+   * 段組み（div.eb-cols）をページの終わりで切る（BUGS #264）。1ページより長い段組みは
+   * 切られず、紙の間や紙の外に字が出て、印刷とページの中身が違った。
+   *
+   * このページに入る分は、段を順に詰めて（column-fill: auto）この長さで止めた時に、
+   * 段の中に収まる所まで ―― 印刷するブラウザも LibreOffice も、ページの終わりに
+   * かかる段組みはそう詰める。はみ出した最初の字のある段落をその字の前で切り（段落で
+   * なければその塊の前で）、残りを同じ段組みの入れ物に入れて返す。切った前の方は
+   * 段をそろえて描く（その中身は、この長さの段に順に詰めて入る量なので、そろえても
+   * この長さを越えない）。保存したファイルも同じ二つの入れ物を持つので、画面と
+   * 印刷が同じになる。
+   */
+  function carveCols(el, limit) {
+    // 順に詰めて入る量でも、段をそろえると（ブラウザのそろえ方で）1px ほど長く
+    // なることがある。そのときは少し短い長さで切り直す（行の半分ずつ、数回まで）。
+    const tate = isTate(el);
+    const step = Math.max(4, (lineOf(el.firstElementChild || el) || 16) / 2);
+    for (let tries = 0, at = limit; tries < 6 && at > step; tries += 1, at -= step) {
+      const rest = colsCutAt(el, at);
+      if (!rest) { if (sizeAlong(el, tate) <= limit + 0.5) { return null; } continue; }
+      if (sizeAlong(el, tate) <= limit + 0.5) { return rest; }
+      // 長すぎた：戻して、もう少し短く。
+      mergeCut(el, rest);
+    }
+    return null;
+  }
+  function colsCutAt(el, limit) {
+    const tate = isTate(el);
+    if (Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.data.trim())) { return null; }
+    const blocks = Array.from(el.children);
+    if (blocks.length < 1 || blocks.some((b) => b.classList && (b.classList.contains('eb-anchor') || b.classList.contains('eb-pagebreak')))) { return null; }
+    const was = el.getAttribute('style');
+    el.style.setProperty('column-fill', 'auto');
+    el.style.setProperty(tate ? 'width' : 'height', limit + 'px');
+    let cutBlock = -1;
+    let cutChars = 0;
+    try {
+      const box = el.getBoundingClientRect();
+      // 段の外（並びの先の、はみ出した段）にあるか。横書きは右へ、縦書きは下へ段が進む。
+      const outside = (r) => (tate ? r.top >= box.bottom - 1 : r.left >= box.right - 1);
+      const stops = caretStops(el);
+      const starts = [];
+      let total = 0;
+      stops.forEach((n) => { starts.push(total); total += n.data.length; });
+      const charAt = (k) => {
+        let i = starts.length - 1;
+        while (i > 0 && starts[i] > k) { i -= 1; }
+        while (i < stops.length - 1 && k - starts[i] >= stops[i].data.length) { i += 1; }
+        return { node: stops[i], offset: k - starts[i] };
+      };
+      const out = (k) => {
+        const at = charAt(k);
+        if (!at.node || at.offset >= at.node.data.length) { return false; }
+        const r = document.createRange();
+        r.setStart(at.node, at.offset);
+        r.setEnd(at.node, at.offset + 1);
+        const rect = Array.from(r.getClientRects()).find((x) => x.width > 0 || x.height > 0);
+        return !!rect && outside(rect);
+      };
+      // はみ出した最初の字（字の並びの順に、段も順に進むので、二分探しでよい）。
+      let first = -1;
+      if (total && out(total - 1)) {
+        let lo = 0;
+        let hi = total - 1;
+        while (lo < hi) {
+          const mid = Math.floor((lo + hi) / 2);
+          if (out(mid)) { hi = mid; } else { lo = mid + 1; }
+        }
+        first = lo;
+      }
+      // 字の無い塊（写真・表の絵）がそれより前ではみ出していれば、そこで切る。
+      const home = (node) => { let n = node; while (n && n.parentNode !== el) { n = n.parentNode; } return n; };
+      const firstBlock = first >= 0 ? blocks.indexOf(home(charAt(first).node)) : blocks.length;
+      for (let i = 0; i < Math.min(firstBlock, blocks.length); i += 1) {
+        const rs = Array.from(blocks[i].getClientRects());
+        if (rs.length && rs.every(outside)) { cutBlock = i; cutChars = 0; break; }
+      }
+      if (cutBlock < 0 && first >= 0) {
+        cutBlock = firstBlock;
+        const own = caretStops(blocks[cutBlock]);
+        const at = charAt(first);
+        let k = 0;
+        for (const n of own) { if (n === at.node) { k += at.offset; break; } k += n.data.length; }
+        cutChars = k;
+      }
+    } finally {
+      if (was == null) { el.removeAttribute('style'); } else { el.setAttribute('style', was); }
+    }
+    if (cutBlock < 0) { return null; }
+    const b = blocks[cutBlock];
+    let rest = null;
+    if (cutChars > 0 && (b.matches(TEXT_BLOCKS) || b.nodeName === 'PRE') && !keptWhole(b)) {
+      rest = splitBlockAt(b, cutChars);
+      if (rest && b.nodeName === 'PRE') { newlineBack(b, rest); }
+    }
+    // 切れた段落は残りから、切れなかった塊はその塊ごと次へ。前に何も残らなければ切らない。
+    if (!rest && cutBlock === 0) { return null; }
+    const carry = (rest ? [rest] : [b]).concat(blocks.slice(cutBlock + 1));
+    const shell = el.cloneNode(false);
+    shell.removeAttribute('id');
+    shell.removeAttribute('data-eb-id');
+    carry.forEach((k) => shell.appendChild(k));
+    return shell;
+  }
+  /** A listing cut just before the newline that ends a line: that newline belongs to the piece before. */
+  function newlineBack(el, rest) {
+    const walk = document.createTreeWalker(rest, NodeFilter.SHOW_TEXT);
+    let t = walk.nextNode();
+    while (t && !t.data.length) { t = walk.nextNode(); }
+    if (!t || t.data.charAt(0) !== '\n') { return; }
+    t.data = t.data.slice(1);
+    const back = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let last = null;
+    for (let n = back.nextNode(); n; n = back.nextNode()) { last = n; }
+    if (last) { last.data += '\n'; } else { el.appendChild(document.createTextNode('\n')); }
+  }
+  /**
+   * The edge of a box where the editor cut it, drawn the way a printer draws a
+   * box it breaks across two pages: without the padding and the rule on that
+   * edge. A quotation's padding and a listing's frame were drawn at the foot of
+   * the first piece and again at the head of the second, so the second page began
+   * a few pixels lower than on paper, and the saved file -- which holds the two
+   * pieces -- printed a line or two fewer on the first page (30 5 against 32 3).
+   * Only for the boxes that have them; a paragraph is cut as it always was.
+   * joinFlowCuts takes the end side back off when the pieces are put together.
+   */
+  const SLICED = /^(BLOCKQUOTE|PRE|DL|UL|OL|NAV|SECTION)$/;
+  function sliceEdge(el, side) {
+    if (!el || !el.style || !SLICED.test(el.nodeName)) { return; }
+    const cs = window.getComputedStyle(el);
+    if (parseFloat(cs.getPropertyValue('padding-block-' + side)) > 0) { el.style.setProperty('padding-block-' + side, '0'); }
+    // The shorthand, because it is what the saved file is allowed to keep
+    // (STYLE_OK): the width alone was dropped on the way out, and the piece in
+    // the file was a pixel longer than the one on the screen.
+    if (parseFloat(cs.getPropertyValue('border-block-' + side + '-width')) > 0) { el.style.setProperty('border-block-' + side, 'none'); }
+  }
+  /**
    * Cut every paragraph that a page foot falls inside. One reading of the page,
-   * as paginate does: the cut keeps the writing at the same total height, so the
-   * arithmetic below can be carried right through the document without stopping
-   * to measure again. Returns whether anything was cut.
+   * as paginate does, and the arithmetic carried on from it -- except that a
+   * block that has just been cut is measured again, because a cut never lands
+   * exactly on the foot of the page. Returns whether anything was cut.
    */
   function cutFlowAtFolds(note) {
     const c = canvas();
@@ -5085,9 +9166,9 @@ ${insideObjects('.eb-paper.boxed')} {
     // arithmetic is the same along the other axis, which is what paginate does,
     // and what everything below now does as well.
     const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
-    const wrap = c.parentNode;
-    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
-    const pageH = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    // The sheet to the fraction, like everything else here. A sheet's own size
+    // does not change when the spacers come out, so it can be read before them.
+    const pageH = sheetDepth(c, tate);
     if (!pageH || !(tate ? c.offsetWidth : c.offsetHeight)) { return false; }
     c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
     const style = window.getComputedStyle(c);
@@ -5097,36 +9178,123 @@ ${insideObjects('.eb-paper.boxed')} {
     if (usable < 40) { return false; }
     const extra = mt + mb + PAGE_GAP;
     const kids = Array.from(c.children);
-    const place = (el) => (tate ? (c.offsetWidth - el.offsetLeft - el.offsetWidth - mt) : (el.offsetTop - mt));
+    const m = flowMetrics(c, tate);
+    const place = (el) => m.place(el) - mt;
     const top = kids.map(place);
-    const high = kids.map((el) => sizeAlong(el, tate));
-    const plan = [];
+    const high = kids.map((el) => m.span(el));
+    const step = usable + extra;
     let shift = 0;
     let pageTop = 0;
     let pending = false;
+    let cut = false;
     // The run of blocks immediately above this one that are carried over with
     // what follows them: a heading, or a run of headings.
     let keepers = [];
+    // Cut one block from the head down, measuring the piece itself again after
+    // every cut: the first piece in `room`, every piece after it on a page of
+    // its own. The pieces, the block itself first, or null when not even the
+    // first cut can be made.
+    //
+    // A cut lands where the block can be cut -- between two rows, between two
+    // items, at a line -- and never exactly on the limit asked for. Cut from the
+    // foot upwards, every cut was measured from the top of the block as it was
+    // BEFORE any of them, so the slack left by one cut was handed to the piece
+    // after it. Measured on the 縦書き table: a page holds 643, the first piece
+    // ended at 529 because the next row would not fit, and the middle piece came
+    // out 651 -- eight longer than a page. paginate leaves a block taller than a
+    // page exactly where it stands (there is nowhere to put it), so that piece
+    // was never moved to the next sheet: it ran straight through the fold, and
+    // the writing was drawn in the gap between the two sheets. Measured from the
+    // piece itself, with a fresh page's worth of room each time, no piece is
+    // ever longer than a page and no fold is ever crossed.
+    //
+    // Two lines have to be left behind and two have to go over (orphans and
+    // widows, both two -- what a browser printing this file does of its own
+    // accord, and what LibreOffice does). carveAt keeps that rule for every cut
+    // it makes, measured from where the cut actually lands.
+    const carve = (el, room) => {
+      const pieces = [el];
+      let piece = el;
+      let r = room;
+      // A block cannot make more pieces than the document has pages; the count is
+      // only here so that a block that refuses to shrink cannot spin for ever.
+      for (let guard = 0; guard < 400; guard += 1) {
+        if (m.span(piece) <= r + 0.5) { break; }
+        const rest = carveAt(piece, r);
+        if (!rest) { break; }
+        rest.style.setProperty('margin-block-start', '0');
+        piece.parentNode.insertBefore(rest, piece.nextSibling);
+        sliceEdge(rest, 'start');
+        piece = rest;
+        pieces.push(piece);
+        // Every piece after the first begins at the top of a sheet.
+        r = usable;
+      }
+      if (pieces.length < 2) { return null; }
+      pieces.slice(0, -1).forEach((p) => {
+        p.setAttribute(FLOWCUT, 'on');
+        p.style.setProperty('margin-block-end', '0');
+        sliceEdge(p, 'end');
+      });
+      return pieces;
+    };
+    // Cut as the page feet are come to, from the head of the document down, and
+    // the arithmetic carried on from where the cut REALLY left things. The plan
+    // used to be made for the whole document first and the cuts made after it,
+    // counting a fold's worth of room for every cut. But the first piece ends at
+    // the last whole line that fits, a few pixels -- up to two lines, with the
+    // rule about lone lines -- above the foot of the page, and paginate puts
+    // that white into the spacer too. The plan did not, so every page foot after
+    // the first was looked for that much too high: the next paragraph to cross
+    // one was given lines that would not fit, paginate found its first piece
+    // crossing the fold and sent it over whole, and the pages came out 33 31 32
+    // 34 where the printer made 33 33 33 33 (点検 L1). The last piece of a block
+    // begins at the head of a page, so where everything after it stands is known
+    // exactly from that piece's own size.
+    const landed = (i, base, pieces) => {
+      pageTop = base + (pieces.length - 1) * step;
+      shift = pageTop + m.span(pieces[pieces.length - 1]) - (top[i] + high[i]);
+      keepers = [];
+      cut = true;
+    };
     for (let i = 0; i < kids.length; i += 1) {
       const el = kids[i];
       if (el.classList.contains('eb-pagebreak')) { if (i > 0) { pending = true; } keepers = []; continue; }
       let t = top[i] + shift;
       const h = high[i];
-      while (t >= pageTop + usable) { pageTop += usable + extra; }
+      while (t >= pageTop + usable) { pageTop += step; }
       const blankPage = el.classList.contains('eb-blankpage');
-      const forced = pending || el.classList.contains('eb-cont') || blankPage;
-      pending = false;
-      if (t < pageTop - 0.5) { shift += pageTop - t; t = pageTop; }
+      const forced = pending || el.classList.contains('eb-cont') || blankPage || breaksBefore(el);
+      pending = breaksAfter(el);
+      if (t < pageTop - 0.5) {
+        // 前の紙の字の終わりと次の紙の頭の間（折り目の空き）から始まる物は、次の紙の
+        // 頭へ。その前の紙の終わりに見出しが残っていれば、見出しも一緒に行く ――
+        // 印刷は見出しの後ろで紙を変えない（break-after: avoid）。paginate も同じに
+        // 見出しの前に詰め物を入れる（#262）。ここで一緒に数えないと、後ろの切れ目の
+        // 計算が見出しの分だけずれる。
+        let from = t;
+        if (!forced && t >= pageTop - extra - 0.5) {
+          for (let k = 0; k < keepers.length; k += 1) {
+            if (keepers[k].top <= pageTop - step + 0.5) { break; }
+            from = keepers[k].top;
+          }
+        }
+        shift += pageTop - from;
+        t = pageTop + (t - from);
+      }
       else if (forced && (t > pageTop + 0.5 || (blankPage && i > 0))) {
-        shift += (pageTop + usable + extra) - t;
-        pageTop += usable + extra;
-        continue;
+        shift += (pageTop + step) - t;
+        pageTop += step;
+        t = pageTop;
+        // A block that begins a page and is still longer than it is cut on that
+        // page like any other. Left there, it was never looked at again.
+        if (t + h <= pageTop + usable + foldSlack(el)) { continue; }
       }
       const boundary = pageTop + usable;
       if (note) { note.push({ i: i, tag: el.tagName.toLowerCase(), t: Math.round(t), h: Math.round(h),
         pageTop: Math.round(pageTop), boundary: Math.round(boundary), usable: Math.round(usable),
         extra: Math.round(extra), shift: Math.round(shift) }); }
-      if (t + h <= boundary + 0.5) {
+      if (t + h <= boundary + foldSlack(el)) {
         // It fits where it stands. Remember it if it is carried over with what
         // follows -- newest first, so the earliest of a run is found last.
         if (keepsWithNext(el)) { keepers.unshift({ el: el, top: t, height: h }); }
@@ -5136,80 +9304,72 @@ ${insideObjects('.eb-paper.boxed')} {
       const room = boundary - t;
       const words = el.matches(TEXT_BLOCKS);
       const line = lineOf(!words && el.firstElementChild ? el.firstElementChild : el);
+      const longer = h > usable + foldSlack(el);
+      const cuttable = flowCuttable(el, longer);
+      // Where it would go over from, if it goes over whole: the earliest of the
+      // run of headings that still stands below the top of this page goes with
+      // it -- the whole run goes over, not just the last of it.
+      let keeper = null;
+      for (let k = 0; k < keepers.length; k += 1) {
+        if (keepers[k].top <= pageTop + 0.5) { break; }
+        keeper = keepers[k];
+      }
+      const from = keeper ? keeper.top : t;
+      // A box the stylesheet keeps whole, longer than a page: the printer does
+      // not cut it where it stands, it starts it on the next page first and cuts
+      // it there (a program listing after one line of writing: 1 41 30 lines on
+      // paper). Only at the head of a page is it cut where it is.
+      const whole = longer && keptWhole(el) && from > pageTop + 0.5;
       // Two lines have to be left behind, or the paragraph goes over whole: that
       // is what orphans:2 means, and it is what a browser printing this file
       // does of its own accord -- and what LibreOffice does. It is a rule about
       // the lines of ONE block, though: a list is cut between its items, and each
       // item keeps the rule for itself. Asking it of the list as a whole cut the
       // list one line early -- 6.3mm apart from the paper, measured in 縦書き.
-      // Pushed whole, as it was before any of this: the arithmetic has to follow
-      // it, or every cut below this point is measured against a page that moved.
-      const pushWhole = () => {
-        if (h <= usable) {
-          // The earliest of the run of headings that still stands below the top
-          // of this page: the whole run goes over, not just the last of it.
-          let keeper = null;
-          for (let k = 0; k < keepers.length; k += 1) {
-            if (keepers[k].top <= pageTop + 0.5) { break; }
-            keeper = keepers[k];
-          }
-          const from = keeper ? keeper.top : t;
-          shift += (boundary - from) + extra;
-          pageTop = boundary + extra;
-        } else {
-          while (t + h > pageTop + usable) { pageTop += usable + extra; }
+      // The lines are held to the page foot with the same half pixel as
+      // anything else: asked to fit exactly, two lines 0.3px too deep for the
+      // room went over whole, while the printer left them at the foot of the
+      // page (32 lines on page nine of a long plain document, 34 on paper).
+      if (cuttable && !whole && room + LINE_SLACK >= (words ? 2 * line : line)) {
+        const pieces = carve(el, room);
+        if (pieces) {
+          if (note) { note[note.length - 1].limits = [Math.round(room)]; note[note.length - 1].pieces = pieces.length; }
+          landed(i, pageTop, pieces);
+          continue;
         }
-        keepers = [];
-      };
-      if (!flowCuttable(el) || room < (words ? 2 * line : line)) { pushWhole(); continue; }
-      const limits = [];
-      for (let L = room; L < h - 0.5; L += usable) { limits.push(L); }
-      if (!limits.length) { pushWhole(); continue; }
-      // And two lines have to go over: widows:2. Leaving one line alone at the
-      // top of a page is something the printer will not do, so the editor must
-      // not either -- they would part company by exactly one line.
-      //
-      // What is left over is measured from where the cut actually lands -- the
-      // last whole line that fits -- and not from the limit itself. Measuring it
-      // from the limit counted the few pixels between the last line and the foot
-      // of the page as part of the remainder, said "one line and a bit is less
-      // than two", and pulled the cut back a line that did not need pulling:
-      // A5 landscape came out with 13 lines on page two where the paper had 14.
-      const end = limits.length - 1;
-      if (words) {
-        const deep = end > 0 ? h - limits[end - 1] : h;
-        const from = end > 0 ? limits[end - 1] : 0;
-        const want = widowSafe(limits[end] - from, deep, line);
-        // Only the first cut can be given up on: dropping a later one would
-        // leave the piece before it holding more than a page.
-        if (want < 0) { if (end === 0) { pushWhole(); continue; } }
-        else { limits[end] = from + want; }
       }
-      if (note) { note[note.length - 1].limits = limits.map((v) => Math.round(v)); }
-      plan.push({ el: el, limits: limits });
-      shift += limits.length * extra;
+      // It goes over whole, and the arithmetic has to follow it, or every cut
+      // below this point is measured against a page that moved.
       keepers = [];
-    }
-    if (!plan.length) { return false; }
-    // Cut from the foot of the paragraph upwards: what is above a cut keeps the
-    // lines it had, so every offset measured before the first cut is still the
-    // offset it was.
-    let cut = false;
-    plan.forEach((job) => {
-      const pieces = [job.el];
-      for (let k = job.limits.length - 1; k >= 0; k -= 1) {
-        const rest = carveAt(job.el, job.limits[k]);
-        if (!rest) { continue; }
-        rest.style.setProperty('margin-block-start', '0');
-        job.el.parentNode.insertBefore(rest, job.el.nextSibling);
-        pieces.splice(1, 0, rest);
-        cut = true;
+      if (!longer) {
+        shift += (boundary - from) + extra;
+        pageTop = boundary + extra;
+        continue;
       }
-      pieces.slice(0, -1).forEach((piece) => {
-        piece.setAttribute(FLOWCUT, 'on');
-        piece.style.setProperty('margin-block-end', '0');
-      });
-    });
+      // Longer than a page, and not even its first piece can be left at the foot
+      // of this one: it goes to the head of the next page and is cut THERE, the
+      // way a browser printing the file does. It used to be left standing where
+      // it was and never cut at all -- the first cut had failed, so none was made
+      // -- and the writing ran through the bottom margin, the gap between the
+      // sheets and the next top margin: nine lines of a long paragraph that
+      // began a line from the foot, sixteen of a list whose first item crossed
+      // the fold, forty of the navigation table at the end of 源氏物語 (点検 L4).
+      // paginate moves the first piece, which is no longer than a page, over the
+      // fold as it does any other.
+      if (cuttable && from > pageTop + 0.5) {
+        const head = boundary + extra;
+        const at = head + (t - from);
+        const pieces = carve(el, head + usable - at);
+        if (pieces) {
+          if (note) { note[note.length - 1].limits = [Math.round(head + usable - at)]; note[note.length - 1].pieces = pieces.length; note[note.length - 1].over = true; }
+          landed(i, head, pieces);
+          continue;
+        }
+      }
+      // Nothing can be cut off it anywhere: it runs on through the folds where
+      // it stands, as paginate leaves it; the page count follows it.
+      while (t + h > pageTop + usable) { pageTop += step; }
+    }
     return cut;
   }
 
@@ -5220,16 +9380,40 @@ ${insideObjects('.eb-paper.boxed')} {
    * browser leaves the caret at the end of the piece that stays behind, and
    * measured on thirty characters typed at a page foot, they went in scattered
    * instead of one after another.
+   *
+   * Answers whether the cuts came out anywhere other than where they were -- not
+   * whether anything was cut. It is what repaginate goes round again on, and
+   * "something was cut" is true of every document with a paragraph across a
+   * page foot, every time: the loop went round all eight times on every key
+   * pressed, laying the pages out ten times over -- 1.4 seconds a key on twenty
+   * pages, where 0.2 was enough (点検 L2).
    */
   function recutFlow() {
     const c = canvas();
     if (!c) { return false; }
     const r = getRange();
     const at = (r && c.contains(r.startContainer)) ? caretOffset() : null;
+    const was = cutMark(c);
     const joined = joinFlowCuts(c);
     const cut = cutFlowAtFolds();
     if ((joined || cut) && at != null) { setCaretOffset(at); }
-    return cut;
+    return cutMark(c) !== was;
+  }
+  /**
+   * Where the editor's cuts stand, as a mark that is the same exactly when they
+   * are: every block in the column in its place, and every cut piece -- and the
+   * piece after the last cut -- by how much writing it holds.
+   */
+  function cutMark(c) {
+    let out = '';
+    let prevCut = false;
+    for (let el = c.firstElementChild; el; el = el.nextElementSibling) {
+      if (el.classList && el.classList.contains('eb-pagespacer')) { continue; }
+      const cutHere = !!(el.hasAttribute && el.hasAttribute(FLOWCUT));
+      out += (cutHere || prevCut) ? (cutHere ? 'C' : 'E') + String(el.textContent || '').length + ' ' : '.';
+      prevCut = cutHere;
+    }
+    return out;
   }
 
   function makeSpacer(size, tate) {
@@ -5266,6 +9450,26 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   let planLog = null;
   let planRuns = 0;
+  /**
+   * How deep the WRITING of a piece the editor cut goes, rather than how deep its
+   * box is. A reading (ruby) leaves room beside the line it is written over, so
+   * the box of a piece stands a few pixels past the fold although every line of
+   * it is on the page -- which is where a browser printing the file puts them.
+   * Judged by the box, the whole piece was sent to the next page and the heading
+   * above it with it: a 縦書き novel with furigana showed nothing but its title
+   * on the first page (BUGS #78). Only asked for a piece the editor cut, and only
+   * when the box overhangs, so nothing else pays for the measurement.
+   */
+  function inkOf(el, height, tate) {
+    if (!el || el.nodeType !== 1 || !el.getAttribute) { return height; }
+    if (!el.hasAttribute(FLOWCUT) && el.getAttribute('data-split') !== 'on') { return height; }
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      const ink = rangeBottom(el, r, true);
+      return ink > 0 && ink < height ? ink : height;
+    } catch (e) { return height; }
+  }
   function planNote(row) { if (planLog && planLog.length < 4000) { planLog.push(row); } }
   function paginate() {
     planRuns += 1;
@@ -5273,13 +9477,12 @@ ${insideObjects('.eb-paper.boxed')} {
     const c = canvas();
     if (!c) { return 1; }
     c.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
-    const wrap = c.parentNode;
-    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
     // In 縦書き the text runs down the page and the pages run right to left, so
     // the axis everything below measures along is the horizontal one. The
     // arithmetic is the same; only what is measured changes.
     const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
-    const pageH = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    // To the fraction, not to the whole pixel -- see flowMetrics.
+    const pageH = sheetDepth(c, tate);
     if (!pageH || !(tate ? c.offsetWidth : c.offsetHeight)) { return 1; }
     const style = window.getComputedStyle(c);
     const mt = parseFloat(tate ? style.paddingRight : style.paddingTop) || 0;
@@ -5300,9 +9503,10 @@ ${insideObjects('.eb-paper.boxed')} {
     // arithmetic below works from this one reading, and what the spacers really
     // did is checked at the end.
     const kids = Array.from(c.children).filter((el) => !el.classList.contains('eb-pagespacer'));
-    const place = (el) => (tate ? (c.offsetWidth - el.offsetLeft - el.offsetWidth - mt) : (el.offsetTop - mt));
+    const m = flowMetrics(c, tate);
+    const place = (el) => m.place(el) - mt;
     const pos = kids.map(place);
-    const size = kids.map((el) => (tate ? el.offsetWidth : el.offsetHeight));
+    const size = kids.map((el) => m.span(el));
     const prop = tate ? 'width' : 'height';
     const put = [];
     // Which sheet the writing actually reaches. Counting the height of the whole
@@ -5330,6 +9534,8 @@ ${insideObjects('.eb-paper.boxed')} {
     let foldsAsked = 0;
     // How many sheets had been counted when this run of folds began.
     let foldBase = 0;
+    // The block before asked, in its own style, for the page to end after it.
+    let askedAfter = false;
     for (let i = 0; i < kids.length; i += 1) {
       const child = kids[i];
       if (child.classList.contains('eb-pagebreak')) {
@@ -5375,8 +9581,9 @@ ${insideObjects('.eb-paper.boxed')} {
       // two page-asking cases apart, and it has to be kept because pendingBreak
       // is cleared on the next line.
       const afterFold = pendingBreak;
-      const forced = pendingBreak || child.classList.contains('eb-cont') || blankPage;
+      const forced = pendingBreak || child.classList.contains('eb-cont') || blankPage || breaksBefore(child) || askedAfter;
       pendingBreak = false;
+      askedAfter = breaksAfter(child);
       // The run of folds ends here, and this block goes past every sheet they
       // asked for -- one for the cut, and one more for each blank sheet between
       // two cuts.
@@ -5429,7 +9636,10 @@ ${insideObjects('.eb-paper.boxed')} {
       // Measured twice by PS and once here before the difference was found.
       if (!(blankPage && afterFold) && top < pageTop - 0.5) { wanted = pageTop; branch = '1 上へ戻す'; }
       else if (forced && (top > pageTop + 0.5 || (blankPage && index > 0))) { wanted = boundary + extra + blanks * step; branch = '2 次の紙へ'; }
-      else if (!forced && !carries && height <= usable && top < boundary && top + height > boundary + 0.5) { wanted = boundary + extra; branch = '3 折り目をまたぐ'; }
+      // "No longer than a page" allows the same slack as "fits": a piece the
+      // editor cut ends at a line that fits by up to half a pixel, and read as
+      // longer than a page it was never moved and ran on through the fold.
+      else if (!forced && !carries && height <= usable + foldSlack(child) && top < boundary && top + inkOf(child, height, tate) > boundary + foldSlack(child)) { wanted = boundary + extra; branch = '3 折り目をまたぐ'; }
       planNote({ run: runNo, i: i, what: (String(child.className).trim() || child.tagName),
         top: Math.round(top), pageTop: Math.round(pageTop), boundary: Math.round(boundary),
         height: Math.round(height), forced: forced, blankPage: blankPage, blanks: blanks,
@@ -5439,10 +9649,15 @@ ${insideObjects('.eb-paper.boxed')} {
         // with the writing it belongs to. The stylesheet says so and the printer
         // obeys it, so the spacer goes in front of the heading, not in front of
         // the block that moved.
+        // 折り目の空き（前の紙の字の終わりと次の紙の頭の間）から次の紙の頭へ戻す
+        // 物は、前の紙から移る物：その紙の終わりの見出しも連れて行く。pageTop は
+        // もう次の紙の頭なので、見出しを探す範囲は前の紙（#262：縦書きで見出しが
+        // 紙の終わりに一人で残り、印刷では次の紙へ送られて以降のページがずれた）。
+        const keepFloor = (branch === '1 上へ戻す' && top >= pageTop - extra - 0.5) ? pageTop - (usable + extra) : pageTop;
         let keeper = null;
         if (!forced) {
           for (let k = 0; k < keepers.length; k += 1) {
-            if (keepers[k].top <= pageTop + 0.5) { break; }
+            if (keepers[k].top <= keepFloor + 0.5) { break; }
             keeper = keepers[k];
           }
         }
@@ -5476,13 +9691,18 @@ ${insideObjects('.eb-paper.boxed')} {
     // arithmetic says; the difference is taken back out of the spacer. All of them
     // are read at once, and the reading is repeated only while something is still
     // out of place.
+    //
+    // Read to the fraction, and put right to the fraction. Read in whole pixels,
+    // half a pixel either way passed for "in place", and a block at the head of
+    // a page stood up to 0.6px above it (1138.4 for 1139) -- enough for anything
+    // that asks which page a thing is on to answer "the one before" (点検 L11).
     for (let pass = 0; pass < 3 && put.length; pass += 1) {
       const landed = put.map((p) => place(p.el));
       let moved = 0;
       let again = false;
       put.forEach((p, k) => {
         const drift = (landed[k] + moved) - p.wanted;
-        if (Math.abs(drift) <= 0.5) { return; }
+        if (Math.abs(drift) <= 0.05) { return; }
         const now = parseFloat(p.spacer.style[prop]) || 0;
         const next = Math.max(0, now - drift);
         p.spacer.style[prop] = next + 'px';
@@ -5508,7 +9728,7 @@ ${insideObjects('.eb-paper.boxed')} {
     // sheet, while the printer duly made the second page. The screen has to draw
     // the paper the printer will use.
     const box = c.getBoundingClientRect();
-    const scale = (tate ? box.width / (c.offsetWidth || 1) : box.height / (c.offsetHeight || 1)) || 1;
+    const scale = m.zoom;
     Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((o) => {
       if (!o.getBoundingClientRect) { return; }
       const r = o.getBoundingClientRect();
@@ -5594,14 +9814,62 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!el || el.nodeType !== 1 || !el.classList) { return null; }
     return el.classList.contains('eb-anchor') ? el.firstElementChild : el;
   }
+  /** 本体の見つからない続きの部分を、あとに出てくる同じ種類の本体の続きへ戻す。 */
+  function reattachOrphans(c) {
+    let moved = false;
+    Array.from(c.children).forEach((host) => {
+      const frame = hungOn(host);
+      if (!frame || !isCont(frame) || !host.parentNode) { return; }
+      if (!isCont(chainLead(frame))) { return; }   // 本体が見つかる：取り残されていない
+      let n = host.nextElementSibling;
+      let lead = null;
+      while (n && !lead) {
+        const f = hungOn(n);
+        if (f && !isCont(f) && f.matches && f.matches(CHAIN_SEL) && chainable(f) && chainKind(f) === chainKind(frame)) { lead = f; }
+        n = n.nextElementSibling;
+      }
+      if (!lead) { return; }
+      const chain = chainOf(lead);
+      const last = chainHost(chain[chain.length - 1]);
+      last.parentNode.insertBefore(host, last.nextSibling);
+      moved = true;
+    });
+    return moved;
+  }
+  /**
+   * What a walk along a chain steps over, between one link and the next: the page
+   * folds, and the pegs of other things placed at the same spot.
+   *
+   * 同じ所に結び付いたほかの置いた物（写真・図形など）が、本体と続きの間に挟まる
+   * ことがある。それは飛ばして続きを探す ―― 挟まった所で探すのをやめていたので、
+   * 続きの部分を見失い、本体を動かすと続きが取り残された（BUGS #61）。
+   *
+   * ただし同じ種類の本体（別の枠）は飛ばさない。そこから先の続きは、その枠の続き
+   * ―― 続きの部分は、いつも自分の本体（か前の続き）のすぐ後ろに作られる。chainOf
+   * は飛ばし、chainLead は飛ばさず、同じ続きが二つの鎖に数えられていた。置いた
+   * まとめ枠を2つ続けて置き、どちらも1ページに入らないと、後ろの枠の続きまで前の
+   * 枠の鎖に数えられ、組み直しで後ろの枠の文章が前の枠の続き（前の枠の位置）へ
+   * 流し込まれた（実測、L18）。
+   *
+   * 本文の中の鎖（置いていない枠）の続きは、置いた物の入れ物の中には無い。その鎖
+   * にとっては、入れ物はどれも飛ばす物。
+   */
+  function chainPasses(n, like) {
+    if (!n || !n.classList) { return false; }
+    if (n.classList.contains('eb-pagespacer')) { return true; }
+    if (!n.classList.contains('eb-anchor')) { return false; }
+    if (!objectFree(like)) { return true; }
+    const o = hungOn(n);
+    return !!o && !isCont(o) && !(o.matches && o.matches(CHAIN_SEL) && chainKind(o) === chainKind(like));
+  }
   /** The lead frame and everything carrying it on, in order. */
   function chainOf(lead) {
     const out = [lead];
     let n = chainHost(lead).nextElementSibling;
     while (n) {
-      if (n.classList && n.classList.contains('eb-pagespacer')) { n = n.nextElementSibling; continue; }
+      if (chainPasses(n, lead)) { n = n.nextElementSibling; continue; }
       const frame = hungOn(n);
-      if (!isCont(frame) || chainKind(frame) !== chainKind(lead)) { break; }
+      if (!isCont(frame) || chainKind(frame) !== chainKind(lead) || objectFree(frame) !== objectFree(lead)) { break; }
       out.push(frame);
       n = n.nextElementSibling;
     }
@@ -5612,10 +9880,11 @@ ${insideObjects('.eb-paper.boxed')} {
     let n = el;
     while (isCont(n)) {
       let back = chainHost(n).previousElementSibling;
-      while (back && back.classList && back.classList.contains('eb-pagespacer')) { back = back.previousElementSibling; }
+      // 折り目と、間に挟まったほかの置いた物は飛ばす（chainOf と同じ決まり）。
+      while (chainPasses(back, n)) { back = back.previousElementSibling; }
       const frame = hungOn(back);
       if (!frame || !frame.matches || !frame.matches(CHAIN_SEL)) { break; }
-      if (chainKind(frame) !== chainKind(n)) { break; }
+      if (chainKind(frame) !== chainKind(n) || objectFree(frame) !== objectFree(n)) { break; }
       n = frame;
     }
     return n;
@@ -5645,14 +9914,18 @@ ${insideObjects('.eb-paper.boxed')} {
     // what switched the whole chain off: a frame taller than the page did not
     // carry on, and nothing said so, because the screen and the paper agreed on
     // being wrong together.
-    // 2026-09-08 に縦書きでも答えるようにしたが、まとめ枠の続きが画面と紙で
-    // 合わなかったので戻した。printmatch「縦書きの長いまとめ枠」3ページ目 左104.9mm。
-    // 合うようにしてから、また答えさせる。
-    if (c.classList && c.classList.contains('eb-tategaki')) { return null; }
-    const tate = false;
-    const wrap = c.parentNode;
-    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
-    const deep = sheet ? (tate ? sheet.offsetWidth : sheet.offsetHeight) : 0;
+    // The rule is the same whichever way the writing runs; only the axis it is
+    // read along changes. This used to answer null in 縦書き, which switched the
+    // whole chain off there -- a frame longer than a page did not carry on, and
+    // the writing ran through the fold instead. Answering null was never a rule
+    // of its own: it stood in for the places that said "height" where they meant
+    // "along the writing", and those say it properly now (flowProp, sizeAlong).
+    const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+    // 紙の寸法は paginate・cutFlowAtFolds・pageRuler と同じく小数で読む（sheetDepth）。
+    // 整数（offsetHeight）で読むと A4 は 1123px（本当は 1122.52px）になり、この関数の
+    // 答えで紙を決める所（手で置いた物・まとめ枠の鎖・保存するときのページの div）と、
+    // 本当の紙の並びが 1 ページに 0.48px ずつずれた（50 ページ目で 24px、点検 L3）。
+    const deep = sheetDepth(c, tate);
     if (!deep || !(tate ? c.offsetWidth : c.offsetHeight)) { return null; }
     const style = window.getComputedStyle(c);
     const mt = parseFloat(tate ? style.paddingRight : style.paddingTop) || 0;
@@ -5661,9 +9934,82 @@ ${insideObjects('.eb-paper.boxed')} {
     if (usable < 40) { return null; }
     // How many sheets there are: a thing cannot be sent past the last one.
     const step = usable + mt + mb + PAGE_GAP;
-    const along = tate ? c.offsetWidth : c.offsetHeight;
+    const cBox = c.getBoundingClientRect();
+    const along = (tate ? cBox.width : cBox.height) / paperZoom(c);
     const pages = Math.max(1, Math.round((along + PAGE_GAP) / step));
     return { mt: mt, mb: mb, usable: usable, extra: mt + mb + PAGE_GAP, pages: pages, tate: tate };
+  }
+  /**
+   * The depth of one sheet along the writing, at 100%, to the fraction.
+   *
+   * offsetHeight is a whole number: an A4 sheet is 1122.52px and reads as 1123.
+   * The sheets on the screen are laid out by the browser to the fraction, so a
+   * page plan made from the whole number drew a grid 0.48px a page longer than
+   * the paper under it -- 24px by page 50, 36px by page 75, and the lines at the
+   * foot of every page from about the fiftieth on stood in the bottom margin
+   * (点検 L3, BUGS #80). Every part that says where a page ends reads it here.
+   */
+  function sheetDepth(c, tate) {
+    const wrap = c && c.parentNode;
+    const sheet = wrap ? wrap.querySelector('.eb-sheet') : null;
+    if (!sheet) { return 0; }
+    const r = sheet.getBoundingClientRect();
+    return (tate ? r.width : r.height) / paperZoom(c);
+  }
+  /**
+   * The geometry the page plan is worked out from, read to the fraction.
+   *
+   * offsetWidth and offsetTop are whole numbers -- the browser rounds them. A
+   * sheet 793.6875 wide reads as 794 and a paragraph 73.5 wide as 74, and the
+   * two roundings together made the room left on the page 0.19px SHORTER than
+   * it is. A row of a table that fitted by 0.04px was sent to the next sheet
+   * over that: the editor drew 13 rows on page one where the paper, laid out in
+   * fractions by the browser itself, had 14 -- 7.7mm apart, and the same cause
+   * costs a line of writing wherever a page foot falls close to one.
+   *
+   * Everything here is at 100%, the zoom divided back out, so it can be put
+   * beside the paddings, which the stylesheet gives in the same units.
+   */
+  function flowMetrics(c, tate) {
+    const z = paperZoom(c);
+    return {
+      zoom: z,
+      /**
+       * How far along the writing's own direction a box begins, from the canvas.
+       * The canvas is read again every time, not once: putting a spacer in above
+       * what the desk is scrolled to makes the browser scroll by the same amount
+       * to keep the view still, so the canvas moves on the screen while the
+       * thing measured does not. Read against where the canvas WAS, a block that
+       * had been moved down read as not moved at all, the spacer in front of it
+       * was grown by the same amount again, three times over -- a page copied
+       * below a fold came out two sheets down instead of one, with the writing
+       * after it running past the last sheet drawn (サンプル5, 2026-09-28).
+       */
+      place: (el) => {
+        const box = c.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        return (tate ? (box.right - r.right) : (r.top - box.top)) / z;
+      },
+      /** A box's size along that same direction. */
+      span: (el) => {
+        const r = el.getBoundingClientRect();
+        return (tate ? r.width : r.height) / z;
+      },
+    };
+  }
+  /**
+   * 何枚目の紙（0から）に描かれているか。top は1枚目の字の書き始めからの距離。
+   *
+   * 境目は紙と紙の間のまん中に置く。字の枠の中はもちろんその紙、下の余白はその紙、
+   * 上の余白は次の紙 ―― 紙そのものの範囲で決まる。前は「折り目の位置 +0.5px」で
+   * 分けていたが、ページの頭に立つ物は、測る道具（offsetTop は整数、
+   * getBoundingClientRect は小数）によって紙の頭より 0.5px 以上手前に読まれることが
+   * あり（実測 1138.4 と 1139）、1枚前の紙の物と取り違えた（点検 L11）。高さの無い
+   * 物がページの最後の字の下（折り目のちょうど上）に立つときは、その紙のまま。
+   */
+  function sheetIndexAt(top, geom) {
+    const step = geom.usable + geom.extra;
+    return Math.max(0, Math.floor((top + geom.mt + PAGE_GAP / 2) / step));
   }
   /**
    * How far down the paper something is drawn, in the units offsetTop is in. A
@@ -5746,6 +10092,17 @@ ${insideObjects('.eb-paper.boxed')} {
     // frontier begins at the last sheet of writing and only ever advances by the
     // things that have already earned their place on it.
     let front = flow;
+    // 枠の続き（eb-cont）は、書き手が置いた物ではなく、文章が流れた結果そこにある。
+    // 並び順に関係なく「そのページには物がある」と数える。数えていなかったので、
+    // 紙の上に置いたまとめ枠の続きが2ページ目にある文書で、それより前に並ぶ○は
+    // 「置けるのは2ページ目まで」とされ、3ページ目へ動かしても次に触ると2ページ目へ
+    // 引き戻された（オーナー 2026-09-22 test.html）。
+    c.querySelectorAll('.eb-anchor > .eb-cont, .eb-cont').forEach((o) => {
+      if (o === el || !o.getBoundingClientRect) { return; }
+      const drawn = topOnPaper(o) - geom.mt;
+      if (drawn < -0.5) { return; }
+      front = Math.max(front, Math.floor((drawn + 0.5) / step));
+    });
     const kids = c.querySelectorAll('.eb-anchor > *');
     for (let i = 0; i < kids.length; i += 1) {
       const o = kids[i];
@@ -5763,7 +10120,7 @@ ${insideObjects('.eb-paper.boxed')} {
   function settleFree(el, geom, note) {
     if (!el || !geom || !objectFree(el) || !el.parentNode) { return false; }
     const c = canvas();
-    const before = (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '');
+    const before = freeOff(el) + '|' + (el.style.getPropertyValue('--eb-shift') || '');
     if (el.hasAttribute('data-free-top')) {
       const own = el.getAttribute('data-free-top');
       if (own) {
@@ -5779,10 +10136,45 @@ ${insideObjects('.eb-paper.boxed')} {
         // taken off the mark before the mark is used.
         const pegWas = parseFloat(el.getAttribute('data-free-peg'));
         const drift = isNaN(pegWas) ? 0 : (pegWas - pegOf(el, geom));
-        el.style.top = Math.abs(drift) > 0.5 ? round1((lengthPx(own) + drift) * MM) + 'mm' : own;
-      } else { el.style.removeProperty('top'); }
+        setFreeOff(el, Math.abs(drift) > 0.5 ? round1((lengthPx(own) + drift) * MM) + 'mm' : own);
+      } else { clearFreeOff(el); }
       el.removeAttribute('data-free-top');
       el.removeAttribute('data-free-peg');
+    }
+    // 向きの変わった文書。前の向きで書かれたずれは、今の向きの言葉に直す ――
+    // 描かれている場所は変えずに。
+    //
+    // 横書きでは「上から」、縦書きでは「右から」でずれを持つ。横書きで書かれた
+    // 文書を縦書きで開くと、right が一度も書かれないまま left と top が残り、
+    // 進む向きのずれは 0 として扱われる。物は本文の上に乗らず、回り込みも働かず、
+    // 動かしても頼んだ向きへ行かない。ここで一度だけ言い換える。
+    {
+      const tateNow = isTate(el);
+      const nowDir = tateNow ? 'tate' : 'yoko';
+      // 言い換えるのは「今の向きのずれが無く、前の向きのずれがある」ときだけ。
+      // 無条件にやると、正しく置かれている物まで書き換えて壊す ―― 横書きの
+      // 文書で、引きずった物が手を離した場所に着かなくなった。
+      const hasNow = !!el.style.getPropertyValue(freeProp(el));
+      const hasWas = !!el.style.getPropertyValue(tateNow ? 'top' : 'right');
+      if (!hasNow && hasWas && el.getAttribute('data-free-dir') !== nowDir) {
+        // 向きが変わったら、ずれは「意味」を引き継ぐ。
+        //
+        // 書き手が決めたのは「文章の進む向きにどれだけ」と「紙を横切る向きに
+        // どれだけ」であって、画面の上からの距離ではない。横書きで top に書かれ
+        // ていたのは進む向きのずれ、left に書かれていたのは横切る向きのずれ。
+        // 縦書きではそれぞれ right と top になる。画面の位置をそのまま持ち越すと、
+        // 横書きの left:10mm が縦書きでは「杭より手前」を指し、物が本文の始まる
+        // 前（進む向きの位置 -430）に立って、続きの枠も紙の外に並んだ。
+        const wasFlowProp = tateNow ? 'top' : 'right';
+        const wasCrossProp = tateNow ? 'left' : 'top';
+        const flowMm = lengthPx(el.style.getPropertyValue(wasFlowProp) || '') * MM;
+        const crossMm = lengthPx(el.style.getPropertyValue(wasCrossProp) || '') * MM;
+        ['top', 'left', 'right', 'bottom'].forEach((k) => el.style.removeProperty(k));
+        el.style.removeProperty('--eb-shift');
+        el.style.setProperty(freeProp(el), round1(flowMm) + 'mm');
+        el.style.setProperty(crossProp(el), round1(crossMm) + 'mm');
+        el.setAttribute('data-free-dir', nowDir);
+      }
     }
     const step = geom.usable + geom.extra;
     // The anchor is a peg of no height standing in the writing: where it is on
@@ -5790,14 +10182,23 @@ ${insideObjects('.eb-paper.boxed')} {
     const anchorTop = topOnPaper(el.parentNode) - geom.mt;
     const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
     const paperTop = anchorTop - ka * geom.extra;
-    let top = paperTop + lengthPx(el.style.top);
+    let top = paperTop + lengthPx(freeOff(el));
     // There are only so many sheets: a thing worked out to be on a page past the
     // last one would be drawn on the desk beside the paper. It belongs on the
     // last sheet there is -- and the last sheet there is, for this purpose, is one
     // past the last sheet that holds anything. Counted from geom.pages it was
     // counted from a number this very thing had just made bigger.
-    const last = filledLast(el, geom) + 1;
+    let last = filledLast(el, geom) + 1;
+    // 書き手が引いて置いたページは、その物だけのページでも置いてよい（LibreOffice と
+    // 同じく、ページの下まで引けば新しいページに置かれる）。引いたときは、引く前に
+    // いたページの一つ先まで（data-free-allow）。置いたページは覚えて（data-free-page）、
+    // 組み直しや開き直しで前のページへ戻さない（台帳19・43）。
+    const keepPage = parseInt(el.getAttribute('data-free-page'), 10);
+    const allowPage = parseInt(el.getAttribute('data-free-allow'), 10);
+    if (!isNaN(keepPage)) { last = Math.max(last, keepPage); }
+    if (!isNaN(allowPage)) { last = Math.max(last, allowPage); }
     const carrier = chainable(el);
+    let heldNow = false;
     let page = Math.max(0, Math.floor((top + 0.5) / geom.usable));
     {
       // Everything, a carrier included. The pass carriers used to get here was
@@ -5809,6 +10210,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // sheets away, and no chain begins with two blank sheets.
       const held = Math.min(last, page);
       if (held !== page) {
+        heldNow = true;
         // Told it may not stand there, the thing has to be BROUGHT there. Only
         // the page number was being held back before, while the offset stayed
         // where it was: everything after this measured a thing on sheet four
@@ -5821,11 +10223,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // It keeps its place ON the page -- the same distance down -- and only
         // changes which sheet that is. If it no longer fits there, the rules
         // below bring it up, as they do for anything else.
-        const own = el.style.top || '';
+        const own = freeOff(el);
         const within = Math.max(0, top - page * geom.usable);
         page = held;
         top = page * geom.usable + within;
-        el.style.top = round1((top - paperTop) * MM) + 'mm';
+        setFreeOff(el, round1((top - paperTop) * MM) + 'mm');
         if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
       }
     }
@@ -5847,9 +10249,9 @@ ${insideObjects('.eb-paper.boxed')} {
     // sideways but not up or down at all -- the same paragraph cut to 80mm moved
     // the full 120px asked of it. Left alone, it stays where it was put.
     if (height <= geom.usable && top < head - 0.5) {
-      const own = el.style.top || '';
+      const own = freeOff(el);
       top = head;
-      el.style.top = round1((top - paperTop) * MM) + 'mm';
+      setFreeOff(el, round1((top - paperTop) * MM) + 'mm');
       if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
     }
     // The foot of the WRITING, not the foot of the paper. A printer cuts a page
@@ -5861,21 +10263,29 @@ ${insideObjects('.eb-paper.boxed')} {
     // itself and the writing -- and that margin moves it down the page as surely
     // as its offset does. Left out, the sum was a centimetre short and the foot
     // of a seal still printed on a sheet of its own.
-    const lead = lengthPx(el.style.marginTop);
+    const lead = lengthPx(el.style.getPropertyValue('margin-block-start') || el.style.marginTop);
     const overPaper = top + lead + height > foot + 0.5;
     const room = foot - top;
     // Nowhere to send it: there is no page after the last one, and a thing put
     // there would be drawn on the desk beside the paper rather than on a sheet.
-    const somewhere = carrier || page + 1 <= last;
-    if (note) { note.push({ where: 'settleFree', top: Math.round(top), paperTop: Math.round(paperTop),
+    // 置いてよいのは「物のある最後のページの一つ先」まで。続きを運ぶ枠の例外は、
+    // 1ページに収まらず次のページへ運ぶしかないものだけ ―― 収まる大きさの図形まで
+    // 例外にしていたので、○が置けない4ページ目へ送られ、次に触ると引き戻された。
+    // 字を書く枠（まとめ枠・文字枠）は、ページの下からはみ出したら、その場に置いた
+    // まま残りを次のページへ続けて運ぶ（案B）。持ち上げたり次のページの頭へ送ったり
+    // しない ―― まとめ枠を下へ引いても元の所へ戻され、自由に動かせなかった（オーナー
+    // 2026-09-22 test.html、BUGS #59）。図形は運ぶ物でも字の枠ではないので、これまでどおり。
+    const writes = carrier && !!(el.matches && el.matches('div.eb-frame, .eb-textbox'));
+    const somewhere = page + 1 <= last || (carrier && height > geom.usable) || writes;
+    if (note) { note.push({ where: 'settleFree', flowPages: flowPages, geomPages: geom.pages, cls: el.className, top: Math.round(top), paperTop: Math.round(paperTop),
       anchorTop: Math.round(anchorTop), ka: ka, page: page, last: last, usable: Math.round(geom.usable),
       height: Math.round(height), foot: Math.round(foot), head: Math.round(head), lead: Math.round(lead),
-      overPaper: overPaper, carrier: carrier, somewhere: somewhere, styleTop: el.style.top }); }
-    const move = somewhere && height && (height <= geom.usable
+      overPaper: overPaper, carrier: carrier, somewhere: somewhere, styleTop: freeOff(el) }); }
+    const move = somewhere && height && ((height <= geom.usable && !writes)
       ? overPaper
       : (chainable(el) && room < 2 * lineOf(el)));
     if (move) {
-      const own = el.style.top || '';
+      const own = freeOff(el);
       // Two places it could go, and the writer's hand decides which. The head of
       // the next sheet, or the lowest place on this one where the whole of it
       // still fits. It used to be always the next sheet -- so a picture dragged
@@ -5893,43 +10303,52 @@ ${insideObjects('.eb-paper.boxed')} {
         page += 1;
         top = ahead;
       }
-      el.style.top = round1((top - paperTop) * MM) + 'mm';
+      setFreeOff(el, round1((top - paperTop) * MM) + 'mm');
       el.setAttribute('data-free-top', own);
       markPeg(el, geom);
-    } else if (height <= geom.usable && (overPaper || top + 0.5 > foot)) {
+    } else if (height <= geom.usable && !writes && (overPaper || top + 0.5 > foot)) {
       // There is no page after this one to send it to, so it is brought up until
       // it is inside the page again. Left where it was, the printer cuts it at
       // the foot of the writing and prints the rest on a sheet of its own.
       //
-      // Measured where it is drawn rather than in the column, because there are
-      // two feet to keep above and one of them is not the page's: a thing hanging
-      // off a line inside a frame belongs in that frame, and standing it on the
-      // foot of the page took it clean out of the box the writer put it in. It
-      // goes above whichever of the two is higher, and no further.
-      const drawnTop = topOnPaper(el);
-      const stepPx = geom.usable + geom.extra;
-      const sheetNo = Math.max(0, Math.floor((drawnTop - geom.mt + 0.5) / stepPx));
-      let limit = geom.mt + sheetNo * stepPx + geom.usable;
+      // 紙の上の位置で測る（描かれた位置は、ずれを直した直後はまだ前のまま）。
+      // 枠の中の行に結び付いた物は、その枠の下端より上にも収める ―― ただし枠
+      // （または続き）が同じページにあるときだけ。1ページ目の枠の下端に合わせて
+      // いたので、3ページ目へ動かした○が1ページ目まで持ち上げられた（2026-09-22）。
+      let limit = foot;
       const host = el.parentNode.parentNode;
       if (host && host !== c && host.getBoundingClientRect) {
-        const inner = topOnPaper(host) + host.offsetHeight;
-        if (inner > 0 && inner < limit) { limit = inner; }
+        const frame = host.closest ? (host.closest('.eb-frame, .eb-textbox, aside.eb-box, div.eb-note') || host) : host;
+        const pieces = chainable(frame) ? objectParts(frame) : [frame];
+        const stepPx = geom.usable + geom.extra;
+        pieces.forEach((piece) => {
+          const at = topOnPaper(piece) - geom.mt;
+          const sheetNo = Math.max(0, Math.floor((at + 0.5) / stepPx));
+          if (sheetNo !== page) { return; }
+          const inner = at - sheetNo * geom.extra + piece.offsetHeight;
+          if (inner > 0 && inner < limit) { limit = inner; }
+        });
       }
       // A millimetre short of the foot, not exactly on it: the offset is written
       // to a tenth of a millimetre, and a fifth of a millimetre over the line was
       // enough to make the printer start a sheet for it.
-      const lift = (drawnTop + height) - limit + (1 / MM);
+      const lift = (top + lead + height) - limit + (1 / MM);
       if (lift > 0.5) {
-        const own = el.style.top || '';
-        el.style.top = round1((lengthPx(el.style.top) - lift) * MM) + 'mm';
+        const own = freeOff(el);
+        setFreeOff(el, round1((lengthPx(freeOff(el)) - lift) * MM) + 'mm');
         top -= lift;
-        if (!el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
+        if (!heldNow && !el.hasAttribute('data-free-top')) { el.setAttribute('data-free-top', own); markPeg(el, geom); }
       }
     }
-    if (note) { note.push({ where: 'settleFree の後', move: move, page: page, styleTop: el.style.top,
+    if (note) { note.push({ where: 'settleFree の後', move: move, page: page, styleTop: freeOff(el),
       freeTop: el.getAttribute('data-free-top') }); }
     foldShift(el, (page - ka) * geom.extra);
-    return (el.style.top || '') + '|' + (el.style.getPropertyValue('--eb-shift') || '') !== before;
+    if (!isNaN(allowPage)) {
+      el.removeAttribute('data-free-allow');
+      // 物のあるページだけで足りるなら、覚える必要は無い。
+      if (page > filledLast(el, geom)) { el.setAttribute('data-free-page', String(page)); } else { el.removeAttribute('data-free-page'); }
+    }
+    return freeOff(el) + '|' + (el.style.getPropertyValue('--eb-shift') || '') !== before;
   }
   /**
    * The writer has just put it somewhere by hand, so where it is drawn is what
@@ -5959,7 +10378,7 @@ ${insideObjects('.eb-paper.boxed')} {
     // what the column has above its first line, and it prints there.
     if (off >= geom.usable - 1) { page += 1; off = 0; }
     else if (off < 0 && page > 0) { off = 0; }
-    el.style.top = round1((page * geom.usable + off - paperTop) * MM) + 'mm';
+    setFreeOff(el, round1((page * geom.usable + off - paperTop) * MM) + 'mm');
     foldShift(el, (page - ka) * geom.extra);
     // And then it is looked at. Where a thing is put down is the one thing the
     // writer is certain about, and the arithmetic above has two coordinate
@@ -5968,9 +10387,13 @@ ${insideObjects('.eb-paper.boxed')} {
     // sums, the answer is measured: if the thing is not drawn where it was put,
     // it is moved by the difference. Dropping a formula thirty millimetres up
     // the page used to put it forty millimetres down.
-    const slip = (topOnPaper(el) - geom.mt) - drawn;
+    // 比べる相手は「置くと決めた位置」。下の余白で手を離したときは次のページの頭に
+    // 置くと決めたのに、手を離した元の位置と比べて差を戻していたので、次のページへ
+    // 送った分が打ち消され、遠いほうの前のページの下端へ行った（2026-09-22 点検で発見）。
+    const intended = page * step + off;
+    const slip = (topOnPaper(el) - geom.mt) - intended;
     if (Math.abs(slip) > 0.5) {
-      el.style.top = round1((lengthPx(el.style.top) - slip) * MM) + 'mm';
+      setFreeOff(el, round1((lengthPx(freeOff(el)) - slip) * MM) + 'mm');
     }
   }
   /** The gaps the editor drew above this thing, added back on for the screen. */
@@ -6031,6 +10454,14 @@ ${insideObjects('.eb-paper.boxed')} {
       const host = lead ? chainHost(lead) : null;
       if (host && host.parentNode === home && host !== anchor) { over = host; }
     }
+    // 段落・表・リストをページの折り目で切った後ろの切れ端も、同じく一つの塊の
+    // 途中。杭はその塊の頭の前に打つ。後ろの切れ端の前（切れ端と切れ端の間）に
+    // 打っていたので、組み直しで一つに戻せなくなり、段落が二つに割れたまま保存
+    // された（L13・D10：2ページ目の頭、段落の続きの上に写真を置いたとき）。
+    if (over.parentNode === home) {
+      const head = cutHead(over);
+      if (head && head !== over && head.parentNode === home) { over = head; }
+    }
     let after = anchor.nextElementSibling;
     while (after && after.classList && after.classList.contains('eb-pagespacer')) { after = after.nextElementSibling; }
     if (after === over) { return false; }
@@ -6039,8 +10470,15 @@ ${insideObjects('.eb-paper.boxed')} {
     // this it kept the offset instead of the place, and walked down the page a
     // paragraph at a time, once for every turn of the layout.
     const was = topOnPaper(el) - geom.mt;
-    const from = lengthPx(el.style.top);
-    over.parentNode.insertBefore(anchor, over);
+    const from = lengthPx(freeOff(el));
+    // 次のページへ続く枠は、本体と続きの部分（それぞれの置き場）をひとまとまりで
+    // 移す。本体の置き場だけを移すと続きの部分が取り残され、本体より前に並んで重なり、
+    // 文章の大半がそちらへ移った（オーナー 2026-09-22 test.html、BUGS #61）。
+    const group = chainable(el) && !isCont(el)
+      ? chainOf(el).map((f) => chainHost(f)).filter((h, i, a) => h && h.parentNode === home && a.indexOf(h) === i)
+      : [anchor];
+    if (group.indexOf(over) >= 0) { return false; }
+    group.forEach((h) => { over.parentNode.insertBefore(h, over); });
     placeFreeAt(el, geom, was);
     // Where the writer put it is remembered as an offset from the peg, so when
     // the peg moves that memory has to move with it -- by the same amount the
@@ -6097,17 +10535,17 @@ ${insideObjects('.eb-paper.boxed')} {
     const c = canvas();
     const geom = c ? pageGeometry() : null;
     if (!geom) { return false; }
-    // Placing a thing by hand has NOT been turned round yet: settleFree works in
-    // left and top, which are the same two words in both writing modes but not
-    // the same two directions. pageGeometry used to answer null in 縦書き and that
-    // is what kept this from running there; now that it answers, the refusal has
-    // to be said here instead of being a side effect somewhere else. A thing
-    // placed in vertical writing stays exactly where the writer put it.
-    if (geom.tate) { return false; }
+    // 縦書きでも同じようにする。
+    //
+    // ここには「手で置いた物は縦書きでは動かさない」という断りがあった ――
+    // settleFree が left と top で書かれていて、縦書きでは向きが違うから、という
+    // 理由で。止めていたので、置いた物は紙をまたいでも直されず、本文の上にも
+    // 乗らず、回り込みも働かなかった。ずれの持ち方を進む向きで言い直した
+    // （freeProp / nudgeFreeMm）ので、止める理由は無くなった。
     let moved = false;
     Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
       if (reanchor(el, geom)) { moved = true; }
-      if (settleFree(el, geom)) { moved = true; }
+      if (settleFree(el, geom, window.__ebFreeNote)) { moved = true; }
       // And again once it has been settled: a thing standing below the last line
       // of its frame has nothing to peg to, and keeps the far end of the frame as
       // its peg -- from where no room can ever be made for it, because room is
@@ -6135,10 +10573,19 @@ ${insideObjects('.eb-paper.boxed')} {
     const st = window.getComputedStyle(frame);
     // The far edge along the axis the writing runs. In 縦書き that is the left
     // side of the box, not the bottom of it.
+    const pad = parseFloat(st.paddingBlockEnd) || 0;
+    const edge = parseFloat(st.borderBlockEndWidth) || 0;
+    // 枠そのものが、進む向きにこれ以上伸びないなら、入るのはその内側まで。
+    //
+    // 横書きでは、図形や枠は高さを決めずに置かれる（min-height だけ）ので中身
+    // なりに伸び、この上限は効かない。縦書きでは進む向きが幅で、書き手が
+    // width を決めているから伸びない ―― 伸びないのに紙の残りだけを限界として
+    // いたので、中身が図形の外へそのまま溢れた。実測：図形の長さ302に対して
+    // 中の文章が441、紙の下余白を244mm はみ出していた。
     const tate = isTate(frame);
-    const pad = parseFloat(tate ? st.paddingLeft : st.paddingBottom) || 0;
-    const edge = parseFloat(tate ? st.borderLeftWidth : st.borderBottomWidth) || 0;
-    return room - pad - edge;
+    const told = frame.style ? (tate ? frame.style.width : frame.style.height) : '';
+    const own = (told && told !== 'auto') ? sizeAlong(frame, tate) : Infinity;
+    return Math.min(room, own) - pad - edge;
   }
   /** Where a block inside a frame stands, from the frame's own top, at 100%. */
   function insideFrame(frame, el) {
@@ -6168,7 +10615,10 @@ ${insideObjects('.eb-paper.boxed')} {
   function frameIsDrawn(el) {
     if (!el || !window.getComputedStyle) { return false; }
     const st = window.getComputedStyle(el);
-    const edge = (parseFloat(st.borderBottomWidth) || 0) > 0 && st.borderBottomStyle !== 'none';
+    // The far edge along the writing's own direction: the foot in 横書き, the
+    // left-hand side in 縦書き. Asked for as "bottom", a frame in vertical
+    // writing was measured on an edge that is not the one it ends at.
+    const edge = (parseFloat(st.borderBlockEndWidth) || 0) > 0 && st.borderBlockEndStyle !== 'none';
     const paint = st.backgroundColor && !/^rgba?\(0, 0, 0, 0\)$|transparent/.test(st.backgroundColor);
     return !!(edge || paint);
   }
@@ -6184,7 +10634,14 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!frameIsDrawn(frame)) { return 0; }
     const r = document.createRange();
     r.selectNodeContents(el);
-    return Math.max(0, el.offsetHeight - rangeBottom(el, r));
+    return Math.max(0, sizeAlong(el, isTate(el)) - rangeBottom(el, r));
+  }
+  /** How far down a 文字枠 its lines reach -- the boxes of the lines, as the cut
+   *  measures them (cutOffsetIn), not the ink. */
+  function lineBoxBottom(frame) {
+    const r = document.createRange();
+    r.selectNodeContents(frame);
+    return rangeBottom(frame, r, true);
   }
   /** How far down the frame the writing itself reaches -- ink, not boxes. */
   function inkBottom(frame) {
@@ -6224,6 +10681,153 @@ ${insideObjects('.eb-paper.boxed')} {
   function sizeAlong(el, tate) {
     return tate ? el.offsetWidth : el.offsetHeight;
   }
+  /**
+   * The property a frame's own size along the writing's direction is written in.
+   *
+   * A frame fills down the page in 横書き and across it in 縦書き. Said as
+   * `min-height`, that means the direction the writing runs only while the
+   * writing is horizontal: in 縦書き the height of a frame is its measurement
+   * ACROSS the page, and setting it says nothing about how much the frame holds.
+   * So the frame was never given a size in the direction it fills, the writing
+   * ran out of the box and over the fold -- and instead of saying it in the
+   * writing's own direction, the chain was switched off for vertical writing
+   * altogether. The rule is the same in both; only the axis it is read along
+   * changes, exactly as in sizeAlong.
+   */
+  function flowProp(el) { return isTate(el) ? 'min-width' : 'min-height'; }
+  /** The same, as the document writes it. */
+  function flowMin(el) { return (el.style && el.style.getPropertyValue(flowProp(el))) || ''; }
+  function setFlowMin(el, css) { el.style.setProperty(flowProp(el), css); }
+  /**
+   * Both ways of giving a size along that direction, taken off.
+   *
+   * Which way the writing runs is passed in rather than read off the element:
+   * a frame's continuation is made as a copy that is not in the document yet,
+   * and a copy standing on its own has no 縦書き above it to find. Read from
+   * the copy, the answer was "horizontal" whatever the document was doing, so
+   * in 縦書き the height was stripped off the continuation instead of the
+   * width -- the carried-on frame came out 252.9mm tall where the frame it
+   * came from was the 240mm the writer had asked for.
+   */
+  function clearFlowSize(el, tate) {
+    // 外すのは鎖が付けた最小値だけ。書き手が決めた大きさ（width / height）は
+    // そのまま残す ―― 続きの枠は元の枠と同じ形でなければならないし、正本でも
+    // 枠が勝手に伸びることはない。
+    el.style.removeProperty(tate ? 'min-width' : 'min-height');
+  }
+  /**
+   * Where the pages fall, read along the direction the writing runs.
+   *
+   * The same few lines had been written out five times -- in addPage, in
+   * blocksOfPage, in objectsOnPage, in deletePage -- and every one of them said
+   * "how far down the page" and "the height of a sheet". In 縦書き the pages run
+   * right to left, so every block answered "page one": a page asked for above
+   * page two went to the end of the document, and "delete everything on this
+   * page" found nothing to delete and did nothing at all. Said once, on the
+   * axis the writing actually runs along, it is right for both.
+   *
+   * @param c the canvas
+   * @param z how much the paper is zoomed (1 at 100%)
+   */
+  function pageRuler(c, z) {
+    const tate = !!(c && c.classList && c.classList.contains('eb-tategaki'));
+    const sheets = sheetsOnScreen();
+    const s0 = sheets[0] && sheets[0].getBoundingClientRect ? sheets[0].getBoundingClientRect() : null;
+    const span = s0 ? (tate ? s0.width : s0.height) / z : 0;
+    const edge0 = s0 ? (tate ? s0.right : s0.top) : 0;
+    const startOf = (r) => (tate ? (edge0 - r.right) : (r.top - edge0)) / z;
+    const endOf = (r) => (tate ? (edge0 - r.left) : (r.bottom - edge0)) / z;
+    // From one sheet to the next: the sheet and the gap after it. Counting in
+    // sheets alone left the gaps out, and the count slipped by a gap a page --
+    // from page ten on, the last line of the page before was taken as this
+    // page's, and "delete everything on this page" would have taken it too
+    // (review of 2026-09-27, worker D). A box is on the sheet its start is on;
+    // one starting in a gap belongs to the sheet after it.
+    const s1 = sheets[1] && sheets[1].getBoundingClientRect ? sheets[1].getBoundingClientRect() : null;
+    const step = s1 ? Math.abs(tate ? (s0.right - s1.right) : (s1.top - s0.top)) / z : span;
+    const gap = Math.max(0, step - span);
+    return {
+      tate: tate,
+      span: span,
+      step: step,
+      sheets: sheets,
+      /** How far along the writing a box begins and ends, at 100%. */
+      startOf: startOf,
+      endOf: endOf,
+      /** Which page a box stands on, counting from one. */
+      pageOf: (r) => (step ? Math.max(1, Math.floor((startOf(r) + gap / 2) / step) + 1) : 1),
+      /** Where page n begins and ends, in the units startOf and endOf answer in. */
+      headAt: (n) => (n - 1) * step,
+      footAt: (n) => (n - 1) * step + span,
+      /** Where the far edge of page n is, in the units the boxes are read in. */
+      footOf: (n) => (tate ? edge0 - ((n - 1) * step + span) * z : edge0 + ((n - 1) * step + span) * z),
+      /** Whether a box stands on the sheet whose box is given. */
+      onSheet: (r, sr) => (tate
+        ? (r.right <= sr.right + 2 && r.right >= sr.left - 2)
+        : (r.top >= sr.top - 2 && r.top <= sr.bottom + 2)),
+    };
+  }
+  /**
+   * 手で置いた物の「文章の進む向きのずれ」を書いておく CSS の名前。
+   *
+   * 横書きでは上からの距離（top）、縦書きでは右からの距離（right）。錨は高さ0の
+   * 杭で、物はそこからの絶対位置で置かれる ―― どちらの向きでも「杭から、文章の
+   * 進む向きへどれだけ」であって、画面の上からの距離ではない。top と決め打って
+   * いたので、縦書きでは紙を横切る向きのずれになり、頼んだ向きと違う方へ動き、
+   * 置いた物が本文の上に乗らず、回り込みも働かなかった。
+   */
+  function freeProp(el) { return isTate(el) ? 'right' : 'top'; }
+  function freeOff(el) { return (el && el.style && el.style.getPropertyValue(freeProp(el))) || ''; }
+  function setFreeOff(el, css) { tidyFreeSides(el); el.style.setProperty(freeProp(el), css); }
+  /**
+   * 使わない側の指定を消す。
+   *
+   * 絶対位置の物に left と right の両方が付くと、物は幅なりに置かれるのではなく
+   * その二辺のあいだに引き伸ばされる。縦書きでは進む向きのずれを right で持つ
+   * ので、横書きのときに書かれた left が残っていると、右へ20mm動かせと頼んだ物が
+   * 左へ120.5mm動いた。上下も同じ。
+   */
+  function tidyFreeSides(el) {
+    if (!el || !el.style) { return; }
+    el.style.removeProperty('bottom');
+    el.style.removeProperty(isTate(el) ? 'left' : 'right');
+  }
+  function clearFreeOff(el) { el.style.removeProperty(freeProp(el)); }
+  /** 紙を横切る向きのずれ（版面の中での寄り）。横書きでは左から、縦書きでは上から。 */
+  function crossProp(el) { return isTate(el) ? 'top' : 'left'; }
+  /**
+   * 手で置いた物を、画面の動きぶんだけずらす。向きの違いはここだけで吸収する。
+   *
+   * 画面の右へ dx、下へ dy 動かしたい ―― 横書きなら left と top をそのまま足せば
+   * よいが、縦書きでは文章が右から左へ流れるので、進む向きのずれは right で持ち、
+   * 右へ動かすことは right を減らすことになる。足す先と符号を間違えていたので、
+   * 「右20mm・下30mm 動かせ」と頼むと「右-50mm・下-80mm」動いていた。
+   */
+  function nudgeFreeMm(el, dxMm, dyMm) {
+    if (!el || !el.style) { return; }
+    const tate = isTate(el);
+    const fp = freeProp(el);
+    const cp = crossProp(el);
+    const flow = tate ? -dxMm : dyMm;
+    const cross = tate ? dyMm : dxMm;
+    // 動きが0の軸も必ず書く。絶対位置の物は、その指定が無いと「流れの中に居たら
+    // 置かれていたはずの場所」に戻ってしまう ―― 書かずに済ませたら、横書きで
+    // 引きずった物が手を離した場所に着かなくなった。
+    tidyFreeSides(el);
+    el.style.setProperty(fp, round1((parseFloat(el.style.getPropertyValue(fp)) || 0) + flow) + 'mm');
+    el.style.setProperty(cp, round1((parseFloat(el.style.getPropertyValue(cp)) || 0) + cross) + 'mm');
+  }
+  /** 同じことを、画面の画素で言うとき。 */
+  function nudgeFreePx(el, dx, dy, z) {
+    const zz = z || 1;
+    nudgeFreeMm(el, dx * MM / zz, dy * MM / zz);
+  }
+  /** How much the paper is zoomed on screen, read off the paper's own wrapper. */
+  function paperZoom(el) {
+    const wrap = el && el.closest ? el.closest('.eb-paperwrap') : null;
+    const z = wrap ? parseFloat(window.getComputedStyle(wrap).zoom) : 1;
+    return z > 0 ? z : 1;
+  }
   /** How much the page is zoomed, measured on the box itself. */
   function scaleOf(el, box, tate) {
     return (tate ? box.width / (el.offsetWidth || 1) : box.height / (el.offsetHeight || 1)) || 1;
@@ -6236,17 +10840,25 @@ ${insideObjects('.eb-paper.boxed')} {
     return rects.some((s) => Math.abs(s.top - r.top) < 0.5 && Math.abs(s.bottom - r.bottom) < 0.5
       && Math.abs(s.left - r.left) < 0.5 && Math.abs(s.right - r.right) < 0.5);
   }
-  function rangeBottom(el, range) {
+  function rangeBottom(el, range, lineBox) {
     const box = el.getBoundingClientRect();
     const tate = isTate(el);
     const scale = scaleOf(el, box, tate);
     const shims = shimRects(el);
     let deep = 0;
+    let across = 0;
     Array.from(range.getClientRects()).forEach((rect) => {
       if (!rect.height || !rect.width || isShimRect(shims, rect)) { return; }
       const d = depthIn(box, rect, tate);
-      if (d > deep) { deep = d; }
+      if (d > deep) { deep = d; across = tate ? rect.width : rect.height; }
     });
+    // 行の下端まで：字の形の下に、行の高さのゆとりの半分がある。字の形の下端で
+    // 「収まる」と見ると最後の行が数 px はみ出し、分けた前半がページに入らずに次の
+    // ページへ送られ、見出しの下が1ページまるごと空いた（漢字一覧.html、BUGS #51）。
+    if (lineBox && deep) {
+      const half = Math.max(0, (lineOf(el) - across / scale) / 2);
+      return deep / scale + half;
+    }
     return deep / scale;
   }
   /** How far into an element the first line of a range begins, at 100%. */
@@ -6276,6 +10888,13 @@ ${insideObjects('.eb-paper.boxed')} {
     if (v.indexOf('mm') >= 0) { return n / MM; }
     if (v.indexOf('cm') >= 0) { return n * 10 / MM; }
     if (v.indexOf('pt') >= 0) { return n * (96 / 72); }
+    // LibreOffice writes inches; a length in them was read as that many pixels,
+    // and a thing placed 2in down stood 2px down (BUGS L19). pc is 12pt, Q a
+    // quarter of a millimetre. em and % depend on where they stand and are left
+    // as they were.
+    if (/in$/.test(v)) { return n * 96; }
+    if (/pc$/.test(v)) { return n * 16; }
+    if (/Q$/.test(v)) { return n / 4 / MM; }
     return n;
   }
 
@@ -6292,21 +10911,38 @@ ${insideObjects('.eb-paper.boxed')} {
       // page is what has to be carried over.
       if (objectFree(lead)) {
         const room = roomFor(lead, geom);
-        if (lead.offsetHeight <= room + 1 && writtenBottom(lead) <= fillLimit(lead, room) + 1) { return true; }
+        if (sizeAlong(lead, isTate(lead)) <= room + 1 && writtenBottom(lead) <= fillLimit(lead, room) + 1) { return true; }
         return room < 2 * lineOf(lead);
       }
       // A frame that fits on a page is not this code's business: the page count
       // moves it whole to the next sheet, which is what a frame should do.
-      if (lead.offsetHeight <= geom.usable + 0.5) { return true; }
+      if (sizeAlong(lead, isTate(lead)) <= geom.usable + 0.5) { return true; }
       // Standing so near the foot of the page that not even a line of it would
       // fit, there is nothing to carry over: cutting here would leave a stub of a
       // frame a millimetre deep. It is left to run on until the writing above it
       // moves and it has room to be cut.
       return roomFor(lead, geom) < 2 * lineOf(lead);
     }
+    // 最後の部分が、書き手の決めた長さの残りより長く伸ばされていれば組み直す
+    // （案B：決めた長さが尽きたら中身の終わりで止まる）。以前の版はページの
+    // 下端まで伸ばして保存していたので、開いただけでは直らなかった。
+    const last = chain[chain.length - 1];
+    const lastMin = lengthPx(flowMin(last));
+    if (lastMin) {
+      const tate = isTate(lead);
+      const before = chain.slice(0, -1).reduce((n, f) => n + sizeAlong(f, tate), 0);
+      const left = lengthPx(wantOf(lead) || '') - before;
+      if (lastMin > Math.max(left, 0) + 2) { return false; }
+    }
     for (let i = 0; i < chain.length; i += 1) {
       const frame = chain[i];
       if (i > 0 && !sameShape(lead, frame)) { return false; }
+      // The head of the chain was given the room left on its page when it was laid
+      // out. Dragged down the page, or pushed down by writing above it, it keeps
+      // that length, and a frame with an edge of its own then runs over the foot of
+      // the page with its border although the writing in it still fits: measured,
+      // 9.8mm past the foot after a drag of 10mm (BUGS #64, L9).
+      if (i === 0 && frameIsDrawn(frame) && sizeAlong(frame, isTate(frame)) > roomFor(lead, geom) + 1) { return false; }
       const limit = fillLimit(frame, i === 0 ? roomFor(lead, geom) : fitRoom(geom.usable));
       const bottom = writtenBottom(frame);
       // The box of the last block may reach past the foot of the page by the
@@ -6321,17 +10957,42 @@ ${insideObjects('.eb-paper.boxed')} {
       // this one. For those the box itself must fit.
       const drawn = frameIsDrawn(frame);
       if (bottom > limit + 1 && (drawn || inkBottom(frame) > limit + 1)) { return false; }
-      const spare = roomLeft(frame, limit, bottom);
-      if (i < chain.length - 1 && spare >= lineOf(frame) && wouldFitBack(chain[i + 1], spare)) { return false; }
+      // 文字枠の余りは、切る側（cutOffsetIn）と同じく行の箱の下端から測る。字の形の
+      // 下端から測ると、行の高さのゆとりの半分だけ余りが大きく見え、1行入らない余りを
+      // 「1行戻せる」と読んで、落ち着いた鎖を落ち着いていないと答えていた（L10）。
+      const spare = frame.matches(TEXT_BLOCKS)
+        ? limit - lineBoxBottom(frame)
+        : roomLeft(frame, limit, bottom);
+      if (i < chain.length - 1 && spare >= lineOf(frame) && wouldFitBack(chain[i + 1], spare, frame)) { return false; }
+      // A paragraph cut here with a single line of it on either side of the cut
+      // was cut before the two-line rule, or where the frame stood before it
+      // moved: the cut would not make it so now (L21).
+      if (i < chain.length - 1 && lonePiece(frame, chain[i + 1])) { return false; }
     }
     return true;
+  }
+  /** Whether the paragraph cut between two frames of a chain has fewer than two
+   *  lines on one side of the cut -- what the cut in splitChain never leaves. */
+  function lonePiece(frame, next) {
+    const tail = frame.lastElementChild;
+    const head = next.firstElementChild;
+    if (!tail || !head || tail.getAttribute('data-split') !== 'on' || tail.nodeName !== head.nodeName
+      || !tail.matches(TEXT_BLOCKS)) { return false; }
+    const line = lineOf(tail);
+    if (!(line > 0)) { return false; }
+    const r = document.createRange();
+    r.selectNodeContents(tail);
+    const kept = rangeBottom(tail, r, true) - rangeTop(tail, r);
+    r.selectNodeContents(head);
+    const carried = rangeBottom(head, r, true) - rangeTop(head, r);
+    return Math.round(kept / line) < 2 || Math.round(carried / line) < 2;
   }
   /** The room left at the foot of a frame, with the space under its last block
    *  counted in: that space is space again when something is put after it. */
   function roomLeft(frame, limit, bottom) {
     const last = frame.lastElementChild;
     const under = last && !frame.matches(TEXT_BLOCKS)
-      ? (parseFloat(window.getComputedStyle(last).marginBottom) || 0) : 0;
+      ? (parseFloat(window.getComputedStyle(last).marginBlockEnd) || 0) : 0;
     return limit - bottom - under;
   }
   /**
@@ -6341,28 +11002,52 @@ ${insideObjects('.eb-paper.boxed')} {
    * because the next row is too tall for what is left is doing the right thing,
    * and saying otherwise sent the layout round and round for ever.
    */
-  function wouldFitBack(cont, gap) {
-    // 文字枠 holds lines, not blocks: a line always fits back.
-    if (cont.matches(TEXT_BLOCKS)) { return true; }
+  function wouldFitBack(cont, gap, prev) {
+    // 文字枠 holds lines, not blocks: its first line comes back if a line's room is
+    // left -- two lines' if the first is a line with nothing on it, since the cut is
+    // made by the character and cannot fall after an empty line (the same as a
+    // paragraph below, BUGS #83). Saying "a line always fits back" for any gap had
+    // the chain laid out again for a line that the cut could not bring back (L10).
+    if (cont.matches(TEXT_BLOCKS)) {
+      const lead = leadingNode(cont);
+      return (lead && lead.nodeName === 'BR' ? 2 : 1) * lineOf(cont) <= gap + 0.5;
+    }
     const first = cont.firstElementChild;
     if (!first) { return true; }
     if (first.matches(TEXT_BLOCKS)) {
-      // One line of it, and the space above the paragraph, which is space again
-      // at the top of a page. Answering "a paragraph always fits" for a gap too
-      // small to hold its first line had the frame laid out again and again.
-      const above = parseFloat(window.getComputedStyle(first).marginTop) || 0;
+      const line = lineOf(first);
+      // A piece of a paragraph cut at the foot of the frame before goes back on to
+      // the end of that paragraph: there is no space above it, and one line of it
+      // is enough, joining the lines already there. A paragraph of its own brings
+      // the space above it, which is space again at the top of a page -- and it
+      // has to leave two lines at the foot, not one (orphans, as the cut does:
+      // L21). Answering "a paragraph always fits" for a gap too small to hold its
+      // first line had the frame laid out again and again.
+      const tail = prev && prev.lastElementChild;
+      const carried = !!tail && tail.getAttribute('data-split') === 'on' && tail.nodeName === first.nodeName;
+      const above = carried ? 0 : (parseFloat(window.getComputedStyle(first).marginBlockStart) || 0);
+      // 1行目が字の無い行（改行だけ）の段落は、1行分の余りでは切れない ―― 切る
+      // 位置は字の数で決めるので、字の無い行の後ろでは切れない。戻せるのは字のある
+      // 2行目まで入るときだけ。1行で「戻せる」と答えていたので、切る側は切れず、
+      // 鎖がいつまでも落ち着かなかった（BUGS #83・test.html のまとめ枠）。
+      const lead = leadingNode(first);
+      let need = (carried && !(lead && lead.nodeName === 'BR') ? 1 : 2) * line;
+      // And two lines must still go on to the next frame (widows) -- or the whole
+      // of it comes back.
+      const deep = sizeAlong(first, isTate(first));
+      if (deep - need < 2 * line - 0.5) { need = deep; }
       // The same allowance the cut makes: a line brought back has a box as well
       // as ink, and asking for it without the box sent the frame round and round
       // -- cut one line short, judged one line hungry, cut again.
-      return above + lineOf(first) + boxSlack(cont, first) <= gap + 0.5;
+      return above + need + boxSlack(cont, first) <= gap + 0.5;
     }
     if (first.nodeName === 'TABLE') {
       const head = first.querySelector(':scope > thead');
       const row = tableRows(first).filter((r) => !head || !head.contains(r))[0];
       if (!row) { return false; }
-      return row.getBoundingClientRect().height <= gap + 0.5;
+      return sizeAlong(row, isTate(row)) <= gap + 0.5;
     }
-    return first.getBoundingClientRect().height <= gap + 0.5;
+    return sizeAlong(first, isTate(first)) <= gap + 0.5;
   }
   /**
    * Whether a carried-on frame still looks like the frame it carries on from.
@@ -6377,7 +11062,17 @@ ${insideObjects('.eb-paper.boxed')} {
       const copy = el.cloneNode(false);
       // A frame carried on stands lower down the paper, on a page of its own, and
       // holds a different amount: none of that makes it a different frame.
-      ['min-height', 'height', 'top', '--eb-shift'].forEach((k) => copy.style.removeProperty(k));
+      // 置かれている場所は、同じ枠かどうかとは関係がない。横書きでは top だけを
+      // 見ていたので、縦書きで使う right が残り、続きの枠が別物と判定されて鎖が
+      // 切れていた ―― 続きの枠が前の向きの位置のまま紙の外に取り残された。
+      // 伸びる向きの長さだけは続きごとに違う。横切る向きの長さ（横書きの幅・
+      // 縦書きの高さ）は枠そのものの寸法なので比べる ―― 幅も捨てていたので、
+      // 枠の幅を変えても続きの枠が元の幅のまま残っていた（2026-09-21 test.html）。
+      const cross = isTate(lead) ? 'height' : 'width';
+      ['min-height', 'height', 'min-width', 'width',
+        'top', 'left', 'right', 'bottom', '--eb-shift']
+        .filter((k) => k !== cross)
+        .forEach((k) => copy.style.removeProperty(k));
       return copy.getAttribute('style') || '';
     };
     return drop(lead) === drop(cont);
@@ -6399,9 +11094,34 @@ ${insideObjects('.eb-paper.boxed')} {
     return out;
   }
   /** Where the caret is, counted in characters from the start of the chain. */
+  /**
+   * カーソルが段落の外側の「枠そのもの」（まとめ枠・文字枠の入れ物）に置かれたら、
+   * すぐ内側の段落の中へ入れ直す。そこで打った字は、ブラウザの判断で枠の最初の段落
+   * などへ入ってしまう（縦書きのまとめ枠の続きで実測。2026-09-22）。
+   */
+  function caretIntoParagraph() {
+    const r = getRange();
+    if (!r || !r.collapsed) { return; }
+    const n = r.startContainer;
+    if (n.nodeType !== 1 || !n.matches || !n.matches('div.eb-frame, aside.eb-box, div.eb-note')) { return; }
+    const kids = Array.from(n.children).filter((k) => !k.classList || !k.classList.contains('eb-anchor'));
+    if (!kids.length) { return; }
+    const after = r.startOffset >= n.childNodes.length;
+    const target = after ? kids[kids.length - 1] : (n.childNodes[r.startOffset] && n.childNodes[r.startOffset].nodeType === 1 ? n.childNodes[r.startOffset] : kids[0]);
+    const inner = target.matches && target.matches('p, h1, h2, h3, h4, h5, h6, li, pre, blockquote') ? target : (target.querySelector && target.querySelector('p, li, h1, h2, h3, h4, h5, h6')) || target;
+    const at = document.createRange();
+    if (after) { at.selectNodeContents(inner); at.collapse(false); } else { at.setStart(inner, 0); at.collapse(true); }
+    selectRange(at);
+  }
+  // 字数だけでは空の段落の頭を区別できない。覚えたときの要素と位置も持っておき、
+  // 組み直したあともその要素が枠の中にあれば、そこへ戻す（縦書きのまとめ枠で Enter
+  // を押すと、次に打った字が最初の段落へ入った。2026-09-22 点検で発見）。
+  let chainKeep = null;
   function chainCaret(chain) {
     const r = getRange();
     if (!r) { return null; }
+    chainKeep = { node: r.startContainer, at: r.startOffset,
+      end: r.collapsed ? null : { node: r.endContainer, at: r.endOffset, count: chainCount(chain, r.endContainer, r.endOffset) } };
     let before = 0;
     for (let i = 0; i < chain.length; i += 1) {
       const stops = caretStops(chain[i]);
@@ -6417,9 +11137,79 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     return null;
   }
+  /** まとめ枠の続き全体で数えた、その位置までの字数。 */
+  function chainCount(chain, node, offset) {
+    let before = 0;
+    for (let i = 0; i < chain.length; i += 1) {
+      const stops = caretStops(chain[i]);
+      if (chain[i].contains(node)) {
+        for (let k = 0; k < stops.length; k += 1) {
+          if (stops[k] === node) { return before + offset; }
+          before += stops[k].length;
+        }
+        return before;
+      }
+      before += stops.reduce((sum, n) => sum + n.length, 0);
+    }
+    return null;
+  }
+  /**
+   * 組み直す前に字を選んでいたなら、組み直したあとも同じ字の範囲を選んだままにする。
+   * 始まりを戻したあとで終わりを伸ばす。以前はカーソルだけを戻していたので、選んだ
+   * 字の大きさを「＋」で一度変えると選択が消え、二度目は最初の段落にだけ効いた
+   * （オーナー 2026-09-22、BUGS #49）。
+   */
+  function extendKept(end, locate, root) {
+    const sel = window.getSelection();
+    if (!end || !sel || !sel.rangeCount) { return; }
+    const r = sel.getRangeAt(0).cloneRange();
+    let node = null; let at = 0;
+    // 字の中の位置（文字のノード）はそのまま使える。段落などの要素の「何番目の子の
+    // 前」という位置は、組み直しで段落がページの境目で分かれると別の所を指すので、
+    // 字数で数え直す（Ctrl+A で選んだ範囲が、＋一度で 1306 字から 365 字に縮んだ）。
+    if (end.node && end.node.nodeType === 3 && end.node.isConnected && root.contains(end.node)
+      && end.at <= end.node.data.length) { node = end.node; at = end.at; }
+    if (!node && end.count != null) { const p = locate(end.count); if (p) { node = p.node; at = p.at; } }
+    if (!node) { return; }
+    try {
+      r.setEnd(node, at);
+      if (!r.collapsed) { selectRange(r); }
+    } catch (e) { /* the text moved under us: the caret stays where it is */ }
+  }
   /** Put it back at the same character, wherever that character has ended up. */
   function placeChainCaret(chain, at) {
+    placeChainStart(chain, at);
+    const k = chainKeep;
+    if (at != null && k && k.end) {
+      extendKept(k.end, (count) => {
+        let left = count;
+        for (let i = 0; i < chain.length; i += 1) {
+          const stops = caretStops(chain[i]);
+          for (let j = 0; j < stops.length; j += 1) {
+            if (left <= stops[j].length) { return { node: stops[j], at: left }; }
+            left -= stops[j].length;
+          }
+        }
+        return null;
+      }, canvas());
+    }
+  }
+  function placeChainStart(chain, at) {
     if (at == null) { return; }
+    const k = chainKeep;
+    if (k && k.node && chain.some((f) => f.contains(k.node))) {
+      const max = k.node.nodeType === 3 ? k.node.data.length : k.node.childNodes.length;
+      if (k.at <= max) {
+        try {
+          const r = document.createRange();
+          r.setStart(k.node, k.at);
+          r.collapse(true);
+          selectRange(r);
+          caretIntoParagraph();
+          return;
+        } catch (e) { /* fall back to counting */ }
+      }
+    }
     let left = at;
     for (let i = 0; i < chain.length; i += 1) {
       const stops = caretStops(chain[i]);
@@ -6436,6 +11226,7 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     const last = chain[chain.length - 1];
     if (last) { placeCaretIn(last); }
+    caretIntoParagraph();
   }
 
   /**
@@ -6535,6 +11326,64 @@ ${insideObjects('.eb-paper.boxed')} {
     placeCaretIn(block);
   }
 
+  // ---- a paragraph cut at a page foot, as the other copy sees it ----
+  // The pieces a paragraph is cut into at page feet are this screen's layout:
+  // the file has the paragraph whole, and the other copy cuts its own where its
+  // own page feet fall, under names of its own. So between two copies a cut
+  // paragraph is one block, under the name of its first piece (review D3, D4).
+  // The pieces of a cut paragraph: cutPieces, above (one rule for the whole file).
+  // The first piece of a cut paragraph: cutHead, above (one rule for the whole file).
+  /** A cut paragraph put together, as a copy: the screen is not touched. */
+  function wholeCopy(pieces) {
+    const holder = document.createElement('div');
+    pieces.forEach((p) => holder.appendChild(p.cloneNode(true)));
+    joinFlowCuts(holder);
+    return holder.firstElementChild;
+  }
+  /** Where the caret is, as the name of its paragraph (the first piece, if the
+   *  paragraph is cut) and a count of characters into the whole of it. */
+  function wholeCaretMark(c) {
+    const r = getRange();
+    if (!c || !r || !c.contains(r.startContainer)) { return null; }
+    let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentNode;
+    while (block && block.parentNode !== c) { block = block.parentNode; }
+    if (!block || !block.getAttribute) { return null; }
+    const head = cutHead(block);
+    const id = head.getAttribute && head.getAttribute('data-eb-id');
+    if (!id) { return null; }
+    let at = 0;
+    const pieces = cutPieces(head);
+    for (let i = 0; i < pieces.length && pieces[i] !== block; i += 1) { at += String(pieces[i].textContent || '').length; }
+    const before = document.createRange();
+    before.selectNodeContents(block);
+    before.setEnd(r.startContainer, r.startOffset);
+    return { id: id, at: at + String(before.toString() || '').length };
+  }
+  /** And back to that character, in whichever piece it now falls. */
+  function putWholeCaretBack(c, mark) {
+    if (!c || !mark) { return; }
+    const head = c.querySelector(':scope > [data-eb-id="' + mark.id + '"]');
+    if (!head) { putCaretBack(c, mark); return; }
+    const pieces = cutPieces(head);
+    let left = mark.at;
+    for (let i = 0; i < pieces.length; i += 1) {
+      const walk = document.createTreeWalker(pieces[i], NodeFilter.SHOW_TEXT, null);
+      let node = walk.nextNode();
+      while (node) {
+        if (left <= node.length) {
+          const r = document.createRange();
+          r.setStart(node, left);
+          r.collapse(true);
+          selectRange(r);
+          return;
+        }
+        left -= node.length;
+        node = walk.nextNode();
+      }
+    }
+    placeCaretIn(pieces[pieces.length - 1]);
+  }
+
   /** Put the whole chain back into one frame, exactly as it was written. */
   function joinChain(chain) {
     const lead = chain[0];
@@ -6582,9 +11431,9 @@ ${insideObjects('.eb-paper.boxed')} {
     lead.removeAttribute('data-split');
     Array.from(lead.querySelectorAll('[data-split]')).forEach((el) => el.removeAttribute('data-split'));
     if (lead.hasAttribute('data-frame-height')) {
-      const was = lead.getAttribute('data-frame-height');
-      lead.removeAttribute('data-frame-height');
-      if (was) { lead.style.minHeight = was; } else { lead.style.removeProperty('min-height'); }
+      const was = wantOf(lead);
+      forgetWant(lead);
+      if (was) { setFlowMin(lead, was); } else { lead.style.removeProperty(flowProp(lead)); }
       if (!lead.getAttribute('style')) { lead.removeAttribute('style'); }
     }
   }
@@ -6614,7 +11463,7 @@ ${insideObjects('.eb-paper.boxed')} {
       const r = document.createRange();
       r.setStart(stops[0], 0);
       r.setEnd(spot.node, spot.offset);
-      return rangeBottom(block, r) <= limit + 0.5;
+      return rangeBottom(block, r, true) <= limit + 0.5;
     };
     if (fits(total)) { return -1; }
     let lo = 0;
@@ -6675,8 +11524,16 @@ ${insideObjects('.eb-paper.boxed')} {
     // A head worth repeating is a line or two saying what the columns are. The
     // banner across the top of a Wikipedia box of links is not that: repeating it
     // on every page cost a third of each page and doubled the document.
+    //
+    // 大きさは「繰り返す先のページ」と比べる。切れ目の前に残った余りと比べて
+    // いたので、表がページの下の方から始まると、2行の見出し（58px）でも余りの
+    // 15% を超えて繰り返されず、以後の切れ端は見出しの無い切れ端から作られるので
+    // 最後まで出なかった。ブラウザの印刷は毎ページ繰り返す（L15）。続きは必ず
+    // 新しいページ（枠なら新しい枠）の頭から始まるので、比べる相手は1ページの丈。
     const deep = head ? sizeAlong(head, isTate(table)) : 0;
-    if (head && deep <= Math.max(24, (room || 0) * 0.15)) {
+    const geom = pageGeometry();
+    const page = geom && geom.usable > 0 ? geom.usable : (room || 0);
+    if (head && deep <= Math.max(24, page * 0.15)) {
       const h = head.cloneNode(true);
       h.setAttribute('data-eb-again', 'on');
       rest.appendChild(h);
@@ -6701,23 +11558,42 @@ ${insideObjects('.eb-paper.boxed')} {
   }
   /** Cut a list between two of its items, the second half a list of the same kind
    *  going on from the number the first half reached. */
-  function splitListAt(list, room) {
+  /**
+   * A list cut between two of its items, measured the way the column is (zoom
+   * taken out, along the axis the writing runs): the items that do not fit go
+   * to a list of the same kind, a numbered one going on from where it stopped.
+   * Null when not even the first item fits.
+   */
+  function listBetweenItems(list, room) {
     const items = Array.from(list.children).filter((k) => k.nodeName === 'LI');
     if (items.length < 2) { return null; }
-    const top = list.getBoundingClientRect().top;
+    const tate = isTate(list);
+    const box = list.getBoundingClientRect();
+    const scale = scaleOf(list, box, tate);
     let first = -1;
     for (let i = 0; i < items.length; i += 1) {
-      if (items[i].getBoundingClientRect().bottom - top > room + 0.5) { first = i; break; }
+      const top = startIn(box, items[i].getBoundingClientRect(), tate) / scale;
+      if (top + sizeAlong(items[i], tate) > room + 0.5) { first = i; break; }
     }
     if (first <= 0) { return null; }
     const rest = list.cloneNode(false);
     rest.removeAttribute('id');
+    rest.removeAttribute('data-eb-id');
     if (list.nodeName === 'OL') {
       rest.setAttribute('start', String((parseInt(list.getAttribute('start'), 10) || 1) + first));
     }
     items.slice(first).forEach((li) => rest.appendChild(li));
     list.setAttribute('data-split', 'on');
     return rest;
+  }
+  /**
+   * A list inside a cell, cut between its items. The same cut as listBetweenItems,
+   * which it now is: this one read the items on the screen, zoom and all, against
+   * a room given at 100%, and always down the page -- so the cut moved with the
+   * zoom of the screen, and in 縦書き it measured across the column (L16).
+   */
+  function splitListAt(list, room) {
+    return listBetweenItems(list, room);
   }
 
   /**
@@ -6728,6 +11604,16 @@ ${insideObjects('.eb-paper.boxed')} {
    */
   function cutInsideCell(cell, room) {
     const kids = Array.from(cell.children);
+    // What the cell draws below the last thing it keeps -- its own padding and
+    // edge -- stays on this page with the piece, so it comes out of the room. So
+    // does the space under that last thing (a list keeps 12px under it). Left in,
+    // the piece of the row came out longer than the room by those few pixels, did
+    // not fit, and the page count sent it whole to the next sheet with every piece
+    // after it a page out of step: measured in 縦書き, a list in a cell ran through
+    // the fold for ten lines.
+    const cst = window.getComputedStyle(cell);
+    room -= (parseFloat(cst.paddingBlockEnd) || 0) + (parseFloat(cst.borderBlockEndWidth) || 0);
+    const under = (k) => parseFloat(window.getComputedStyle(k).marginBlockEnd) || 0;
     // Nothing but writing in it: cut at a line, as a paragraph is cut.
     if (!kids.some((k) => isBlock(k))) {
       if (room < 4) { return null; }
@@ -6739,14 +11625,19 @@ ${insideObjects('.eb-paper.boxed')} {
     if (!kids.length) { return null; }
     const tate = isTate(cell);
     const box = cell.getBoundingClientRect();
+    // The room is at 100% and the blocks are read on the screen: the zoom comes
+    // out of them before the two are compared. Compared as they were, the cut
+    // inside the same cell fell at the 12th paragraph at 100%, the 8th at 150%
+    // and the 20th at 60% -- the page changed with the zoom of the screen (L16).
+    const scale = scaleOf(cell, box, tate);
     let first = -1;
     for (let i = 0; i < kids.length; i += 1) {
-      if (depthIn(box, kids[i].getBoundingClientRect(), tate) > room + 0.5) { first = i; break; }
+      if (depthIn(box, kids[i].getBoundingClientRect(), tate) / scale + under(kids[i]) > room + 0.5) { first = i; break; }
     }
     if (first < 0) { return null; }
     if (first > 0) { return kids.slice(first); }
     const el = kids[0];
-    const left = room - startIn(box, el.getBoundingClientRect(), tate);
+    const left = room - under(el) - startIn(box, el.getBoundingClientRect(), tate) / scale;
     let rest = null;
     if (el.nodeName === 'TABLE') { rest = splitTableAt(el, left); }
     else if (el.nodeName === 'UL' || el.nodeName === 'OL') { rest = splitListAt(el, left); }
@@ -6785,9 +11676,21 @@ ${insideObjects('.eb-paper.boxed')} {
     // why a check that only compares the two never saw it.
     const tate = isTate(table);
     const box = table.getBoundingClientRect();
+    // Everything measured off the page is at 100%; the rows are read on screen,
+    // so the zoom comes back out of them before the two are put side by side.
+    const z = paperZoom(table);
+    const deepOf = (el) => depthIn(box, el.getBoundingClientRect(), tate) / z;
+    // Rows that end inside the room are kept, and the table's own closing border
+    // is NOT counted against them. A table is about a pixel longer than the rows
+    // in it -- its border at the far edge -- and a browser printing a table that
+    // breaks across two pages draws that border on the boundary rather than
+    // pushing a row over for it: measured, the paper kept 14 rows ending at
+    // 568.97 in a room of 569.01 although the box around them is 570. Counted
+    // against the rows, the editor dropped that row and came out 7.7mm short of
+    // the paper. What the box overhangs by is allowed for in FOLD_SLACK.
     let first = -1;
     for (let i = 0; i < body.length; i += 1) {
-      if (depthIn(box, body[i].getBoundingClientRect(), tate) > room + 0.5) { first = i; break; }
+      if (deepOf(body[i]) > room + 0.5) { first = i; break; }
     }
     if (first < 0) { return null; }                 // all of it fits: nothing to do
     if (first > 0) {
@@ -6803,10 +11706,26 @@ ${insideObjects('.eb-paper.boxed')} {
     const row = body[0];
     const cells = Array.from(row.children);
     if (!cells.length) { return null; }
+    // 行は切らない。文書の書式が行に break-inside: avoid を付けていて、ブラウザは
+    // 印刷で行を切らない。1ページに収まる行が残りに入らないだけなら、表ごと次の
+    // ページ（枠なら次の枠）へ送れば、そこで入る。切っていたので、6行の最初の行が
+    // 2行と4行に分かれ、印刷とページの割りが食い違った（L15）。
+    //
+    // 送れるのは、本文の中で1ページに収まる表（ページ割りが表ごと送る）と、枠の中の
+    // 表（鎖が次の枠へ運ぶ）。本文の中の1ページより長い表は、ここで null を返すと
+    // どこでも切られずに折り目を突き抜けて描かれる（L4、ページ割りの側の直しを
+    // 待つ）ので、これまでどおり行の中で切る。セルの中の表（箱の中の箱）は、外の行を
+    // 切る深さで切るしかないので、これも切る。
+    const geom = pageGeometry();
+    const host = table.parentNode;
+    const c = canvas();
+    const movable = !!host && ((host.matches && host.matches('div.eb-frame, div.eb-shape'))
+      || (host === c && !!geom && sizeAlong(table, tate) <= geom.usable + 0.5));
+    if (geom && movable && deepOf(row) <= geom.usable + 0.5) { return null; }
     // Each cell is cut at the same depth, and what comes off all of them together
     // makes the row that carries on -- which is what a browser does with a row
     // taller than the page when it prints one.
-    const carry = cells.map((cell) => cutInsideCell(cell, room - startIn(box, cell.getBoundingClientRect(), tate)));
+    const carry = cells.map((cell) => cutInsideCell(cell, room - startIn(box, cell.getBoundingClientRect(), tate) / z));
     if (!carry.some((got) => got && got.length)) { return null; }
     const rest = tableShell(table, room);
     const carrier = row.cloneNode(false);
@@ -6910,6 +11829,17 @@ ${insideObjects('.eb-paper.boxed')} {
     tail.setEnd(block, block.childNodes.length);
     return tail.collapsed ? null : tail;
   }
+  /** The first thing a block shows: a line break, a word, a picture -- going into
+   *  the inline wrappers it begins with, but not into a reading. */
+  function leadingNode(el) {
+    let n = el ? el.firstChild : null;
+    while (n) {
+      if (n.nodeType === 3 && !n.data.length) { n = n.nextSibling; continue; }
+      if (n.nodeType === 1 && n.nodeName !== 'BR' && n.nodeName !== 'RUBY' && n.firstChild) { n = n.firstChild; continue; }
+      return n;
+    }
+    return null;
+  }
   function splitBlockAt(block, chars) {
     const tail = tailRange(block, chars);
     if (!tail) { return null; }
@@ -6919,9 +11849,26 @@ ${insideObjects('.eb-paper.boxed')} {
     const keep = caretNode();
     trimShells(rest, true, keep);
     trimShells(block, false, keep);
+    // 行の終わりの改行（<br>）は字として数えないので、改行の手前で切ると、改行が
+    // 次の切れ端の頭へ回る。すると続きの頭に空の行ができ、前の枠には1行分の余りが
+    // 残る。空の行は「戻せる」と判定されるのに、字の無い行では切れないので、鎖が
+    // いつまでも落ち着かなかった（BUGS #83・test.html のまとめ枠）。その改行は前の
+    // 行を終わらせていたものなので、前の切れ端の終わりへ移す。一つに戻すと元の並び。
+    const lead = leadingNode(rest);
+    if (lead && lead.nodeName === 'BR' && String(rest.textContent || '').length) {
+      block.appendChild(lead);
+    }
     if (!String(rest.textContent || '').length && !rest.querySelector('img, figure, table, br')) { return null; }
     block.setAttribute('data-split', 'on');
     if (!block.firstChild) { block.appendChild(document.createElement('br')); }
+    // 続きの切れ端は段落の途中から始まる。1行目の字下げ（text-indent）は段落の
+    // 最初の行だけのもので、次のページの続きの行には付かない ―― ブラウザが一つの
+    // 段落として印刷するときも、LibreOffice も。複製した切れ端は字下げまで写して
+    // いたので、2ページ目の1行目が 20mm 字下げされて行の折り返しがずれ、保存した
+    // ファイルもそのまま字下げして印刷された（L14）。一つに戻すときに切れ端の書式は
+    // 捨てるので、この指定は残らない。
+    const indent = parseFloat(window.getComputedStyle(block).textIndent) || 0;
+    if (indent) { rest.style.setProperty('text-indent', '0'); }
     return rest;
   }
 
@@ -6931,9 +11878,45 @@ ${insideObjects('.eb-paper.boxed')} {
    * from the height it had before the change, and the change was undone a tenth
    * of a second after it was made.
    */
+  /**
+   * 書き手が決めた枠の長さ。これは「文章の進む向きの長さ」であって、横書きでは
+   * 高さ、縦書きでは幅にあたる ―― 同じ枠でも向きによって別の数になる。
+   *
+   * それを一つの data-frame-height で共用していたため、向きを変えるたびに枠の
+   * 長さが化けた。実測（オーナーの test.html・縦書き）: 1ページの使える長さが
+   * 170mm、中身が必要とするのは 167mm なのに、覚え書きが 437mm（以前の縦書きで
+   * 書かれた幅）だったため、枠が2.5ページに引き伸ばされ、要らない続きの枠が
+   * できていた。ページを1枚足すとそれが一本に戻り、紙が 7枚から 6枚へ減った。
+   *
+   * そこで、どちらの向きで測ったものかを併せて残し、違う向きの覚え書きは使わない。
+   * 向きの書いていない古い文書の覚え書きは、名前のとおり「高さ」＝横書きのもの
+   * として扱う（縦書きでは使わず、書き手が引いた幅をそのまま長さにする）。
+   */
+  function frameDir(el) { return isTate(el) ? 'tate' : 'yoko'; }
+  function wantOf(el) {
+    if (!el || el.nodeType !== 1 || !el.hasAttribute || !el.hasAttribute('data-frame-height')) { return ''; }
+    // 向きの書いていない覚え書きは捨てる（2026-09-21 オーナー判断）。
+    // どちらの向きで測ったものか分からないものは、信用できない ―― オーナーの
+    // test.html には以前の縦書きで書かれた幅 437mm が「高さ」として残っており、
+    // 横書きでもそれを高さとして読んでいた。捨てれば、書き手が引いた寸法から
+    // 組み直される。次に組んだときに向き付きで書き直されるので、一度きりで済む。
+    const was = el.getAttribute('data-frame-dir');
+    if (!was) { return ''; }
+    return was === frameDir(el) ? el.getAttribute('data-frame-height') : '';
+  }
+  function rememberWant(el, css) {
+    if (!el || !el.setAttribute) { return; }
+    el.setAttribute('data-frame-height', css);
+    el.setAttribute('data-frame-dir', frameDir(el));
+  }
+  function forgetWant(el) {
+    if (!el || !el.removeAttribute) { return; }
+    el.removeAttribute('data-frame-height');
+    el.removeAttribute('data-frame-dir');
+  }
   function declareFrameHeight(el) {
     if (el && el.nodeType === 1 && el.hasAttribute && el.hasAttribute('data-frame-height')) {
-      el.setAttribute('data-frame-height', el.style.minHeight || '');
+      rememberWant(el, flowMin(el));
     }
   }
 
@@ -6957,16 +11940,59 @@ ${insideObjects('.eb-paper.boxed')} {
     const keep = caretNode();
     trimShells(next, true, keep);
     trimShells(frame, false, keep);
+    // splitBlockAt と同じ直し（BUGS #83）：行の終わりの改行が続きの文字枠の頭へ
+    // 回ると、続きが空の行で始まり、前の枠には1行分の余りが残る。その改行は前の
+    // 行を終わらせていたものなので、前の枠の終わりへ移す。一つに戻すと元の並び。
+    // 文字枠の側に無かったので、続きの文字枠は空の行で始まっていた（L10）。
+    const lead = leadingNode(next);
+    if (lead && lead.nodeName === 'BR' && String(next.textContent || '').length) {
+      frame.appendChild(lead);
+    }
     frame.setAttribute('data-split', 'on');
     if (!frame.firstChild) { frame.appendChild(document.createElement('br')); }
     return true;
+  }
+
+  /**
+   * Where to cut a paragraph at the foot of a frame so that two of its lines stay
+   * and two go on (orphans and widows 2) -- the rule widowSafe keeps in the
+   * column. Measured on the lines themselves: counted in line heights, the rule
+   * said "two lines land here" where the lines, a hair shorter than the height
+   * given for them, made three, and the fourth went on alone. 0: do not cut it
+   * here, all of it goes on.
+   */
+  function frameCutAt(el, room) {
+    const line = lineOf(el);
+    if (!(line > 0)) { return cutOffsetIn(el, room); }
+    if (room < 2 * line - 0.5) { return 0; }
+    const deep = sizeAlong(el, isTate(el));
+    const keptTo = (chars) => {
+      const stops = caretStops(el);
+      const spot = pointAt(stops, chars);
+      if (!spot || !stops.length) { return 0; }
+      const r = document.createRange();
+      r.setStart(stops[0], 0);
+      r.setEnd(spot.node, spot.offset);
+      return rangeBottom(el, r, true);
+    };
+    // Lines are counted to the nearest whole line: measured, two lines of a
+    // paragraph set 24.5px apart came to 48.25, not 49.
+    const lines = (px) => Math.round(px / line);
+    let cut = cutOffsetIn(el, room);
+    for (let k = 0; k < 3 && cut > 0; k += 1) {
+      const kept = keptTo(cut);
+      if (lines(kept) < 2) { return 0; }
+      if (lines(deep - kept) >= 2) { return cut; }
+      cut = cutOffsetIn(el, kept - line);
+    }
+    return 0;
   }
 
   /** A fresh frame of the same shape, to carry the writing on with. */
   function continuationOf(frame, geom) {
     const next = frame.cloneNode(false);
     next.removeAttribute('id');
-    next.removeAttribute('data-frame-height');
+    forgetWant(next);
     next.removeAttribute('data-split');
     next.removeAttribute('data-free-top');
     // A name of its own. Sharing the lead's name made the co-writing merge take a
@@ -6974,8 +12000,7 @@ ${insideObjects('.eb-paper.boxed')} {
     // last link of the chain, and the document came back twice as long.
     next.removeAttribute('data-eb-id');
     next.classList.add('eb-cont');
-    next.style.removeProperty('min-height');
-    next.style.removeProperty('height');
+    clearFlowSize(next, isTate(frame));
     if (objectFree(frame) && geom) {
       // An anchor of its own, beside the one the frame itself hangs off -- an
       // anchor is a peg of no height, so a second one beside the first moves
@@ -6991,7 +12016,7 @@ ${insideObjects('.eb-paper.boxed')} {
       const page = Math.max(0, Math.floor((frameTop(frame, geom) + 0.5) / step));
       const anchorTop = topOnPaper(anchor) - geom.mt;
       const ka = Math.max(0, Math.floor((anchorTop + 0.5) / step));
-      next.style.top = round1(((page + 1) * geom.usable - (anchorTop - ka * geom.extra)) * MM) + 'mm';
+      setFreeOff(next, round1(((page + 1) * geom.usable - (anchorTop - ka * geom.extra)) * MM) + 'mm');
       foldShift(next, (page + 1 - ka) * geom.extra);
       return next;
     }
@@ -7005,10 +12030,27 @@ ${insideObjects('.eb-paper.boxed')} {
    * it, and so on until the last of it is placed.
    */
   function splitChain(lead, geom) {
-    let want = lengthPx(lead.hasAttribute('data-frame-height')
-      ? lead.getAttribute('data-frame-height') : lead.style.minHeight);
+    let want = lengthPx(wantOf(lead) || flowMin(lead));
     let frame = lead;
-    let room = roomFor(lead, geom);
+    // 書き手が「進む向きの大きさ」を決めている枠は、そのぶんだけ持つ。決めて
+    // いない枠（min-height だけ置かれた図形など）は、これまでどおりページの
+    // 残りいっぱいまで持つ。正本では枠は中身で勝手に伸びないので、決めてある
+    // ものを引き伸ばしてはいけない ―― 縦書きで 120mm の図形が 229mm に
+    // 伸びていた。
+    const leadTate = isTate(lead);
+    const leadTold = lead.style ? (leadTate ? lead.style.width : lead.style.height) : '';
+    const leadFixed = !!(leadTold && leadTold !== 'auto');
+    let room = leadFixed
+      ? Math.min(roomFor(lead, geom), sizeAlong(lead, leadTate))
+      : roomFor(lead, geom);
+    // 最後の枠の長さ。書き手が引いて決めた長さが残っていればその分だけ持ち、
+    // 残っていなければ中身の終わりで止まる（オーナー 2026-09-21「案B」：中身が
+    // 増えれば伸び、下へ引けば空きも取れるが、中身より短くはならない）。以前は
+    // 先頭の枠と同じ長さ（ページの下端まで）に伸ばしていたので、中身が手前で
+    // 終わっていても枠だけがページの下まで続いていた。
+    const lastLength = (f, left) => {
+      if (left > 1) { setFlowMin(f, round1(left * MM) + 'mm'); } else { clearFlowSize(f, isTate(f)); }
+    };
     // Everything far below the page being filled is lifted out of the frame while
     // that page is measured, and brought back as it is wanted. A browser lays out
     // everything a frame holds after every move, so a story of a hundred and
@@ -7018,7 +12060,7 @@ ${insideObjects('.eb-paper.boxed')} {
     const tall = new WeakMap();
     const heightOf = (el) => {
       let h = tall.get(el);
-      if (h == null) { h = el.offsetHeight; tall.set(el, h); }
+      if (h == null) { h = sizeAlong(el, isTate(el)); tall.set(el, h); }
       return h;
     };
     Array.from(lead.children).forEach(heightOf);
@@ -7046,13 +12088,11 @@ ${insideObjects('.eb-paper.boxed')} {
       if (frame.matches(TEXT_BLOCKS)) {
         const cut = cutOffsetIn(frame, limit);
         if (cut < 0 || (cut === 0 && frame === lead)) {
-          if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+          if (frame !== lead) { lastLength(frame, want); }
           return;
         }
-        if (frame === lead && !lead.hasAttribute('data-frame-height')) {
-          lead.setAttribute('data-frame-height', lead.style.minHeight || '');
-        }
-        frame.style.minHeight = round1(room * MM) + 'mm';
+        if (frame === lead && !wantOf(lead)) { rememberWant(lead, flowMin(lead)); }
+        if (!(frame === lead && leadFixed)) { setFlowMin(frame, round1(room * MM) + 'mm'); }
         want -= room;
         const next = continuationOf(frame, geom);
         if (!moveTailInto(frame, cut, next)) { next.remove(); return; }
@@ -7077,13 +12117,22 @@ ${insideObjects('.eb-paper.boxed')} {
         const at = insideFrame(frame, el);
         let rest = null;
         if (at.top < limit - 2 && el.matches(TEXT_BLOCKS)) {
-          const cut = cutOffsetIn(el, limit - at.top - boxSlack(frame, el));
+          // Two lines stay and two go on, as in the column (carveAt) and as
+          // LibreOffice keeps them inside a frame too: the same paragraph was cut
+          // by one rule outside a frame and by none inside it (L21).
+          const cut = frameCutAt(el, limit - at.top - boxSlack(frame, el));
           if (cut > 0) { rest = splitBlockAt(el, cut); }
         }
         // A table is cut between its rows instead, so that what the editor draws
         // and what the printer makes are the same number of pages.
         if (!rest && at.top < limit - 2 && el.nodeName === 'TABLE') {
           rest = splitTableAt(el, limit - at.top);
+        }
+        // A list is cut between its items. Left whole, a list longer than the
+        // room left ran over the fold and off the foot of the page (BUGS #77, a
+        // page brought in from the web: a list with a large picture in it).
+        if (!rest && at.top < limit - 2 && (el.nodeName === 'UL' || el.nodeName === 'OL')) {
+          rest = listBetweenItems(el, limit - at.top);
         }
         // Nothing of it fits and it cannot be cut -- a table taller than the
         // page -- and this frame already has a whole page to itself: another
@@ -7092,7 +12141,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // from the web with one tall box in it made a hundred and twenty empty
         // pages before this.
         if (!rest && first === 0 && room >= fitRoom(geom.usable) - 1) {
-          if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+          if (frame !== lead) { lastLength(frame, want); }
           putBack();
           return;
         }
@@ -7105,13 +12154,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // The last frame of the chain keeps whatever is left of the height the
         // writer gave it, so a box drawn three pages deep is still three pages
         // deep once it has been carried over.
-        if (frame !== lead && want > 1) { frame.style.minHeight = round1(want * MM) + 'mm'; }
+        if (frame !== lead) { lastLength(frame, want); }
         return;
       }
-      if (frame === lead && !lead.hasAttribute('data-frame-height')) {
-        lead.setAttribute('data-frame-height', lead.style.minHeight || '');
-      }
-      frame.style.minHeight = round1(room * MM) + 'mm';
+      if (frame === lead && !wantOf(lead)) { rememberWant(lead, flowMin(lead)); }
+      if (!(frame === lead && leadFixed)) { setFlowMin(frame, round1(room * MM) + 'mm'); }
       want -= room;
       const next = continuationOf(frame, geom);
       carry.forEach((el) => next.appendChild(el));
@@ -7128,30 +12175,201 @@ ${insideObjects('.eb-paper.boxed')} {
    * everything below it, so the page has to be counted afresh before the next
    * frame can be measured. Returns whether anything was moved.
    */
-  /** What a chain looks like, closely enough to know it has not moved. */
+  /**
+   * What a chain looks like, closely enough to know it has not moved.
+   *
+   * Where it stands is part of that: how much of its page is left below the head
+   * of the chain. The mark used to hold the sizes of the frames alone, so a frame
+   * dragged down the page, or pushed down by writing typed above it, still
+   * "looked the same" -- and was never laid out again: its first part ran on
+   * past the foot of the page, 22mm at the most (BUGS #64). And how much is
+   * written in it: a letter added that changes no size is still something
+   * written, which is what the chain waits for before it tries again.
+   */
   const chainTried = new WeakMap();
-  function chainMark(chain) {
-    return chain.map((f) => Math.round(writtenBottom(f)) + '/' + Math.round(f.offsetHeight)).join(' ');
+  function chainMark(chain, geom) {
+    const lead = chain[0];
+    const at = geom ? Math.round(roomFor(lead, geom)) : '';
+    const text = chain.reduce((n, f) => n + String(f.textContent || '').length, 0);
+    return at + ':' + text + ':' + chain.map((f) => Math.round(writtenBottom(f)) + '/' + Math.round(f.offsetHeight) + '/' + Math.round(f.offsetWidth)).join(' ');
   }
+  /**
+   * Whether this very chain, standing just here, has been laid out already and
+   * came out unsettled. Both what it was laid out FROM and what came OUT are
+   * remembered: the page count and the placing of objects that follow the laying
+   * out may move the head of the chain, so what the next look finds is neither --
+   * laid out again from there, it comes out the same, and that start is then
+   * remembered too. Two tries at the most, where the mark of the output alone
+   * would have gone round every turn once the place was part of it. A chain found
+   * settled is forgotten (reflowFrames), so that coming back to a start it was
+   * once laid out from -- the chain put back into one frame -- is not taken for
+   * a start that failed.
+   */
+  function chainSeen(el, mark) {
+    const seen = chainTried.get(el);
+    return !!seen && (seen.from === mark || seen.out === mark);
+  }
+  /**
+   * 向きが変わったとき、箱（図形・文字枠・まとめ枠）の「伸びる向き」を移す。
+   *
+   * 正本（LibreOffice）は、向きを変えても箱の寸法を変えない ―― 実測（2026-09-21）:
+   * 横150mm × 縦30mm と描いた枠は、縦書きでも 150×30 のまま、中の文字が背の低い
+   * 短い列になって右から左へ並ぶ。縦横は入れ替わらない。
+   *
+   * 正本は入りきらない文字を見せないことで収めるが、EditBase は次のページへ送って
+   * 全部見せる（オーナー 2026-09-21「全部見せろ」）。そこで寸法はそのまま持ち越し、
+   * 「中身で伸びる向き」だけを文章の進む向きへ移す。
+   *
+   *   横書き: 幅が決まっていて、高さが中身で伸びる（width / min-height）
+   *   縦書き: 高さが決まっていて、幅が中身で伸びる（height / min-width）
+   *
+   * 一度移したら向きを書いておき、同じ向きで二度移さない。
+   */
+  const BOX_SEL = 'div.eb-shape, p.eb-textbox, div.eb-frame';
+  /**
+   * 箱の「描いた寸法」（幅・高さ、mm）。画面の実寸は読まない。
+   *
+   * 縦書きに切り替えた瞬間、ブラウザは待たずに箱を縦書きで組み直す。110mm 幅の
+   * まま縦書きで組まれた箱は、文字が縦に積み上がって 837mm の高さになる。実寸を
+   * 読むとその崩れた姿を「寸法」として固定してしまい、箱が紙の下へ 585mm ぶら
+   * 下がった（実測・回り込む図形）。書かれている指定から読めば崩れを拾わない。
+   *
+   * 一度読んだら data-drawn に残し、以後はそれから持ち替える。横→縦→横と往復
+   * しても、描いた寸法はずれない。
+   */
+  function drawnSize(el) {
+    const saved = el.getAttribute('data-drawn');
+    if (saved) {
+      const part = saved.split(' ');
+      return { w: parseFloat(part[0]) || 0, h: parseFloat(part[1]) || 0, fixed: part[2] === 'fixed' };
+    }
+    const decl = (k) => { const v = el.style.getPropertyValue(k); return v ? round1(lengthPx(v) * MM) : 0; };
+    let w = 0;
+    let h = 0;
+    let fixed = false;
+    if (el.getAttribute('data-size-dir') !== 'tate') {
+      // 横書きの書き方: width が幅、高さは min-height（中身で伸びる）か height（固定）。
+      // 鎖で切られた箱は min-height が1ページ分に書き換わっているので、最初に切る
+      // 前の値（横書きで測った data-frame-height）があれば、そちらが描いた高さ。
+      w = decl('width');
+      fixed = !!el.style.getPropertyValue('height') && !el.style.getPropertyValue('min-height');
+      const memo = el.getAttribute('data-frame-dir') === 'yoko' ? el.getAttribute('data-frame-height') : '';
+      h = fixed ? decl('height') : (memo ? round1(lengthPx(memo) * MM) : decl('min-height'));
+    } else {
+      h = decl('height');
+      const memo = el.getAttribute('data-frame-dir') === 'tate' ? el.getAttribute('data-frame-height') : '';
+      w = memo ? round1(lengthPx(memo) * MM) : (decl('min-width') || decl('width'));
+    }
+    if (!w && !h) { return null; }
+    el.setAttribute('data-drawn', w + ' ' + h + (fixed ? ' fixed' : ''));
+    return { w: w, h: h, fixed: fixed };
+  }
+  /**
+   * 向きが変わったとき、箱（図形・文字枠・まとめ枠）の「伸びる向き」を移す。
+   *
+   * 正本（LibreOffice）は、向きを変えても箱の寸法を変えない ―― 実測（2026-09-21）:
+   * 横150mm × 縦30mm と描いた枠は、縦書きでも 150×30 のまま、中の文字が背の低い
+   * 短い列になって右から左へ並ぶ。縦横は入れ替わらない。
+   *
+   * 正本は入りきらない文字を見せないことで収めるが、EditBase は次のページへ送って
+   * 全部見せる（オーナー 2026-09-21「全部見せろ」）。そこで描いた寸法はそのまま
+   * 持ち越し、「中身で伸びる向き」だけを文章の進む向きへ移す。
+   *
+   *   横書き: 幅が決まっていて、高さが中身で伸びる（width / min-height）
+   *   縦書き: 高さが決まっていて、幅が中身で伸びる（height / min-width）
+   *
+   * 縦書きの高さは列の長さを上限にする。それより高い箱は紙の下へぶら下がる。
+   * 続きの箱（鎖の分身）も一緒に移す。同じ向きで二度移さない（data-size-dir）。
+   */
+  function turnBoxes(c, tate) {
+    const dir = tate ? 'tate' : 'yoko';
+    const st = window.getComputedStyle(c);
+    const pad = (k) => parseFloat(st.getPropertyValue(k)) || 0;
+    const crossPx = tate
+      ? c.clientHeight - pad('padding-top') - pad('padding-bottom')
+      : c.clientWidth - pad('padding-left') - pad('padding-right');
+    const crossMm = crossPx > 0 ? round1(crossPx * MM) : 0;
+    let moved = false;
+    Array.from(c.querySelectorAll(BOX_SEL)).forEach((el) => {
+      if (!el.style) { return; }
+      if (el.getAttribute('data-size-dir') === dir) { return; }
+      const drawn = drawnSize(el);
+      if (!drawn) { el.setAttribute('data-size-dir', dir); return; }
+      ['width', 'height', 'min-width', 'min-height'].forEach((k) => el.style.removeProperty(k));
+      let flowMm = 0;
+      if (tate) {
+        const h = crossMm ? Math.min(drawn.h, crossMm) : drawn.h;
+        if (h) { el.style.setProperty('height', h + 'mm'); }
+        if (drawn.w) { el.style.setProperty('min-width', drawn.w + 'mm'); }
+        flowMm = drawn.w;
+      } else {
+        if (drawn.w) { el.style.setProperty('width', drawn.w + 'mm'); }
+        if (drawn.h) { el.style.setProperty(drawn.fixed ? 'height' : 'min-height', drawn.h + 'mm'); }
+        flowMm = drawn.h;
+      }
+      // 鎖の長さの覚え書きも新しい向きで書き直す。前の向きのまま残すと、鎖を
+      // 一本に戻すところで「向きの違う覚え書き」として捨てられ、いま置いた
+      // 進む向きの寸法まで一緒に消される。
+      if (el.hasAttribute('data-frame-height') && flowMm) { rememberWant(el, flowMm + 'mm'); }
+      el.setAttribute('data-size-dir', dir);
+      moved = true;
+    });
+    return moved;
+  }
+
   function reflowFrames() {
     const c = canvas();
     const geom = c ? pageGeometry() : null;
     if (!geom) { return false; }
+    // 向きが変わったら、鎖は前の向きの寸法で組まれている。いったん一本に戻す。
+    //
+    // 続きの枠は、前の向きで書かれた位置指定を持ったままになる ―― 縦書きに
+    // 切り替えたとき、横書きのときの「上からの距離」が紙を横切る向きの指定に
+    // 化け、続きの図形が進む向きの位置 -430（紙の外）に並び、紙が増えずに
+    // 1枚へ積み上がっていた。
+    const dir = geom.tate ? 'tate' : 'yoko';
+    if (c.getAttribute('data-eb-dir') !== dir) {
+      c.setAttribute('data-eb-dir', dir);
+      // 箱の寸法を先に移す ―― 鎖を組み直す前でないと、前の向きの寸法で切られる。
+      let undone = turnBoxes(c, geom.tate);
+      Array.from(c.children).forEach((k) => {
+        const lead = hungOn(k);
+        if (!lead || isCont(lead) || !chainable(lead)) { return; }
+        const chain = chainOf(lead);
+        chainTried.delete(lead);
+        if (chain.length > 1) { joinChain(chain); undone = true; }
+      });
+      if (undone) { return true; }
+    }
+    // 本体から離れてしまった続きの部分（前の版の不具合で、本体より前などに取り残された
+    // もの）を、本体の続きのすぐ後ろへ戻す。文章は失わず、元の一つの枠に戻る（BUGS #61）。
+    if (reattachOrphans(c)) { return true; }
     const kids = Array.from(c.children);
     for (let i = 0; i < kids.length; i += 1) {
       const el = hungOn(kids[i]);
       if (!el || isCont(el) || !chainable(el)) { continue; }
       const chain = chainOf(el);
-      if (chainSettled(chain, geom)) { continue; }
+      // Settled: nothing is remembered of it, so that the next change -- the frame
+      // dragged, writing typed above it -- has it laid out again at once.
+      if (chainSettled(chain, geom)) { chainTried.delete(el); continue; }
       // Some documents hold a frame that cannot be made to fit -- a picture or a
       // table that will not be cut. Laying the chain out again then produces the
       // very same chain, and doing it over and over was half a minute of a big
       // document's opening, with the keyboard dead throughout. What came out
       // once is remembered: if the chain looks like that again, it is left alone
-      // until something is written.
-      const mark = chainMark(chain);
-      if (chainTried.get(el) === mark) { continue; }
-      const at = chainCaret(chain);
+      // until something is written, or it is moved.
+      //
+      const mark = chainMark(chain, geom);
+      if (chainSeen(el, mark)) { continue; }
+      // 字を選んだ範囲がこの枠にかかっているなら、文書全体で数えた字の位置で覚えて
+      // おき、組み直したあと同じ範囲を選び直す。枠の続きの部分は作り直されるので、
+      // そこに掛かっていた範囲は縮んでいた（Ctrl+A のあと＋一度で 1306 字→365 字。
+      // BUGS #49）。
+      const r0 = getRange();
+      const wide = (r0 && !r0.collapsed && c.contains(r0.startContainer)
+        && chain.some((f) => f.contains(r0.startContainer) || f.contains(r0.endContainer)
+          || r0.intersectsNode(f))) ? caretOffset() : null;
+      const at = wide == null ? chainCaret(chain) : null;
       // What is held is the frame itself, and the frames carrying it on are
       // about to be made again from scratch. Hold the first of them instead.
       if (frameEl && chain.indexOf(frameEl) > 0) { frameEl = el; }
@@ -7180,8 +12398,9 @@ ${insideObjects('.eb-paper.boxed')} {
       if (parked.firstChild) { c.appendChild(parked); }
       nameBlocks(c);
       if (caretHome) { putCaretBack(c, caretHome); }
-      chainTried.set(el, chainMark(chainOf(el)));
+      chainTried.set(el, { from: mark, out: chainMark(chainOf(el), geom) });
       if (at != null) { placeChainCaret(chainOf(el), at); }
+      if (wide != null) { setCaretOffset(wide); }
       return true;
     }
     return false;
@@ -7207,19 +12426,21 @@ ${insideObjects('.eb-paper.boxed')} {
   const DOC_CLASSES = new Set([
     'eb-doc', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
-    'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow',
+    'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow', 'eb-gap',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow',
     'eb-v-mid', 'eb-v-bot', 'eb-tate', 'eb-yoko',
     'eb-fnref', 'eb-notes', 'eb-notes-title', 'eb-cols', 'eb-runhead', 'eb-runfoot', 'eb-run', 'eb-runfill', 'l', 'c', 'r',
     'eb-header', 'eb-footer',
-    'eb-ins', 'eb-del', 'eb-lockedby',
+    'eb-ins', 'eb-del', 'eb-join', 'eb-lockedby',
     'eb-rule-thick', 'eb-rule-dashed', 'eb-table', 'eb-tate', 'eb-note',
-    'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right',
+    'eb-img', 'eb-img-s', 'eb-img-m', 'eb-img-l', 'eb-img-left', 'eb-img-right', 'eb-glyph',
     'eb-cap-t', 'eb-cap-in', 'eb-cap-none',
     'eb-math-block', 'eb-embed', 'eb-kenten', 'eb-hl-g', 'eb-hl-b', 'eb-hl-p', 'eb-hl-r',
     'eb-pagebreak', 'eb-blankpage', 'eb-toc', 'eb-toc-title', 'eb-toc-l1', 'eb-toc-l2', 'eb-toc-l3', 'eb-toc-l4',
     // not part of a document, but the editor's own page spacer lives in the canvas
     'eb-pagespacer',
+    // ページの区切り（保存したファイルの中だけ。開くときに外す）
+    'eb-page',
   ]);
   const APP_IDS = /^(content|app-content|app-navigation|editbase|editbase-root|eb-canvas|header)$/;
 
@@ -7501,6 +12722,9 @@ ${insideObjects('.eb-paper.boxed')} {
       anchor.appendChild(o);
     });
     c.querySelectorAll('.eb-pagebreak').forEach((el) => {
+      // 改ページは印であって枠ではない。大きさや位置の指定が付いていれば外す ――
+      // test.html の改ページには幅 159mm・高さ 54mm が付き、灰色の箱に見えていた。
+      el.removeAttribute('style');
       el.setAttribute('contenteditable', 'false');
       if (pageBreakLabel) { el.setAttribute('data-label', pageBreakLabel); }
     });
@@ -7523,6 +12747,11 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** Caret position as a plain character offset, so it survives a whole-tree restore. */
+  // 字数だけでは「項目の終わり」と「次の空の項目の頭」が区別できない。覚えたときの
+  // 要素と位置も持っておき、戻すときにその要素がまだ文書にあって字数も一致すれば、
+  // そこへ戻す（ページの境目で分かれたリストで Enter を押すと、字が前の項目に
+  // つながり空の項目だけが増えた。2026-09-22 点検で発見）。
+  let caretKeep = null;
   function caretOffset() {
     const c = canvas();
     const range = getRange();
@@ -7530,11 +12759,52 @@ ${insideObjects('.eb-paper.boxed')} {
     const pre = document.createRange();
     pre.selectNodeContents(c);
     pre.setEnd(range.startContainer, range.startOffset);
-    return pre.toString().length;
+    const offset = pre.toString().length;
+    let end = null;
+    if (!range.collapsed) {
+      const post = document.createRange();
+      post.selectNodeContents(c);
+      post.setEnd(range.endContainer, range.endOffset);
+      end = { node: range.endContainer, at: range.endOffset, count: post.toString().length };
+    }
+    caretKeep = { offset, node: range.startContainer, at: range.startOffset, end };
+    return offset;
   }
   function setCaretOffset(offset) {
+    setCaretStart(offset);
+    const k = caretKeep;
+    const c = canvas();
+    if (c && offset != null && k && k.offset === offset && k.end) {
+      extendKept(k.end, (count) => {
+        let left = count;
+        const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (left <= n.data.length) { return { node: n, at: left }; }
+          left -= n.data.length;
+        }
+        return null;
+      }, c);
+    }
+  }
+  function setCaretStart(offset) {
     const c = canvas();
     if (!c || offset == null) { return; }
+    const k = caretKeep;
+    if (k && k.offset === offset && k.node && c.contains(k.node)) {
+      const max = k.node.nodeType === 3 ? k.node.data.length : k.node.childNodes.length;
+      // 要素がまだ文書にあり、位置がその中に収まるなら、そこへ戻す。字数は合わなく
+      // てもよい ―― ページ割りは、分かれた表の各切れの頭に見出し行を繰り返すので、
+      // 字数だけがずれる（字数で戻すと別のセルへ行った）。
+      if (k.at <= max) {
+        try {
+          const r = document.createRange();
+          r.setStart(k.node, k.at);
+          r.collapse(true);
+          selectRange(r);
+          return;
+        } catch (e) { /* fall back to counting */ }
+      }
+    }
     let left = offset;
     const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
     let n = walker.nextNode();
@@ -7555,6 +12825,15 @@ ${insideObjects('.eb-paper.boxed')} {
   // ---- undo ---------------------------------------------------------------------
   // The engine rewrites the tree directly, which is exactly what the browser's own
   // undo stack cannot follow — so the editor keeps its own.
+  //
+  // A step is the whole canvas as markup, and a picture is carried in it as a
+  // data: address of megabytes. Kept once per step, one 3 MB photograph over 200
+  // steps held 508 MB (review D12). So a picture is kept once, in a store the steps
+  // share, and a step holds a short mark in its place; a picture goes from the
+  // store when the last step that has it goes.
+  const PIC_IN_MARKUP = /data:[^"'\s()<>]{2048,}/g;
+  const PIC_MARK = /\u0000ebpic(\d+)\u0000/g;
+  const pics = { byUrl: new Map(), byKey: new Map(), uses: new Map(), next: 1 };
   const history = {
     past: [],
     future: [],
@@ -7566,6 +12845,51 @@ ${insideObjects('.eb-paper.boxed')} {
     readState: null,
     applyState: null,
     state() { return this.readState ? this.readState() : ''; },
+    /** The canvas as a step: each picture put in the store, and a mark left for it. */
+    pack(html) {
+      const refs = [];
+      const out = html.replace(PIC_IN_MARKUP, (url) => {
+        let key = pics.byUrl.get(url);
+        if (!key) {
+          // A copy of its own: the match is a slice of the whole canvas's markup,
+          // and would keep all of it alive for as long as the picture is kept.
+          const own = JSON.parse(JSON.stringify(url));
+          key = String(pics.next);
+          pics.next += 1;
+          pics.byUrl.set(own, key);
+          pics.byKey.set(key, own);
+          pics.uses.set(key, 0);
+        }
+        pics.uses.set(key, pics.uses.get(key) + 1);
+        refs.push(key);
+        return '\u0000ebpic' + key + '\u0000';
+      });
+      return { html: out, refs: refs };
+    },
+    unpack(html) {
+      return html.indexOf('\u0000ebpic') < 0 ? html : html.replace(PIC_MARK, (m, key) => pics.byKey.get(key) || m);
+    },
+    /** A step is gone: its pictures are one step less needed. */
+    drop(entry) {
+      ((entry && entry.refs) || []).forEach((key) => {
+        const left = (pics.uses.get(key) || 0) - 1;
+        if (left > 0) { pics.uses.set(key, left); return; }
+        pics.uses.delete(key);
+        const url = pics.byKey.get(key);
+        pics.byKey.delete(key);
+        if (url != null) { pics.byUrl.delete(url); }
+      });
+    },
+    snapshot(state) {
+      const packed = this.pack(canvas().innerHTML);
+      return { html: packed.html, refs: packed.refs, caret: caretOffset(), state: state };
+    },
+    keep(entry) {
+      this.past.push(entry);
+      if (this.past.length > this.limit) { this.drop(this.past.shift()); }
+      this.future.forEach((e) => this.drop(e));
+      this.future.length = 0;
+    },
     /**
      * A settings change is noticed after it has happened -- the field has already
      * written its value by the time anything is told about it -- so what goes on
@@ -7574,29 +12898,26 @@ ${insideObjects('.eb-paper.boxed')} {
     pushPrev(state) {
       const c = canvas();
       if (!c) { return; }
-      this.past.push({ html: c.innerHTML, caret: caretOffset(), state });
-      if (this.past.length > this.limit) { this.past.shift(); }
-      this.future.length = 0;
+      this.keep(this.snapshot(state));
       this.lastPush = Date.now();
     },
     push(force) {
       const c = canvas();
       if (!c) { return; }
       const now = Date.now();
-      const html = c.innerHTML;
-      const state = this.state();
       const top = this.past[this.past.length - 1];
-      if (top && top.html === html && top.state === state) { return; }
-      // typing is coalesced into bursts; a command always starts a new entry
+      // typing is coalesced into bursts; a command always starts a new entry.
+      // Asked first: writing the canvas out is the costly part, and a key
+      // pressed inside a burst needs none of it.
       if (!force && top && now - this.lastPush < 700) { return; }
-      this.past.push({ html, caret: caretOffset(), state });
-      if (this.past.length > this.limit) { this.past.shift(); }
-      this.future.length = 0;
+      const entry = this.snapshot(this.state());
+      if (top && top.html === entry.html && top.state === entry.state) { this.drop(entry); return; }
+      this.keep(entry);
       this.lastPush = now;
     },
     restore(entry) {
       const c = canvas();
-      c.innerHTML = entry.html;
+      c.innerHTML = this.unpack(entry.html);
       if (entry.state && this.applyState) { this.applyState(entry.state); }
       setCaretOffset(entry.caret);
       this.lastPush = 0;
@@ -7604,22 +12925,31 @@ ${insideObjects('.eb-paper.boxed')} {
     undo() {
       const c = canvas();
       if (!c || !this.past.length) { return false; }
-      const current = { html: c.innerHTML, caret: caretOffset(), state: this.state() };
+      const current = this.snapshot(this.state());
       let entry = this.past.pop();
-      if (entry.html === current.html && entry.state === current.state && this.past.length) { entry = this.past.pop(); }
+      if (entry.html === current.html && entry.state === current.state && this.past.length) { this.drop(entry); entry = this.past.pop(); }
       this.future.push(current);
       this.restore(entry);
+      this.drop(entry);
       return true;
     },
     redo() {
       const c = canvas();
       if (!c || !this.future.length) { return false; }
       const entry = this.future.pop();
-      this.past.push({ html: c.innerHTML, caret: caretOffset(), state: this.state() });
+      this.past.push(this.snapshot(this.state()));
       this.restore(entry);
+      this.drop(entry);
       return true;
     },
-    reset() { this.past.length = 0; this.future.length = 0; this.lastPush = 0; },
+    reset() {
+      this.past.length = 0;
+      this.future.length = 0;
+      this.lastPush = 0;
+      pics.byUrl.clear();
+      pics.byKey.clear();
+      pics.uses.clear();
+    },
   };
 
   /** Run an editing command as one undoable step. */
@@ -7630,7 +12960,15 @@ ${insideObjects('.eb-paper.boxed')} {
       fn();
     } finally {
       normaliseCanvas(pageBreakLabel, captionLabel);
-      history.lastPush = Date.now();
+      // The same words in as few tags as say them (BUGS #82). Here, at the end of
+      // something the writer asked for -- not inside normaliseCanvas, which the
+      // frame chain calls between its own measurements: tidying there changed the
+      // heights it had just measured and the chain never settled (fullpage).
+      healSource(canvas());
+      // What is typed next is a step of its own. Marked as "just pushed", the
+      // letters typed within the next 0.7s joined the command's step, and one
+      // Ctrl+Z took away both (BUGS E31).
+      history.lastPush = 0;
     }
   }
 
@@ -7734,10 +13072,257 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     return null;
   }
+  /**
+   * 段落のつなぎ目を消した印。LibreOffice は、記録中に段落の終わりで Delete（次の
+   * 段落の頭で Backspace）を押すと、段落の字には触れず、つなぎ目（段落記号）だけを
+   * 「消した」として記録する。ここでは前の段落の終わりに <del class="eb-del eb-join">¶</del>
+   * を置く。「残す」で次の段落をこの段落につなぎ、「元に戻す」で印だけを取る。
+   * 以前は代わりに、前の段落の字が全部「消した」印になり、「すべて残す」で段落の
+   * 字が丸ごと消えた（BUGS #213）。段落の頭の Backspace は何もしなかった（#219）。
+   */
+  const JOINABLE = /^(P|H[1-6]|LI)$/;
+  function joinBlockOf(node) {
+    const c = canvas();
+    let n = node && node.nodeType === 3 ? node.parentNode : node;
+    while (n && n !== c) {
+      if (n.nodeType === 1 && JOINABLE.test(n.nodeName)) { return n; }
+      if (isBlock(n)) { return null; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  /** The paragraph this one would be joined to: the next one beside it, past the page's own gaps. */
+  function nextJoinable(block) {
+    let b = block ? block.nextElementSibling : null;
+    while (isCutGap(b)) { b = b.nextElementSibling; }
+    if (!b || !JOINABLE.test(b.nodeName)) { return null; }
+    if ((block.nodeName === 'LI') !== (b.nodeName === 'LI')) { return null; }
+    return b;
+  }
+  function prevJoinable(block) {
+    let a = block ? block.previousElementSibling : null;
+    while (isCutGap(a)) { a = a.previousElementSibling; }
+    return a && nextJoinable(a) === block ? a : null;
+  }
+  /**
+   * The two paragraphs a deletion runs between, when it runs over nothing but
+   * the end of one of them. Across a page's gap the browser does not name the
+   * next paragraph: it ends the range at the gap (Delete), or starts it after
+   * the gap (Backspace).
+   */
+  function joinEnds(range) {
+    let from = joinBlockOf(range.startContainer);
+    let to = joinBlockOf(range.endContainer);
+    const gapAt = (holder, i, step) => {
+      let k = i >= 0 ? (holder.childNodes[i] || null) : null;
+      while (k && ((k.nodeType === 3 && !k.data.trim()) || isCutGap(k))) { k = step > 0 ? k.nextSibling : k.previousSibling; }
+      return k;
+    };
+    if (from && !to && range.endContainer === from.parentNode) {
+      const k = gapAt(range.endContainer, range.endOffset, 1);
+      const b = nextJoinable(from);
+      if (b && k === b && range.comparePoint(from, from.childNodes.length) === 0) { to = b; }
+    }
+    if (!from && to && range.startContainer === to.parentNode) {
+      const k = gapAt(range.startContainer, range.startOffset - 1, -1);
+      const a = prevJoinable(to);
+      if (a && k === a) { from = a; }
+    }
+    return { from: from, to: to };
+  }
+  /** The piece after a page foot's cut is the same paragraph: there is no mark between them to take away. */
+  function isCutContinuation(a, b) {
+    return !!(a && b && a.hasAttribute && a.hasAttribute(FLOWCUT) && a.nodeName === b.nodeName);
+  }
+  function isJoinMark(n) {
+    return !!(n && n.nodeType === 1 && n.nodeName === 'DEL' && n.classList.contains('eb-del') && n.classList.contains('eb-join'));
+  }
+  /** The mark at the end of this paragraph, if its end has already been struck out. */
+  function joinMarkOf(block) {
+    let n = block ? block.lastChild : null;
+    while (n) {
+      if (isJoinMark(n)) { return n; }
+      const blank = n.nodeName === 'BR' || (n.nodeType === 3 && !n.data.replace(/[​\s]/g, ''))
+        || (n.nodeType === 1 && n.nodeName === 'INS' && !n.textContent.replace(/​/g, ''));
+      if (!blank) { return null; }
+      n = n.previousSibling;
+    }
+    return null;
+  }
+  function markJoin(block) {
+    const had = joinMarkOf(block);
+    if (had) { return had; }
+    const del = document.createElement('del');
+    del.className = 'eb-del eb-join';
+    del.textContent = '¶';
+    // The empty paragraph's <br> stays the last thing in it, where it holds nothing up.
+    const tail = block.lastChild;
+    if (tail && tail.nodeName === 'BR') { block.insertBefore(del, tail); } else { block.appendChild(del); }
+    return del;
+  }
+  /**
+   * Every paragraph end the range runs over is struck out as well: a deletion
+   * across two paragraphs, once kept, leaves one paragraph, as it does when
+   * nothing is being recorded. Returns the mark on the first paragraph's end.
+   */
+  function markJoins(range) {
+    let a = joinBlockOf(range.startContainer);
+    let first = null;
+    for (let guard = 0; a && guard < 10000; guard += 1) {
+      const b = nextJoinable(a);
+      if (!b) { break; }
+      let inside = false;
+      try { inside = range.comparePoint(a, a.childNodes.length) === 0 && range.comparePoint(b, 0) === 0; } catch (e) { inside = false; }
+      if (!inside) { break; }
+      if (!isCutContinuation(a, b)) {
+        const m = markJoin(a);
+        if (!first) { first = m; }
+      }
+      a = b;
+    }
+    return first;
+  }
+  /** Keeping a struck-out paragraph end: the next paragraph comes up onto this one. */
+  function acceptJoin(mark) {
+    const a = joinBlockOf(mark);
+    mark.remove();
+    const b = a ? nextJoinable(a) : null;
+    if (!a || !b) { return; }
+    const last = a.lastChild;
+    if (last && last.nodeName === 'BR') { last.remove(); }
+    const onlyBreak = b.childNodes.length === 1 && b.firstChild.nodeName === 'BR';
+    if (!onlyBreak) { while (b.firstChild) { a.appendChild(b.firstChild); } }
+    if (!a.firstChild) { a.appendChild(document.createElement('br')); }
+    b.remove();
+  }
+  /**
+   * The caret is in a run marked as struck out: what is typed there is new text,
+   * never part of the deletion -- keeping the deletion took the new letters away
+   * with it (BUGS #216). The run is split at the caret, and the caret put between
+   * the halves (or before or after it, at its ends). LibreOffice does the same.
+   */
+  function caretOutOfDel(range, mark) {
+    const d = mark || (range ? delAt(range.startContainer) : null);
+    if (!d) { return null; }
+    const head = document.createRange();
+    head.setStart(d, 0);
+    head.setEnd(range.startContainer, range.startOffset);
+    const tail = document.createRange();
+    tail.setStart(range.startContainer, range.startOffset);
+    tail.setEnd(d, d.childNodes.length);
+    const at = document.createRange();
+    if (!head.toString()) {
+      at.setStartBefore(d);
+    } else if (!tail.toString()) {
+      at.setStartAfter(d);
+    } else {
+      const rest = d.cloneNode(false);
+      rest.appendChild(tail.extractContents());
+      d.parentNode.insertBefore(rest, d.nextSibling);
+      at.setStartAfter(d);
+    }
+    at.collapse(true);
+    selectRange(at);
+    return at;
+  }
+  /**
+   * The selection is struck out rather than taken away, and the caret left at its
+   * end: typing, a word being converted, a paste or a drop over a selection all
+   * start from here. They took the selected words away unmarked (BUGS #214, #215).
+   */
+  function strikeSelection() {
+    const sel = getRange();
+    if (!sel || sel.collapsed || !inCanvas(sel.startContainer)) { return sel; }
+    const end = document.createRange();
+    end.setStart(sel.endContainer, sel.endOffset);
+    end.collapse(true);
+    const work = sel.cloneRange();
+    markJoins(work);
+    markDeleted(work);
+    try { selectRange(end); } catch (err) { /* the text moved under us */ }
+    return getRange();
+  }
+  /**
+   * Chrome, joining two paragraphs by Delete or Backspace, wraps the words it
+   * brought up in <span style="background-color: transparent; font-size: …">,
+   * saying again what the paragraph already says -- and the span went into the
+   * file (BUGS #232). Only such a span, in the paragraph the caret is in, whose
+   * every setting is what it would have anyway, is taken off.
+   */
+  function dropJoinSpans() {
+    const r = getRange();
+    const block = r ? joinBlockOf(r.startContainer) : null;
+    if (!block || !block.querySelector('span[style*="transparent"]')) { return; }
+    const node = r.startContainer;
+    const off = r.startOffset;
+    let moved = false;
+    Array.from(block.querySelectorAll('span[style*="transparent"]')).forEach((sp) => {
+      if (!plainSpan(sp) || sp.getAttribute('class') || !sp.parentNode) { return; }
+      const mine = window.getComputedStyle(sp);
+      const theirs = window.getComputedStyle(sp.parentNode);
+      const props = Array.from(sp.style);
+      if (!props.length) { return; }
+      const idle = props.every((k) => {
+        if (k === 'background-color') { return /^(transparent|rgba\(0, 0, 0, 0\))$/.test(mine.getPropertyValue(k)); }
+        return mine.getPropertyValue(k) === theirs.getPropertyValue(k);
+      });
+      if (!idle) { return; }
+      while (sp.firstChild) { sp.parentNode.insertBefore(sp.firstChild, sp); }
+      sp.remove();
+      moved = true;
+    });
+    if (moved && node && node.parentNode && block.contains(node)) {
+      try {
+        const at = document.createRange();
+        at.setStart(node, Math.min(off, node.nodeType === 3 ? node.data.length : node.childNodes.length));
+        at.collapse(true);
+        selectRange(at);
+      } catch (err) { /* the text moved under us */ }
+    }
+  }
+  /**
+   * The same for a word being converted, when nothing is being recorded: a
+   * conversion cannot be stopped and put somewhere else, so the caret is given a
+   * foothold of its own outside the run (a zero-width space, taken out again when
+   * the word is done -- see imeFootholdDone).
+   */
+  let imeFoothold = null;
+  function imeOutOfDel() {
+    const r = getRange();
+    const mark = r && r.collapsed ? (delAt(r.startContainer) || insAt(r.startContainer)) : null;
+    if (!mark) { return; }
+    const at = caretOutOfDel(r, mark);
+    if (!at) { return; }
+    const hold = document.createTextNode('\u200b');
+    at.insertNode(hold);
+    const inside = document.createRange();
+    inside.setStart(hold, 1);
+    inside.collapse(true);
+    selectRange(inside);
+    imeFoothold = hold;
+  }
+  function imeFootholdDone() {
+    const hold = imeFoothold;
+    imeFoothold = null;
+    if (!hold || !hold.parentNode || hold.data.charAt(0) !== '\u200b') { return; }
+    const r = getRange();
+    const was = r && r.startContainer === hold ? r.startOffset : null;
+    if (hold.data.length === 1) { hold.remove(); return; }
+    hold.deleteData(0, 1);
+    if (was != null) {
+      const at = document.createRange();
+      at.setStart(hold, Math.max(0, Math.min(hold.data.length, was - 1)));
+      at.collapse(true);
+      selectRange(at);
+    }
+  }
   /** Put the caret inside a run marked as added, making one if there is not one. */
   function ensureIns() {
-    const range = getRange();
+    let range = getRange();
     if (!range) { return null; }
+    if (!range.collapsed) { range = strikeSelection(); }
+    if (!range) { return null; }
+    if (delAt(range.startContainer)) { range = caretOutOfDel(range) || range; }
     const here = insAt(range.startContainer);
     if (here) { return here; }
     const ins = document.createElement('ins');
@@ -7754,13 +13339,41 @@ ${insideObjects('.eb-paper.boxed')} {
     return ins;
   }
   /**
+   * What arrives by a paste or a drop while changes are being recorded is marked
+   * as added, one mark to each run of text so no block ever ends up inside one.
+   * It went in unmarked, and "Undo them all" left it standing (BUGS #215).
+   */
+  function markFragmentAdded(frag) {
+    Array.from(frag.querySelectorAll ? frag.querySelectorAll('del.eb-del') : []).forEach((d) => d.remove());
+    Array.from(frag.querySelectorAll ? frag.querySelectorAll('ins.eb-ins') : []).forEach((el) => {
+      while (el.firstChild) { el.parentNode.insertBefore(el.firstChild, el); }
+      el.remove();
+    });
+    const texts = [];
+    const w = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT, null);
+    for (let n = w.nextNode(); n; n = w.nextNode()) { texts.push(n); }
+    texts.forEach((n) => {
+      const holder = n.parentNode;
+      if (!n.data.length || (holder && STRUCTURAL.test(holder.nodeName)) || (holder === frag && !n.data.trim() && frag.querySelector && frag.querySelector('p, h1, h2, h3, h4, h5, h6, li, table, div'))) { return; }
+      const ins = document.createElement('ins');
+      ins.className = 'eb-ins';
+      holder.insertBefore(ins, n);
+      ins.appendChild(n);
+    });
+    return frag;
+  }
+  /**
    * Strike a range out rather than taking it away. One <del> per text node, so a
    * deletion that runs across two paragraphs leaves two paragraphs, each with its
    * own mark, and no block ever ends up inside an inline element.
    */
   function markDeleted(range) {
     if (!range || range.collapsed) { return false; }
-    const nodes = textNodesInRange(range);
+    // Only the text the range really covers. textNodesInRange hands back the
+    // node the range starts in when it covers no text at all -- the end of one
+    // paragraph to the start of the next -- and the whole of that paragraph was
+    // struck out by a Delete at its end (BUGS #213).
+    const nodes = textNodesInRange(range).filter((n) => rangeHolds(range, n));
     if (!nodes.length) { return false; }
     let last = null;
     nodes.forEach((n) => {
@@ -7781,13 +13394,52 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return !!last;
   }
+  /**
+   * The zero-width space an added run was started with is the editor's own
+   * (ensureIns). Inside <ins> the file writer takes it out; once the mark is
+   * kept and the <ins> is gone, it stayed in the file, between two words
+   * (BUGS #222). Taken out here, before the mark comes off. And a space typed
+   * at the end of the run was written as a no-break space, because the run
+   * ended there: with the mark off and a letter after it, it is an ordinary
+   * space again, as it is when nothing is being recorded.
+   */
+  function settleAdded(el) {
+    const texts = [];
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    for (let n = w.nextNode(); n; n = w.nextNode()) { texts.push(n); }
+    texts.forEach((n) => { if (/^​/.test(n.data)) { n.data = n.data.replace(/^​+/, ''); } });
+    const last = texts.length ? texts[texts.length - 1] : null;
+    if (last && /[^\s ] $/.test(last.data)) {
+      let next = el.nextSibling;
+      while (next && next.nodeType === 1 && next.firstChild && !isBlock(next)) { next = next.firstChild; }
+      if (next && next.nodeType === 3 && /^[^\s ​]/.test(next.data)) { last.data = last.data.slice(0, -1) + ' '; }
+    }
+    texts.forEach((n) => { if (!n.data.length && n.parentNode) { n.remove(); } });
+  }
+  /**
+   * Keeping a deletion of a note's number takes the note away with it. With the
+   * mark gone the number was left empty, and the renumbering wrote it back: the
+   * note came back after "Keep them all" (BUGS #218). LibreOffice removes the
+   * note with its anchor.
+   */
+  function keepDeletion(el) {
+    const ref = el.parentNode && el.parentNode.closest ? el.parentNode.closest('sup.eb-fnref') : null;
+    el.remove();
+    if (ref && !ref.textContent.replace(/[​\s]/g, '')) { ref.remove(); }
+  }
   /** Take the marks off: what was added stays, what was struck out goes. */
   function acceptChanges(root) {
     const where = root || canvas();
     if (!where) { return 0; }
     let n = 0;
-    Array.from(where.querySelectorAll('del.eb-del')).forEach((el) => { el.remove(); n++; });
+    const joins = Array.from(where.querySelectorAll('del.eb-join'));
+    // A paragraph cut at a page foot is put back in one piece first, so the
+    // paragraph after a struck-out end is the whole of it.
+    if (joins.length) { joinFlowCuts(where); }
+    joins.forEach((el) => { if (el.parentNode) { acceptJoin(el); n++; } });
+    Array.from(where.querySelectorAll('del.eb-del')).forEach((el) => { keepDeletion(el); n++; });
     Array.from(where.querySelectorAll('ins.eb-ins')).forEach((el) => {
+      settleAdded(el);
       const parent = el.parentNode;
       while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
       parent.removeChild(el);
@@ -7795,12 +13447,33 @@ ${insideObjects('.eb-paper.boxed')} {
     });
     return n;
   }
+  /**
+   * Taking an addition away can leave its paragraph with nothing in it at all --
+   * a paragraph typed into from empty, or one a paste made -- and an empty <p>
+   * has no height: it could not be seen or clicked into. It keeps its <br>.
+   */
+  function dropAdded(el) {
+    const block = joinBlockOf(el);
+    el.remove();
+    keepBlockOpen(block);
+  }
+  function keepBlockOpen(block) {
+    if (!block || !block.parentNode) { return null; }
+    const left = block.textContent.replace(/\u200b/g, '');
+    if (!left && !block.querySelector('br, img, svg, math, table, iframe, video, audio, hr, .eb-anchor')) {
+      Array.from(block.childNodes).forEach((k) => { if (k.nodeType === 3 || (k.nodeType === 1 && !k.textContent)) { k.remove(); } });
+      if (!block.firstChild) { block.appendChild(document.createElement('br')); return block.firstChild; }
+    }
+    return null;
+  }
   /** Put it back as it was: what was added goes, what was struck out stays. */
   function rejectChanges(root) {
     const where = root || canvas();
     if (!where) { return 0; }
     let n = 0;
-    Array.from(where.querySelectorAll('ins.eb-ins')).forEach((el) => { el.remove(); n++; });
+    Array.from(where.querySelectorAll('ins.eb-ins')).forEach((el) => { dropAdded(el); n++; });
+    // The ¶ standing for a paragraph's struck-out end is not writing: it goes.
+    Array.from(where.querySelectorAll('del.eb-join')).forEach((el) => { el.remove(); n++; });
     Array.from(where.querySelectorAll('del.eb-del')).forEach((el) => {
       const parent = el.parentNode;
       while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
@@ -7840,14 +13513,22 @@ ${insideObjects('.eb-paper.boxed')} {
   /** One mark, on its own: keeping it or undoing it must not touch its neighbours. */
   function acceptOne(el) {
     if (!el || !el.parentNode) { return; }
-    if (el.nodeName === 'DEL') { el.remove(); return; }
+    if (isJoinMark(el)) {
+      const c = canvas();
+      if (c && c.contains(el)) { joinFlowCuts(c); }
+      acceptJoin(el);
+      return;
+    }
+    if (el.nodeName === 'DEL') { keepDeletion(el); return; }
+    settleAdded(el);
     const parent = el.parentNode;
     while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
     parent.removeChild(el);
   }
   function rejectOne(el) {
     if (!el || !el.parentNode) { return; }
-    if (el.nodeName === 'INS') { el.remove(); return; }
+    if (el.nodeName === 'INS') { dropAdded(el); return; }
+    if (isJoinMark(el)) { el.remove(); return; }
     const parent = el.parentNode;
     while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
     parent.removeChild(el);
@@ -7861,15 +13542,17 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   // ---- paste ---------------------------------------------------------------------
-  function handlePaste(e, plainOnly, asObject) {
+  function handlePaste(e, plainOnly, asObject, tracked) {
     const data = e.clipboardData;
     if (!data) { return null; }
     e.preventDefault();
     const html = plainOnly ? '' : data.getData('text/html');
     const uri = (data.getData('text/uri-list') || '').split(/\r?\n/).find((l) => /^https?:/i.test(l)) || '';
     history.push(true);
-    const out = html ? pasteHtmlAt(html, uri, asObject)
-      : { made: pasteTextAt(data.getData('text/plain') || '', asObject), foreign: [] };
+    // Recording: what was selected is struck out, not taken away (BUGS #215).
+    if (tracked && !asObject) { strikeSelection(); }
+    const out = html ? pasteHtmlAt(html, uri, asObject, tracked)
+      : { made: pasteTextAt(data.getData('text/plain') || '', asObject, tracked), foreign: [] };
     normaliseCanvas();
     return out;
   }
@@ -7960,7 +13643,7 @@ ${insideObjects('.eb-paper.boxed')} {
 
   function absUrl(url, base) {
     const raw = String(url == null ? '' : url).trim();
-    if (!raw || /^(javascript|data:text\/html)/i.test(raw)) { return ''; }
+    if (!raw || unsafeUrl(raw)) { return ''; }
     if (/^(https?:|mailto:|tel:|data:image\/)/i.test(raw)) { return raw; }
     if (!base) { return ''; }
     try { return new URL(raw, base).href; } catch (e) { return ''; }
@@ -8043,6 +13726,23 @@ ${insideObjects('.eb-paper.boxed')} {
       }
     }
     if (!flat || flat.length < 2 || !flat.every((w) => w > 0)) { return null; }
+    // A column wider than the whole table is not a column of the table: it is the
+    // filler LibreOffice writes at the right edge when it saves a document as a
+    // web page (<col width="4364"> beside thirteen of about fifty). Counted in,
+    // every real column came out at one per cent of the paper and a calendar's
+    // figures printed on top of one another (BUGS #81). LibreOffice itself lays
+    // the table out without it, and so does this.
+    const said = (/(-?[\d.]+)/.exec(table.getAttribute('width') || '') || [])[1];
+    const stated = said ? Math.abs(parseFloat(said)) : 0;
+    const rest = (k) => flat.reduce((a, b, i) => (i === k ? a : a + b), 0);
+    // Only at the right edge, and only a column far wider than the rest: a real
+    // column may well be wider than the others together -- Word's 60/200/100pt
+    // table lost its wide middle column to this test, the shares no longer
+    // matched the columns, and every column came in the same width (BUGS #86).
+    for (let k = flat.length - 1; k >= flat.length - 1 && k >= 0 && flat.length > 2; k -= 1) {
+      if ((stated && flat[k] > stated) || flat[k] > 2 * rest(k)) { flat.splice(k, 1); }
+    }
+    if (flat.length < 2) { return null; }
     const total = flat.reduce((a, b) => a + b, 0);
     if (!(total > 0)) { return null; }
     const share = flat.map((w) => w / total);
@@ -8067,9 +13767,18 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
 
-  function webToDocument(root, base) {
+  function webToDocument(root, base, notes) {
     root.querySelectorAll(WEB_DROP).forEach((el) => el.remove());
+    // 文書の中への飛び先（#見出し・#注）は安全で、行き先がこの文書の中にある限り
+    // そのまま残す。absUrl は # だけのアドレスを空にするので、見出しへのリンクを
+    // 切り取って貼るとリンクが外れていた（BUGS #212）。行き先が無い # は今までどおり。
+    const c = canvas();
+    const here = (id) => (notes && notes.indexOf(id) >= 0)
+      || Array.from(root.querySelectorAll('[id]')).some((x) => x.getAttribute('id') === id)
+      || !!(c && Array.from(c.querySelectorAll('[id]')).some((x) => x.getAttribute('id') === id));
     root.querySelectorAll('a[href]').forEach((a) => {
+      const hash = ownHash(a.getAttribute('href'));
+      if (hash && here(hash.slice(1))) { a.setAttribute('href', hash); return; }
       const href = absUrl(a.getAttribute('href'), base);
       if (href) { a.setAttribute('href', href); } else { unwrapEl(a); }
     });
@@ -8081,7 +13790,9 @@ ${insideObjects('.eb-paper.boxed')} {
       // anything.
       if (!src || (w && w <= 2) || (h && h <= 2)) { img.remove(); return; }
       img.setAttribute('src', src);
+      const glyph = img.classList.contains('eb-glyph');
       ['srcset', 'sizes', 'loading', 'decoding', 'width', 'height', 'class', 'id'].forEach((a) => img.removeAttribute(a));
+      if (glyph) { img.className = 'eb-glyph'; }
     });
     // Innermost first, and more than once: a page is divs inside divs.
     for (let pass = 0; pass < 8; pass += 1) {
@@ -8118,7 +13829,7 @@ ${insideObjects('.eb-paper.boxed')} {
       // So read the proportions first, throw the pixels away, and give them
       // back as shares of the table -- the paper decides how wide, the
       // spreadsheet decides how it is divided.
-      const shares = columnShares(t);
+      const shares = t.__ebShares || columnShares(t);
       t.querySelectorAll('tr, td, th, col, colgroup, thead, tbody, tfoot').forEach((k) => {
         ['width', 'height', 'bgcolor', 'align', 'valign', 'id', 'class'].forEach((a) => k.removeAttribute(a));
         const st = k.getAttribute('style');
@@ -8145,7 +13856,7 @@ ${insideObjects('.eb-paper.boxed')} {
       dl.remove();
     });
     root.querySelectorAll('img').forEach((img) => {
-      if (img.closest('figure') || img.closest('td') || img.closest('th')) { return; }
+      if (img.closest('figure') || img.closest('td') || img.closest('th') || img.classList.contains('eb-glyph')) { return; }
       const fig = document.createElement('figure');
       fig.className = 'eb-img eb-img-m';
       img.parentNode.insertBefore(fig, img);
@@ -8280,6 +13991,61 @@ ${insideObjects('.eb-paper.boxed')} {
       el.appendChild(b);
     });
   }
+  /**
+   * Word's list paragraphs, made into lists. Word writes an item as
+   *   <p style="...mso-list:l0 level2 lfo1"><span style="mso-list:Ignore">l&nbsp;&nbsp;</span>words</p>
+   * -- the bullet (a letter in Wingdings or Symbol) or the number is text in a span
+   * marked Ignore. Items next to each other make one list; the level is its depth.
+   * A marker that is a number or a letter with a stop makes a numbered list.
+   */
+  function wordLists(root) {
+    const LIST = /mso-list:\s*l(\d+)\s+level(\d+)/i;
+    const items = Array.from(root.querySelectorAll('p, h1, h2, h3, h4, h5, h6'))
+      .filter((p) => LIST.test(p.getAttribute('style') || ''));
+    if (!items.length) { return; }
+    const nextItem = (el) => {
+      let n = el.nextSibling;
+      while (n && ((n.nodeType === 3 && !n.data.trim()) || n.nodeType === 8)) { n = n.nextSibling; }
+      return n;
+    };
+    let i = 0;
+    while (i < items.length) {
+      const run = [items[i]];
+      while (i + run.length < items.length && nextItem(run[run.length - 1]) === items[i + run.length]) { run.push(items[i + run.length]); }
+      i += run.length;
+      const stack = [];
+      let top = null;
+      run.forEach((p) => {
+        const m = LIST.exec(p.getAttribute('style') || '');
+        const level = Math.max(1, parseInt(m[2], 10) || 1);
+        let marker = '';
+        p.querySelectorAll('span').forEach((sp) => {
+          if (!/mso-list:\s*ignore/i.test(sp.getAttribute('style') || '')) { return; }
+          marker += sp.textContent;
+          const outer = sp.parentNode;
+          sp.remove();
+          if (outer && outer !== p && outer.nodeName === 'SPAN' && !outer.textContent.replace(/[\s\u00a0]/g, '')) { outer.remove(); }
+        });
+        const mark = marker.replace(/[\s\u00a0]/g, '');
+        const numbered = /[0-9０-９①-⑳]/.test(mark) || /^[a-zA-Z]{1,4}[.)．）]$/.test(mark) || /^[一二三四五六七八九十]+[.、．)）]?$/.test(mark);
+        const tag = numbered ? 'OL' : 'UL';
+        while (stack.length && stack[stack.length - 1].level > level) { stack.pop(); }
+        top = stack[stack.length - 1] || null;
+        if (!top || top.level < level) {
+          const list = document.createElement(tag);
+          const num = parseInt(mark.replace(/[^0-9]/g, ''), 10);
+          if (tag === 'OL' && num > 1) { list.setAttribute('start', String(num)); }
+          if (top && top.list.lastElementChild) { top.list.lastElementChild.appendChild(list); } else { run[0].parentNode.insertBefore(list, run[0]); }
+          top = { level: level, list: list };
+          stack.push(top);
+        }
+        const li = document.createElement('li');
+        while (p.firstChild) { li.appendChild(p.firstChild); }
+        top.list.appendChild(li);
+        p.remove();
+      });
+    }
+  }
   function adoptContent(html, base) {
     const holder = document.createElement('div');
     holder.innerHTML = String(html == null ? '' : html);
@@ -8292,27 +14058,80 @@ ${insideObjects('.eb-paper.boxed')} {
     const dead = [];
     let cm; while ((cm = comments.nextNode())) { dead.push(cm); }
     dead.forEach((c) => { if (c.parentNode) { c.parentNode.removeChild(c); } });
+    // Word's lists are paragraphs that say they are items (mso-list), with the
+    // bullet or the number written out in front as text. They became plain
+    // paragraphs with Wingdings' "l" left in front, and the second level lost its
+    // indent (BUGS #85). Made lists again here, before the styles that say so go.
+    wordLists(holder);
+    // How each table divides itself, read before the pasted styles are thrown away
+    // below: Word says a column's width only in the cell's style (width:60.0pt),
+    // and it was gone by the time anything asked -- every column came in the same
+    // width (BUGS #86).
+    holder.querySelectorAll('table').forEach((t) => { t.__ebShares = columnShares(t); });
+    // EditBase で保存した文書から写した字には、ページの区切りと、ページで切った
+    // 段落の印が付いてくる。開くときと同じく外して一つに戻す。
+    unpage(holder);
+    homeAnchors(holder);
+    joinFlowCuts(holder);
     // What the other program said in its own stylesheet, written on to the things
     // it applies to -- because the stylesheet itself is about to be thrown away.
+    markGlyphs(holder);
     inlineClassStyles(holder);
     // A drawing is a picture: it can be carried in the file as one, so it never
     // reaches the list of things that cannot be kept.
     svgToPictures(holder);
     const foreign = [];
     sanitiseInto(holder, { found: foreign });
+    // 文書の中で写した段落には、ブラウザが紙の外の机の色（灰色）を背景として、
+    // 本文の字の色を字の色として書き足す。そのまま貼ると、動かしただけの段落や注の
+    // 番号が灰色の地で保存・印刷された（BUGS #269、PS 仕事7）。机の色と同じ背景、
+    // 本文と同じ字の色は書き手の物ではないので落とす。
+    const colourOf = (el, prop) => { const g = el && window.getComputedStyle ? window.getComputedStyle(el)[prop] : ''; return String(g || '').replace(/\s+/g, ''); };
+    const desk = (() => {
+      let n = canvas() ? canvas().parentElement : null;
+      while (n && n.nodeType === 1) {
+        const g = colourOf(n, 'backgroundColor');
+        if (g && !/^(transparent|rgba\(0,0,0,0\))$/.test(g)) { return g; }
+        n = n.parentElement;
+      }
+      return '';
+    })();
+    const ink = canvas() ? colourOf(canvas(), 'color') : '';
+    const same = (d, prop, want) => !!want && d.indexOf(prop + ':') === 0 && d.slice(prop.length + 1).replace(/[\s;]+/g, '') === want;
     holder.querySelectorAll('*').forEach((el) => {
       // Word and Google Docs paste a wall of inline styles; keep the structure only.
       if (el.hasAttribute('style')) {
         const keep = cleanStyle(el.getAttribute('style'))
-          .split('; ').filter((d) => /^(color|background-color|text-align)/.test(d)).join('; ');
+          .split('; ').filter((d) => /^(color|background-color|text-align)/.test(d))
+          .filter((d) => !same(d, 'background-color', desk) && !same(d, 'color', ink))
+          .join('; ');
         if (keep) { el.setAttribute('style', keep); } else { el.removeAttribute('style'); }
       }
     });
-    webToDocument(holder, base || baseFromHtml(html));
+    const carried = carryNotes(holder);
+    // 文書の中への飛び先（#見出し、#注）で、貼る物の中にある行き先は名前ごと残す。
+    // 名前をみな外すのは、編集画面の部品の名前が文書に紛れ込まないため。
+    const c = canvas();
+    const targets = [];
+    holder.querySelectorAll('a[href]').forEach((a) => {
+      const id = ownHash(a.getAttribute('href')).slice(1);
+      if (!id || APP_IDS.test(id)) { return; }
+      const el = Array.from(holder.querySelectorAll('[id]')).find((x) => x.getAttribute('id') === id);
+      if (!el) { return; }
+      const mine = c ? Array.from(c.querySelectorAll('[id]')).find((x) => x.getAttribute('id') === id) : null;
+      // 見出しを段落ごと切り取ると、ブラウザは空の見出しを名前ごと残す。空の物が
+      // 名前を持っていても飛ぶ先にならないので、名前は貼る方の見出しへ移す。
+      if (mine && !String(mine.textContent || '').trim() && !mine.querySelector('img, table, svg, math')) { mine.removeAttribute('id'); }
+      else if (mine) { return; }
+      targets.push([el, id]);
+    });
+    webToDocument(holder, base || baseFromHtml(html), carried.map((n) => n.id));
     stripFurniture(holder, true);
+    targets.forEach(([el, id]) => { if (holder.contains(el)) { el.setAttribute('id', id); } });
+    const notes = takeCarriedNotes(holder, carried);
     dropInvisibleInk(holder);
     toObjects(holder);
-    return { holder: holder, foreign: dedupeForeign(foreign) };
+    return { holder: holder, foreign: dedupeForeign(foreign), notes: notes };
   }
 
   /**
@@ -8408,12 +14227,42 @@ ${insideObjects('.eb-paper.boxed')} {
    * either writing or an object with a box. It runs until it finds nothing left
    * to change, so markup nested inside markup cannot slip through.
    */
+  /**
+   * A picture that is a letter. 青空文庫 writes a kanji outside JIS as a small
+   * picture in the middle of the sentence (class "gaiji"); Wikipedia writes a
+   * formula in a line the same way; web pages do it for emoji and icons. Made a
+   * figure like any other picture, each one broke its sentence in two and was
+   * carried off as a captioned block -- pasted, to the end of the story (BUGS
+   * #70). LibreOffice keeps such a picture in the line, as a character, and so
+   * does this: it is marked eb-glyph and never put in a figure.
+   */
+  function markGlyphs(root) {
+    if (!root || !root.querySelectorAll) { return; }
+    root.querySelectorAll('img').forEach((img) => {
+      if (img.closest('figure, td, th')) { return; }
+      const cls = img.getAttribute('class') || '';
+      const small = (v) => { const n = parseFloat(v); return n > 0 && n <= 48 && !/%/.test(String(v)); };
+      const w = img.getAttribute('width');
+      const h = img.getAttribute('height');
+      const st = img.getAttribute('style') || '';
+      const emH = /(?:^|;)\s*height\s*:\s*([\d.]+)(em|ex)/i.exec(st);
+      const byName = /\b(gaiji|emoji|twemoji|wp-smiley|smiley|mwe-math-fallback-image-inline|tex|latex|inline-icon)\b/i.test(cls);
+      const bySize = (small(w) && small(h)) || (emH && parseFloat(emH[1]) <= (emH[2].toLowerCase() === 'ex' ? 4 : 2));
+      if (!byName && !bySize) { return; }
+      // Only in a line of writing: a small picture standing alone is a picture.
+      const block = img.parentElement && img.parentElement.closest('p, li, h1, h2, h3, h4, h5, h6, dd, dt, div, blockquote, td, th, span, a, ruby') ;
+      const line = block || img.parentElement;
+      const words = line ? String(line.textContent || '').replace(/[\s\u200b]+/g, '') : '';
+      if (!words && !byName) { return; }
+      img.setAttribute('class', 'eb-glyph');
+    });
+  }
   function toObjects(root) {
     for (let pass = 0; pass < 6; pass += 1) {
       let changed = 0;
       // A picture stands in a figure, so it can be picked up, captioned and moved.
       root.querySelectorAll('img').forEach((img) => {
-        if (img.closest('td, th, figcaption')) { return; }
+        if (img.closest('td, th, figcaption') || img.classList.contains('eb-glyph')) { return; }
         const fig = img.parentNode;
         // Already in a figure of its own: make that figure the document's kind
         // rather than putting a figure inside a figure.
@@ -8445,6 +14294,11 @@ ${insideObjects('.eb-paper.boxed')} {
       root.querySelectorAll('math').forEach((m) => {
         const p = m.parentNode;
         if (p && p.nodeType === 1 && p.classList && p.classList.contains('eb-math-block')) { return; }
+        // A formula written in a sentence stays in the sentence. Every formula was
+        // boxed as a block when the file was opened, and the paragraph around one
+        // was split in two with an empty paragraph left behind (BUGS E21).
+        if (m.getAttribute('display') !== 'block' && p && p.nodeType === 1 && p.closest
+          && p.closest('p, li, td, th, h1, h2, h3, h4, h5, h6, dt, dd, figcaption, caption')) { return; }
         const box = document.createElement('div');
         box.className = 'eb-math-block';
         m.parentNode.insertBefore(box, m);
@@ -8501,12 +14355,44 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** Everything that arrives comes through the one road: see adoptContent. */
-  function pasteHtmlAt(html, base, asObject) {
+  /**
+   * What Word and Excel put round what was copied (BUGS #87): an empty paragraph
+   * before and after it, and a full-width space -- bold, as often as not -- in
+   * the cells that are empty. None of it is what was copied, so it goes.
+   */
+  function tidyPasted(holder) {
+    if (!holder) { return; }
+    const blank = (el) => el && el.nodeType === 1 && /^(P|DIV|H[1-6])$/.test(el.nodeName)
+      && !el.querySelector('img, table, svg, math, video, iframe, hr')
+      && !String(el.textContent || '').replace(/[\s\u00a0\u3000\u200b]/g, '');
+    const edge = (first) => {
+      for (;;) {
+        let n = first ? holder.firstChild : holder.lastChild;
+        while (n && n.nodeType === 3 && !n.data.trim()) { const g = n; n = first ? n.nextSibling : n.previousSibling; g.remove(); }
+        if (n && blank(n) && holder.children.length > 1) { n.remove(); continue; }
+        return;
+      }
+    };
+    edge(true);
+    edge(false);
+    holder.querySelectorAll('td, th').forEach((cell) => {
+      if (cell.querySelector('img, table, svg, math, video, iframe')) { return; }
+      if (!String(cell.textContent || '').replace(/[\s\u00a0\u3000\u200b]/g, '') && cell.textContent) { cell.innerHTML = ''; }
+    });
+  }
+  function pasteHtmlAt(html, base, asObject, tracked) {
     const taken = adoptContent(html, base);
     const holder = taken.holder;
+    tidyPasted(holder);
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
+    if (tracked && !asObject) { markFragmentAdded(frag); }
     const made = asObject ? placePasted(objectFromFragment(frag)) : (insertFragmentAt(frag), null);
+    // 番号と組にした注の本文を、文書の注の一覧へ。並べ直しは renumberNotes。
+    if (taken.notes && taken.notes.length) {
+      const list = notesBox().querySelector('ol');
+      taken.notes.forEach((li) => list.appendChild(li));
+    }
     return { made: made, foreign: taken.foreign };
   }
 
@@ -8516,13 +14402,14 @@ ${insideObjects('.eb-paper.boxed')} {
       || String(html || '').match(/<!--\s*(?:StartFragment|SourceURL)\s*:?\s*(https?:\/\/[^\s>-]+)/i);
     return m ? m[1] : '';
   }
-  function pasteTextAt(text, asObject) {
+  function pasteTextAt(text, asObject, tracked) {
     const frag = document.createDocumentFragment();
     String(text == null ? '' : text).split(/\r?\n/).forEach((line, i) => {
       if (i) { frag.appendChild(document.createElement('br')); }
       frag.appendChild(document.createTextNode(line));
     });
     if (asObject) { return placePasted(objectFromFragment(frag)); }
+    if (tracked) { markFragmentAdded(frag); }
     insertFragmentAt(frag);
     return null;
   }
@@ -8556,8 +14443,109 @@ ${insideObjects('.eb-paper.boxed')} {
     return table;
   }
 
-  /** Notes are Markdown; only the parts a document actually needs are converted. */
+  /**
+   * マークダウンを EditBase の文書の HTML に変える。ノートの取り込みも、.md の
+   * ファイルを文書にするのも、これ一つを通る。
+   *
+   * 変換は markdown-it（js/markdown-private.js。EditBase にだけ見える形で同梱）。
+   * 決まりは GitHub 式 ―― CommonMark に、表・取り消し線・URL の自動リンク・
+   * チェックボックスを足したもの。ノートで書けるものはこれで全部読める。
+   *
+   * これまでの自前の変換は、見出し・箇条書き・太字・斜体・コード・リンクしか
+   * 読めず、表もコードブロックも引用もただの文字になった。段落の途中の改行でも
+   * 段落が分かれていた（マークダウンでは、空行が来るまでは一つの段落）。
+   * 同梱の変換器が読み込めなかったときだけ、その自前の版で変える。
+   */
   function markdownToHtml(md) {
+    const lib = window.__EditBaseMarkdownIt;
+    if (typeof lib !== 'function') { return simpleMarkdownToHtml(md); }
+    // html:true ―― マークダウンの中に書かれた HTML（ノートの改ページ
+    // <div style="page-break-after: always;"></div> や <!-- 注釈 -->）は HTML として
+    // 読む。字として見せていたので、取り込んだ文書にタグがそのまま並んでいた
+    // （オーナー 2026-09-22「余計なタグが表示される」）。読んだものは下で必ず
+    // sanitiseInto を通し、動くもの・外へ出るものは取り除く。
+    const it = lib({ html: true, linkify: true, breaks: false, typographer: false });
+    const holder = document.createElement('div');
+    holder.innerHTML = it.render(String(md || ''));
+    // 注釈は文書には要らない。
+    const notes = [];
+    const walkNotes = document.createTreeWalker(holder, NodeFilter.SHOW_COMMENT, null);
+    for (let n = walkNotes.nextNode(); n; n = walkNotes.nextNode()) { notes.push(n); }
+    notes.forEach((n) => n.remove());
+    // 改ページの指定（page-break-after/before: always、break-after/before: page）は
+    // EditBase の改ページにする。中身の無い入れ物なら入れ物ごと置き換える。
+    holder.querySelectorAll('[style]').forEach((el) => {
+      const st = String(el.getAttribute('style') || '').toLowerCase().replace(/\s+/g, '');
+      const after = /page-break-after:always|break-after:page/.test(st);
+      const before = /page-break-before:always|break-before:page/.test(st);
+      if (!after && !before) { return; }
+      const mark = () => { const d = document.createElement('div'); d.className = 'eb-pagebreak'; return d; };
+      const empty = !String(el.textContent || '').trim() && !el.querySelector('img, table, math, svg');
+      if (empty) { el.replaceWith(mark()); return; }
+      if (before) { el.parentNode.insertBefore(mark(), el); }
+      if (after) { el.parentNode.insertBefore(mark(), el.nextSibling); }
+    });
+    // 行の中の画像（README の頭に並ぶバッジ、文の中の小さな絵）は字として行に残す。
+    // 図にすると一つずつ説明付きの大きな箱になり、縦に積み上がった（BUGS #74）。
+    // 段落にその画像しか無いときだけ、図にする（GitHub も LibreOffice もそう見せる）。
+    holder.querySelectorAll('p img, li img, td img, th img, h1 img, h2 img, h3 img, h4 img, h5 img, h6 img').forEach((img) => {
+      const line = img.parentElement.closest('p, li, td, th, h1, h2, h3, h4, h5, h6');
+      if (!line) { return; }
+      const others = line.querySelectorAll('img').length > 1;
+      const words = String(line.textContent || '').replace(/[\s\u200b]+/g, '') !== '';
+      if (others || words) { img.setAttribute('class', 'eb-glyph'); }
+    });
+    // 日本語の太字・取り消し線。マークダウンの決まりでは、閉じる ** の前が「）」や
+    // 「」」で後ろが文字だと太字にならず、** がそのまま残る（「**ヘッダ（…）**に」）。
+    // コードの外に残った **語** と ~~語~~ だけを、ここで太字・取り消し線にする。
+    const texts = [];
+    const walkText = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT, null);
+    for (let n = walkText.nextNode(); n; n = walkText.nextNode()) {
+      if (n.parentNode && n.parentNode.closest && n.parentNode.closest('code, pre')) { continue; }
+      if (/\*\*|~~/.test(n.data)) { texts.push(n); }
+    }
+    texts.forEach((n) => {
+      const re = /(?<![*\\])\*\*(?![\s*])([^*]*?[^\s*])\*\*(?!\*)|~~(?!\s)([^~]*?\S)~~/g;
+      const s0 = n.data;
+      if (!re.test(s0)) { return; }
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let at = 0;
+      let m = re.exec(s0);
+      while (m) {
+        if (m.index > at) { frag.appendChild(document.createTextNode(s0.slice(at, m.index))); }
+        const el = document.createElement(m[1] != null ? 'strong' : 's');
+        el.textContent = m[1] != null ? m[1] : m[2];
+        frag.appendChild(el);
+        at = m.index + m[0].length;
+        m = re.exec(s0);
+      }
+      if (at < s0.length) { frag.appendChild(document.createTextNode(s0.slice(at))); }
+      n.replaceWith(frag);
+    });
+    // チェックボックス。文書には入力欄を置けないので、☐（まだ）☑（済み）の字にする。
+    // 全部がチェック項目の箇条書きは、点と字が二重にならないよう点を消す。
+    const tasks = [];
+    holder.querySelectorAll('li').forEach((li) => {
+      let head = li.firstChild;
+      if (head && head.nodeType === 1 && head.nodeName === 'P') { head = head.firstChild; }
+      if (!head || head.nodeType !== 3) { return; }
+      const m = head.data.match(/^\[( |x|X)\]\s+/);
+      if (!m) { return; }
+      head.data = (m[1] === ' ' ? '☐ ' : '☑ ') + head.data.slice(m[0].length);
+      tasks.push(li);
+    });
+    Array.from(holder.querySelectorAll('ul')).forEach((ul) => {
+      const items = Array.from(ul.children).filter((k) => k.nodeName === 'LI');
+      if (items.length && items.every((li) => tasks.indexOf(li) >= 0)) { ul.style.listStyleType = 'none'; }
+    });
+    // 文書に入れる前に、どの入り口から来ても必ず通す（HTML を読むようにしたので）。
+    sanitiseInto(holder);
+    return holder.innerHTML;
+  }
+
+  /** 同梱の変換器が無いときの予備。見出し・箇条書き・太字・斜体・コード・リンクだけ読む。 */
+  function simpleMarkdownToHtml(md) {
     const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const inline = (t) => esc(t)
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -8592,16 +14580,82 @@ ${insideObjects('.eb-paper.boxed')} {
   }
 
   /** Placeholders are written as {{key}} and filled in by the merge. */
+  // A key is letters of any script: a RegiBase collection brought in from a CSV
+  // names its fields after the column heads, 会社名 and 住所, and \w knows only
+  // English letters -- {{会社名}} was never found and stayed in every letter (E26).
+  // 欄の名前だけに書式を付けた物（{{<strong>org</strong>}}）も欄。付けた書式は値に付く
+  // （BUGS #227：欄として数えられず、{{org}} のまま残った）。
+  const PLACEHOLDER = /\{\{((?:\s|<[^<>]*>)*)([\p{L}\p{N}_.-]{1,64})((?:\s|<[^<>]*>)*)\}\}/gu;
   function fillPlaceholders(html, values) {
-    return String(html).replace(/\{\{\s*([\w.-]{1,64})\s*\}\}/g, (whole, key) => {
-      const v = values[key];
-      return v == null ? '' : String(v)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(html).replace(PLACEHOLDER, (whole, pre, key, post) => {
+      const tags = (t) => String(t || '').replace(/\s+/g, '');
+      return tags(pre) + fillOne(values, key) + tags(post);
     });
+  }
+  /** ヘッダー・フッターの字（HTML ではない）に差し込む。 */
+  function fillPlainPlaceholders(text, values) {
+    return String(text == null ? '' : text).replace(PLACEHOLDER, (whole, pre, key) => {
+      const v = values[key];
+      return v == null ? '' : String(v);
+    });
+  }
+  /**
+   * 1つにまとめる差し込み：各通の名前（見出しの名前・注の名前）を通ごとに別にし、
+   * 注の本文は文書の終わりの1つの一覧にまとめる（この編集画面の注は、文書に一つの
+   * 一覧）。同じ名前の注が通の数だけでき、開き直すと2通目からの注の番号が1通目の
+   * 注を指し、本文が行き先を失った（BUGS #227）。
+   */
+  function mergeParts(parts) {
+    const box = document.createElement('div');
+    const notes = [];
+    parts.forEach((html, i) => {
+      const part = document.createElement('div');
+      part.innerHTML = html;
+      if (i) {
+        const ids = new Set(Array.from(part.querySelectorAll('[id]')).map((el) => el.getAttribute('id')));
+        part.querySelectorAll('[id]').forEach((el) => { el.setAttribute('id', el.getAttribute('id') + '-' + (i + 1)); });
+        part.querySelectorAll('a[href^="#"]').forEach((a) => {
+          const id = String(a.getAttribute('href') || '').slice(1);
+          if (ids.has(id)) { a.setAttribute('href', '#' + id + '-' + (i + 1)); }
+        });
+      }
+      part.querySelectorAll('section.eb-notes').forEach((sec) => {
+        sec.querySelectorAll('li[id]').forEach((li) => notes.push(li));
+        sec.remove();
+      });
+      if (i) { const br = document.createElement('div'); br.className = 'eb-pagebreak'; box.appendChild(br); }
+      while (part.firstChild) { box.appendChild(part.firstChild); }
+    });
+    if (notes.length) {
+      const sec = document.createElement('section');
+      sec.className = 'eb-notes';
+      const ol = document.createElement('ol');
+      const byId = new Map(notes.map((li) => [li.getAttribute('id'), li]));
+      let k = 0;
+      box.querySelectorAll('sup.eb-fnref a[href^="#"]').forEach((a) => {
+        const li = byId.get(String(a.getAttribute('href') || '').slice(1));
+        if (!li || li.parentNode === ol) { return; }
+        k += 1;
+        a.textContent = String(k);
+        ol.appendChild(li);
+      });
+      sec.appendChild(ol);
+      if (ol.children.length) { box.appendChild(sec); }
+    }
+    return box.innerHTML;
+  }
+  function fillOne(values, key) {
+    const v = values[key];
+    // Quotes too: a placeholder can stand inside an attribute (a link's address),
+    // and a value with a quote in it walked out of it and wrote a handler into
+    // the merged file (E27).
+    return v == null ? '' : String(v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function placeholdersIn(html) {
     const found = [];
-    String(html).replace(/\{\{\s*([\w.-]{1,64})\s*\}\}/g, (whole, key) => {
+    String(html).replace(PLACEHOLDER, (whole, pre, key) => {
       if (found.indexOf(key) < 0) { found.push(key); }
       return whole;
     });
@@ -8612,7 +14666,15 @@ ${insideObjects('.eb-paper.boxed')} {
   // Matching runs over the document's text as one string, so a phrase still matches
   // when part of it happens to be bold — which is exactly where a per-node search
   // fails and where people notice.
-  function textMap() {
+  /**
+   * The document's text as one string, and where each piece of it came from.
+   * For finding (forFind), the readings over words are left out -- 漢字の話 is
+   * found as written, and a reading is never matched or replaced as if it were
+   * part of the sentence (BUGS E24) -- and each piece remembers the paragraph or
+   * cell it stands in, so that a match never runs from one into the next (E3).
+   */
+  const FIND_BLOCK = 'p, h1, h2, h3, h4, h5, h6, li, td, th, dt, dd, figcaption, blockquote, pre, caption, div';
+  function textMap(forFind) {
     const c = canvas();
     const chunks = [];
     let full = '';
@@ -8620,13 +14682,19 @@ ${insideObjects('.eb-paper.boxed')} {
     const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);
     let n = walker.nextNode();
     while (n) {
-      if (n.data.length) {
-        chunks.push({ node: n, at: full.length, len: n.data.length });
+      const up = n.parentNode;
+      if (n.data.length && !(forFind && up && up.closest && up.closest('rt, rp, .eb-pagespacer, del.eb-del'))) {
+        chunks.push({ node: n, at: full.length, len: n.data.length, block: forFind && up && up.closest ? up.closest(FIND_BLOCK) : null });
         full += n.data;
       }
       n = walker.nextNode();
     }
     return { chunks, full };
+  }
+  /** Where a point in the document falls in a text map, or -1. */
+  function offsetIn(chunks, node, offset) {
+    for (let i = 0; i < chunks.length; i++) { if (chunks[i].node === node) { return chunks[i].at + offset; } }
+    return -1;
   }
   function pointFor(chunks, offset) {
     for (let i = 0; i < chunks.length; i++) {
@@ -8637,7 +14705,11 @@ ${insideObjects('.eb-paper.boxed')} {
     return last ? { node: last.node, offset: last.len } : null;
   }
   function rangeBetween(chunks, from, to) {
-    const a = pointFor(chunks, from);
+    // A range begins in the piece of text its first letter is in, not at the end
+    // of the piece before -- or a word in bold is taken to begin outside the bold,
+    // and replacing it took the bold away (BUGS E23).
+    const firstPiece = chunks.find((ch) => from >= ch.at && from < ch.at + ch.len);
+    const a = firstPiece && to > from ? { node: firstPiece.node, offset: from - firstPiece.at } : pointFor(chunks, from);
     const b = pointFor(chunks, to);
     if (!a || !b) { return null; }
     const r = document.createRange();
@@ -8647,22 +14719,53 @@ ${insideObjects('.eb-paper.boxed')} {
   }
   /** Every occurrence, as [start, end] offsets into the document's text. */
   function findAll(query, caseSensitive) {
-    const { chunks, full } = textMap();
+    const { chunks, full } = textMap(true);
     const out = [];
     if (!query) { return { chunks, hits: out }; }
     const hay = caseSensitive ? full : full.toLowerCase();
     const needle = caseSensitive ? query : query.toLowerCase();
-    let at = hay.indexOf(needle);
+    // Lower-casing can change a string's length (İ becomes two characters), and
+    // then every offset after it pointed at the wrong letters (BUGS E32). Such a
+    // text is searched as written, one letter case at a time.
+    const sameLength = hay.length === full.length;
+    const blockAt = (offset) => { const p = pointFor(chunks, offset); if (!p) { return null; } const ch = chunks.find((x) => x.node === p.node); return ch ? ch.block : null; };
+    const look = sameLength ? hay : full;
+    const want = sameLength ? needle : query;
+    let at = look.indexOf(want);
     while (at >= 0) {
-      out.push([at, at + needle.length]);
-      at = hay.indexOf(needle, at + Math.max(1, needle.length));
+      // Not across a paragraph or a cell (BUGS E3).
+      if (blockAt(at + 1) === blockAt(at + want.length)) { out.push([at, at + want.length]); }
+      at = look.indexOf(want, at + Math.max(1, want.length));
     }
     return { chunks, hits: out };
   }
-  function selectHit(chunks, hit) {
+  // The occurrence found while the writer is still in the find bar. It is shown
+  // with a highlight, not chosen: choosing text in the page takes the focus there
+  // with it, and the next letter typed into the find box overwrote the word found
+  // (Enter split the paragraph) and was saved so (BUGS #233). LibreOffice keeps
+  // the focus in its find bar too; Esc then leaves the word chosen in the text.
+  let findHit = null;
+  function markFindHit(r) {
+    findHit = r ? r.cloneRange() : null;
+    if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight !== 'function') { return; }
+    if (findHit) { CSS.highlights.set('eb-find', new Highlight(findHit)); } else { CSS.highlights.delete('eb-find'); }
+  }
+  /** The occurrence marked in the find bar, if it is still in the page. */
+  function heldFindHit() {
+    return findHit && !findHit.collapsed && inCanvas(findHit.commonAncestorContainer) ? findHit : null;
+  }
+  /** Whether the keyboard is in the find bar (its boxes or its buttons) -- or
+   *  nowhere, as after a press on a button in a browser that does not focus
+   *  buttons (Safari): then too the text must not be given the keys. */
+  function inFindBar() {
+    const a = document.activeElement;
+    if (!a || a === document.body) { return !!document.querySelector('.eb-find'); }
+    return !!(a.closest && a.closest('.eb-find'));
+  }
+  function selectHit(chunks, hit, keepFocus) {
     const r = rangeBetween(chunks, hit[0], hit[1]);
     if (!r) { return false; }
-    selectRange(r);
+    if (keepFocus) { markFindHit(r); } else { markFindHit(null); selectRange(r); }
     const box = r.getBoundingClientRect ? r.getBoundingClientRect() : null;
     const el = r.startContainer.parentElement;
     if (el && el.scrollIntoView && (!box || box.height === 0 || box.top < 0 || box.top > window.innerHeight)) {
@@ -8671,9 +14774,41 @@ ${insideObjects('.eb-paper.boxed')} {
     return true;
   }
   /** Replace one occurrence; the caller has already taken a snapshot. */
-  function replaceRange(chunks, hit, text) {
+  function replaceRange(chunks, hit, text, tracked) {
     const r = rangeBetween(chunks, hit[0], hit[1]);
     if (!r) { return null; }
+    // With changes being recorded, a replacement is a deletion and an addition,
+    // shown and accepted like any other. It went straight in, unrecorded (BUGS E25).
+    if (tracked) {
+      const end = r.cloneRange();
+      end.collapse(false);
+      const marker = document.createTextNode('');
+      end.insertNode(marker);
+      markDeleted(r);
+      const ins = document.createElement('ins');
+      ins.className = 'eb-ins';
+      ins.textContent = String(text);
+      marker.parentNode.insertBefore(ins, marker);
+      marker.remove();
+      const after = document.createRange();
+      after.setStartAfter(ins);
+      after.collapse(true);
+      selectRange(after);
+      return ins;
+    }
+    // Within one run of text the letters are replaced where they stand, so they
+    // keep what they were wearing -- bold stays bold. Cutting them out and putting
+    // plain text in their place lost the formatting and left an empty <strong>
+    // behind (BUGS E23).
+    if (r.startContainer === r.endContainer && r.startContainer.nodeType === 3) {
+      const node = r.startContainer;
+      node.replaceData(r.startOffset, r.endOffset - r.startOffset, String(text));
+      const after = document.createRange();
+      after.setStart(node, r.startOffset + String(text).length);
+      after.collapse(true);
+      selectRange(after);
+      return node;
+    }
     r.deleteContents();
     const node = document.createTextNode(text);
     r.insertNode(node);
@@ -8897,7 +15032,23 @@ ${insideObjects('.eb-paper.boxed')} {
     };
     // Written eager into the print document: the attribute is right for reading
     // and wrong for printing, and this is the one place printing happens.
-    frame.srcdoc = String(html).replace(/\sloading="lazy"/g, '');
+    // 印刷の小窓は Nextcloud の画面の安全設定（CSP）をそのまま受け継ぎ、許可の印
+    // （nonce）の無いプログラムは動かない。文書に埋め込んだプログラム（両側の回り込み
+    // など）が止まり、画像と字が重なって印刷された（オーナー 2026-09-22、BUGS #48）。
+    // この画面自身のプログラムに付いている印を、文書のプログラムにも付けて渡す。
+    let out = String(html).replace(/\sloading="lazy"/g, '');
+    const nonce = pageNonce();
+    if (nonce) { out = out.replace(/<script(?![^>]*\snonce=)(?=[\s>])/gi, '<script nonce="' + nonce + '"'); }
+    frame.srcdoc = out;
+  }
+  /** この画面のプログラムに Nextcloud が付けた許可の印（nonce）。無ければ空。 */
+  function pageNonce() {
+    try {
+      const own = document.currentScript && document.currentScript.nonce;
+      if (own) { return own; }
+      const s = Array.from(document.querySelectorAll('script')).find((x) => x.nonce);
+      return s ? s.nonce : '';
+    } catch (e) { return ''; }
   }
 
   function downloadHtml(name, html) {
@@ -8916,6 +15067,183 @@ ${insideObjects('.eb-paper.boxed')} {
   // The supplied EditBase logo, inline so it needs no extra request and can be
   // themed by the page around it. Kept identical to img/logo.svg.
   const LOGO = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"334 400 1332 1014\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"100\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#2e3192\" d=\"M1040.38,1352.06c-3.65-4.48-4.91-9.8-3.78-15.97l115.97-542.87c1.12-6.16,4.33-11.48,9.66-15.97,5.32-4.48,11.06-6.72,17.23-6.72h262.19c37.53,0,69.33,7.14,95.38,21.43,26.05,14.29,45.51,33.06,58.4,56.3,12.88,23.25,19.33,47.77,19.33,73.53,0,12.33-1.13,22.98-3.36,31.93-5.61,28.02-15.27,50.57-28.99,67.65-13.73,17.1-27.31,30.12-40.76,39.08,25.21,20.73,37.82,47.62,37.82,80.67,0,12.89-1.68,27.46-5.04,43.7-7.85,35.29-19.05,65.42-33.61,90.34-14.57,24.94-37.12,45.1-67.65,60.51-30.54,15.41-71.01,23.11-121.43,23.11h-296.64c-6.17,0-11.07-2.23-14.71-6.72ZM1353.41,1228.53c19.04,0,35.15-6.16,48.32-18.49,13.16-12.32,19.75-27.17,19.75-44.54,0-11.76-4.2-21.28-12.61-28.57-8.4-7.27-19.62-10.92-33.61-10.92h-138.66l-21.85,102.52h138.66ZM1284.5,900.79l-20.17,95.8h130.25c16.81,0,30.53-4.2,41.18-12.61,10.64-8.4,17.36-20.17,20.17-35.29,1.12-6.72,1.68-11.2,1.68-13.45,0-11.2-3.65-19.75-10.92-25.63-7.29-5.88-17.94-8.82-31.93-8.82h-130.25Z\"/><path fill=\"#e56b00\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"none\" stroke=\"#ffffff\" stroke-width=\"106.22\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/><path fill=\"#0000ff\" d=\"M667.77,1153.57h411.45c9.55,0,16.92,3.47,22.14,10.38,5.2,6.91,6.94,15.11,5.2,24.61l-29.94,137.39c-1.75,9.5-6.73,17.72-14.98,24.62s-17.14,10.36-26.69,10.36H417.75c-9.55,0-17.14-3.45-22.78-10.36-5.66-6.91-7.61-15.12-5.86-24.62l179.69-837.22c1.73-9.5,6.72-17.72,14.97-24.62s17.14-10.38,26.7-10.38h606.78c9.53,0,17.12,3.47,22.78,10.38,5.64,6.91,7.59,15.12,5.86,24.62l-29.95,137.38c-1.73,9.5-6.94,17.72-15.62,24.62s-17.8,10.36-27.34,10.36h-401.05l-29.94,139.97h372.39c9.55,0,17.14,3.47,22.78,10.38s7.59,15.12,5.88,24.62l-29.95,137.38c-1.75,9.5-6.95,17.72-15.62,24.62-8.69,6.91-17.8,10.36-27.34,10.36h-372.41l-29.94,145.16Z\"/></svg>";
+
+  // ---- 機能の簡単な説明（マウスを乗せたときに名前の下に出す） -----------------
+  // オーナー 2026-09-22「マウスをホバーしたときに、各機能の簡単な説明がでるように」。
+  // 鍵はボタン・メニューの名前（翻訳前）、値は一文の説明（翻訳前）。
+  const TIPS = {
+    "New document": "Creates an empty document and opens it.",
+    "Make from a Markdown file…": "Makes a new document from a Markdown (.md) file in your Files.",
+    "New category": "Adds a drawer to file documents in.",
+    "Settings": "Where documents are kept, versions, theme and language.",
+    "Documents": "Shows or hides the list of documents.",
+    "Save": "Saves the document now (Ctrl+S).",
+    "Print / PDF": "Prints the document, or saves it as a PDF, exactly as the pages look.",
+    "Paper setup": "Paper size, margins, default text size, header numbering, page background and border.",
+    "View the HTML": "Shows the HTML the document is saved as.",
+    "More": "Download, check the document, lighten pictures and more.",
+    "Change this style everywhere…": "Changes how this paragraph style looks, everywhere it is used.",
+    "Typeface of the text": "Changes the typeface of the chosen words, or of the whole frame when a frame is chosen.",
+    "As the paragraph style says": "Takes off your own setting so the paragraph style decides.",
+    "Another typeface…": "Picks a typeface from the whole catalogue.",
+    "The typefaces of the document…": "The typefaces used for body text, headings and code throughout.",
+    "Undo": "Takes back the last change (Ctrl+Z).",
+    "Redo": "Puts back what was undone (Ctrl+Shift+Z).",
+    "Download a copy": "Saves a copy of the document to your computer.",
+    "Check the document": "Looks for text running under pictures, overfull frames, heavy pictures and empty pages.",
+    "Make the pictures lighter": "Makes large pictures smaller in file size without changing how they look.",
+    "Anchor": "Where the object is fixed: in the line of text, or to a paragraph so it can be placed freely.",
+    "As character": "The object sits in the line of text and moves with the words.",
+    "To paragraph": "The object is fixed to a paragraph and can be placed anywhere on the page.",
+    "Above and below": "Text stops above the object and continues below it.",
+    "Words to its left": "Text runs down the left side of the object.",
+    "Words to its right": "Text runs down the right side of the object.",
+    "Words underneath it": "The object lies over the text; the text is not moved.",
+    "Words on both sides": "Text runs on both sides of the object (needs JavaScript in Document settings).",
+    "Bring to front": "Puts the object on top of all the others.",
+    "Send to back": "Puts the object behind all the others.",
+    "Forward one": "Moves the object one layer forward.",
+    "Back one": "Moves the object one layer back.",
+    "Put the frame at the left margin": "Moves the frame to the left edge of the column.",
+    "Centre the frame in the column": "Moves the frame to the middle of the column.",
+    "Put the frame at the right margin": "Moves the frame to the right edge of the column.",
+    "Make the frame the width of the column": "Stretches the frame to the full width of the column.",
+    "Space them evenly": "Spaces three or more chosen objects evenly.",
+    "Make them the same size": "Makes the chosen objects the same size as the first.",
+    "Frame properties…": "Size, border, colour, wrap and more for the chosen object.",
+    "Object properties…": "Size, border, colour, wrap and more for this object.",
+    "Place by the rules of HTML": "Placed by the rules of HTML.",
+    "Place freely": "Placed freely, with CSS and JavaScript.",
+    "Record what is changed from now on": "Keeps track of changes so they can be kept or undone one by one.",
+    "Keep this one": "Accepts this change.",
+    "Undo this one": "Rejects this change.",
+    "Keep them all": "Accepts every recorded change.",
+    "Undo them all": "Rejects every recorded change.",
+    "Small": "Makes the picture a third of the column wide.",
+    "Medium": "Makes the picture about two thirds of the column wide.",
+    "Full width": "Makes the picture as wide as the column.",
+    "Crop…": "Shows only part of the picture, without cutting the file.",
+    "Delete picture": "Removes the picture.",
+    "Delete the picture": "Removes the picture.",
+    "Insert row above": "Adds a row above the current one.",
+    "Insert row below": "Adds a row below the current one.",
+    "Insert column left": "Adds a column to the left.",
+    "Insert column right": "Adds a column to the right.",
+    "Delete row": "Removes the current row.",
+    "Delete the row": "Removes the current row.",
+    "Delete column": "Removes the current column.",
+    "Delete the column": "Removes the current column.",
+    "First row is a header": "Makes the first row a header row (repeated on every page).",
+    "Header row": "Makes the first row a header row (repeated on every page).",
+    "No cell colour": "Takes the fill colour off the cell.",
+    "Cell text at the top": "Puts the text at the top of the cell.",
+    "Cell text in the middle": "Puts the text in the middle of the cell.",
+    "Cell text at the bottom": "Puts the text at the bottom of the cell.",
+    "Cell text left": "Aligns the cell text to the left.",
+    "Cell text centred": "Centres the cell text.",
+    "Cell text right": "Aligns the cell text to the right.",
+    "Rule round the cells…": "Draws lines round or between the chosen cells.",
+    "Merge the cells": "Joins the chosen cells into one.",
+    "Split the cell": "Splits a merged cell back into separate cells.",
+    "Delete table": "Removes the whole table, including any part carried on to the next page.",
+    "Delete the table": "Removes the whole table, including any part carried on to the next page.",
+    "Bold": "Makes the chosen words bold (Ctrl+B).",
+    "Italic": "Makes the chosen words italic (Ctrl+I).",
+    "Underline": "Underlines the chosen words (Ctrl+U).",
+    "Strikethrough": "Draws a line through the chosen words.",
+    "Emphasis dots": "Puts emphasis dots (圏点) beside the chosen words.",
+    "Superscript": "Raises the chosen characters.",
+    "Subscript": "Lowers the chosen characters.",
+    "Inline code (monospaced)": "Sets the chosen words in a monospaced typeface.",
+    "Monospaced": "Sets the chosen words in a monospaced typeface.",
+    "Highlight": "Marks the chosen words with a highlighter colour.",
+    "Remove highlight": "Takes the highlight off the chosen words.",
+    "Remove text colour": "Takes the colour off the chosen words.",
+    "Bulleted list": "Turns the paragraphs into a bulleted list.",
+    "Numbered list": "Turns the paragraphs into a numbered list.",
+    "Kind of marker": "Chooses the bullet or numbering style.",
+    "Increase indent": "Indents the paragraph, or moves a list item one level in (Tab).",
+    "Decrease indent": "Reduces the indent, or moves a list item one level out (Shift+Tab).",
+    "Insert": "Tables, pictures, frames and boxes.",
+    "Insert table": "Inserts a table.",
+    "Insert picture": "Inserts a picture from your Files.",
+    "Text frame": "Draws a frame holding one paragraph; drag on the page to place it.",
+    "Block frame": "Draws a frame that can hold several paragraphs and carries on to the next page.",
+    "Page layout": "Columns, header and footer, page breaks and a table of contents.",
+    "Columns…": "Sets the chosen paragraphs in two or more columns.",
+    "Header and footer…": "Text printed at the top and foot of every page, with page numbers.",
+    "Page break": "Starts the following text on a new page.",
+    "Table of contents…": "Builds a table of contents from the headings.",
+    "Marks and notes": "Readings, special characters, emoji, formulas and notes.",
+    "Reading over the word…": "Adds a reading (furigana) above the chosen word.",
+    "Special character…": "Inserts a symbol or special character.",
+    "Emoji…": "Inserts an emoji.",
+    "Insert formula (MathML)": "Inserts a mathematical formula.",
+    "Note…": "Adds a numbered note; its text goes at the end of the document.",
+    "Shapes": "Rectangles, circles, lines and arrows; drag on the page to draw.",
+    "Bring in": "Brings in data from Tables, Contacts, Calendar, Notes and other apps.",
+    "Bring in a web page…": "Brings in the text and pictures of a web page.",
+    "Clear formatting": "Takes your own formatting off the chosen words.",
+    "Ruler": "Shows or hides the ruler.",
+    "Pages": "Shows or hides the page thumbnails.",
+    "Layers": "Shows or hides the list of objects and their order.",
+    "Header": "Writes directly in the header area at the top of the page.",
+    "Footer": "Writes directly in the footer area at the foot of the page.",
+    "Use as default for new documents": "New documents will start with this paper setup.",
+    "Document settings…": "JavaScript use, and the page's title, description and sharing information.",
+    "Properties…": "Size, date and counts of this document.",
+    "Share…": "Lets other people on this server read or edit.",
+    "Duplicate": "Makes a copy of this document.",
+    "Versions…": "Earlier saved versions of this document; you can go back to one.",
+    "Go to this page": "Scrolls to this page.",
+    "Start this page on a sheet of its own": "Puts a page break before the first thing on this page.",
+    "Duplicate this page": "Makes a copy of this page after it.",
+    "Add a page above": "Adds an empty page before this one.",
+    "Add a page below": "Adds an empty page after this one.",
+    "Delete everything on this page": "Removes what is on this page; the page itself stays if other text follows.",
+    "Delete this page": "Removes this page and what is on it.",
+    "Delete the page break": "Removes this page break; the following text moves up.",
+    "Cut": "Moves the chosen text to the clipboard (Ctrl+X).",
+    "Copy": "Copies the chosen text (Ctrl+C).",
+    "Paste": "Puts in what was copied (Ctrl+V).",
+    "Paste as plain text": "Puts in what was copied without its formatting (Ctrl+Shift+V).",
+    "Delete the frame": "Removes the chosen object.",
+    "Open the link": "Opens the linked page.",
+    "Edit the link…": "Changes the text or the address of the link.",
+    "Remove the link": "Takes the link off, keeping the words.",
+    "Hyperlink…": "Makes the chosen words a link (Ctrl+K).",
+    "Body text": "Makes the paragraph ordinary body text.",
+    "Heading 1": "Makes the paragraph a level 1 heading.",
+    "Heading 2": "Makes the paragraph a level 2 heading.",
+    "Heading 3": "Makes the paragraph a level 3 heading.",
+    "Heading 4": "Makes the paragraph a level 4 heading.",
+    "Quotation": "Sets the paragraph as a quotation.",
+    "Preformatted": "Keeps spaces and line breaks exactly as typed, in a monospaced typeface.",
+    "To full width": "Turns half-width letters and digits into full width.",
+    "To half width": "Turns full-width letters and digits into half width.",
+    "UPPER CASE": "Turns the chosen letters into capitals.",
+    "lower case": "Turns the chosen letters into small letters.",
+    "Capitalise Each Word": "Starts each chosen word with a capital.",
+    "Left": "Aligns the paragraph to the left.",
+    "Centre": "Centres the paragraph, or the words in the chosen frame.",
+    "Right": "Aligns the paragraph to the right.",
+    "Justified": "Spreads the lines to both edges.",
+    "Align left": "Aligns the paragraph, or the words in the chosen frame, to the left.",
+    "Align right": "Aligns the paragraph, or the words in the chosen frame, to the right.",
+    "Justify": "Spreads the lines to both edges.",
+    "Paragraph settings…": "Line spacing, indents, space before and after, borders.",
+    "Caption under the picture": "Shows the caption under the picture.",
+    "Caption over the picture": "Shows the caption above the picture.",
+    "Caption inside the picture": "Shows the caption on the picture.",
+    "No caption": "Hides the caption; its words are kept.",
+    "Alternative text…": "Words that describe the picture for people who cannot see it.",
+    "Properties of the chosen words…": "Typeface, size, colour, spacing, outline and shadow of the chosen words.",
+    "Reset (as opened)": "Puts back the values this window opened with.",
+    "New layer": "Adds a new empty layer.",
+    "Mail merge…": "Makes one copy of the document for each row of data.",
+    "Page {n}": "Shows the problem on this page.",
+    "Look again": "Checks the document again.",
+  };
 
   // ---- icons -------------------------------------------------------------------
   // Drawn, not typed: emoji and box-drawing characters render differently on every
@@ -8941,6 +15269,10 @@ ${insideObjects('.eb-paper.boxed')} {
     redo: I('<path d="M13 8H5.5a3 3 0 0 0 0 6H9"/><path d="M10.5 5.5 13 8l-2.5 2.5"/>'),
     guides: I('<rect x="1.6" y="1.6" width="12.8" height="12.8" rx="1"/><rect x="4" y="3.6" width="8" height="8.8" stroke-dasharray="2 1.6"/>'),
     frame: I('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.6 6.4h6.8M4.6 9.6h4.4"/>'),
+    eye: I('<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>'),
+    eyeOff: I('<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" opacity=".35"/><path d="M2.5 13.5l11-11"/>'),
+    lock: I('<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'),
+    unlock: I('<rect x="3.5" y="7" width="9" height="6.5" rx="1" opacity=".35"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0" opacity=".35"/>'),
     free: I('<rect x="1.8" y="4.6" width="8.6" height="7.6" rx="1"/><path d="M5.6 4.6V2.6a1 1 0 0 1 1-1h6.6a1 1 0 0 1 1 1v6.6a1 1 0 0 1-1 1h-2"/>'),
     pageView: I('<rect x="3.4" y="1.8" width="9.2" height="12.4" rx="1"/><path d="M5.8 5h4.4M5.8 8h4.4M5.8 11h2.6"/>'),
     screenView: I('<rect x="1.6" y="3" width="12.8" height="8.4" rx="1"/><path d="M6 13.6h4"/>'),
@@ -8957,6 +15289,11 @@ ${insideObjects('.eb-paper.boxed')} {
     brush: I('<path d="M4.4 9.6 10.8 3.2a1.7 1.7 0 0 1 2.4 2.4L6.8 12"/><path d="M4.4 9.6 6.8 12l-1.6 1.4a2 2 0 0 1-2.8-2.8z"/>'),
     header: I('<rect x="2" y="2.4" width="12" height="11.2" rx="1"/><path d="M2 5.6h12" stroke-dasharray="2 1.6"/><path d="M2 10.8h12" stroke-dasharray="2 1.6"/>'),
     grip: I('<circle cx="6" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="3.6" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="6" cy="12.4" r=".95" fill="currentColor" stroke="none"/><circle cx="10" cy="12.4" r=".95" fill="currentColor" stroke="none"/>'),
+    // 標準配置：箱が HTML の決まりどおり上から順に並ぶ。
+    // ヘッダー・フッター：紙の上（下）に太線（オーナー 2026-09-29）。
+    pageHead: I('<rect x="3" y="1.5" width="10" height="13" rx="1"/><path d="M3.4 3.4h9.2" stroke-width="2.6"/>'),
+    pageFoot: I('<rect x="3" y="1.5" width="10" height="13" rx="1"/><path d="M3.4 12.6h9.2" stroke-width="2.6"/>'),
+    placeStd: I('<rect x="3" y="1.8" width="10" height="3.2" rx=".8"/><rect x="3" y="6.4" width="10" height="3.2" rx=".8"/><rect x="3" y="11" width="10" height="3.2" rx=".8"/>'),
     wrapNone: I('<rect x="3.5" y="4.5" width="9" height="7" rx="1"/><path d="M2 2.4h12M2 13.6h12"/>'),
     wrapLeft: I('<rect x="2" y="4.5" width="6" height="7" rx="1"/><path d="M9.6 5.4h4.4M9.6 8h4.4M9.6 10.6h4.4"/>'),
     wrapRight: I('<rect x="8" y="4.5" width="6" height="7" rx="1"/><path d="M2 5.4h4.4M2 8h4.4M2 10.6h4.4"/>'),
@@ -8965,8 +15302,10 @@ ${insideObjects('.eb-paper.boxed')} {
     layers: I('<path d="M8 1.8 14 5 8 8.2 2 5z"/><path d="M2 8l6 3.2L14 8"/><path d="M2 11l6 3.2L14 11"/>'),
     header: I('<rect x="2" y="2.6" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/><path d="M2.6 8.6h10.8M2.6 11h10.8M2.6 13.2h7"/>'),
     footer: I('<path d="M2.6 2.8h10.8M2.6 5h10.8M2.6 7.2h7"/><rect x="2" y="10" width="12" height="3.4" rx=".6" fill="currentColor" stroke="none" opacity=".85"/>'),
-    wrapBoth: I('<rect x="5.6" y="4.5" width="4.8" height="7" rx="1"/><path d="M1.6 5.4h3M1.6 8h3M1.6 10.6h3M11.4 5.4h3M11.4 8h3M11.4 10.6h3"/>'),
+    // マークダウンのマーク（角の丸い枠に M と下向きの矢印）。
+    markdown: '<svg width="22" height="14" viewBox="0 0 208 128" aria-hidden="true"><rect x="5" y="5" width="198" height="118" rx="15" fill="none" stroke="currentColor" stroke-width="10"/><path d="M30 98V30h20l20 25 20-25h20v68H90V59L70 84 50 59v39zm125 0l-30-33h20V30h20v35h20z" fill="currentColor"/></svg>',
     wrapThrough: I('<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M1.6 5.4h12.8M1.6 8h12.8M1.6 10.6h12.8"/>'),
+    wrapBoth: I('<rect x="5.6" y="4.5" width="4.8" height="7" rx="1"/><path d="M1.4 5.4h2.8M1.4 8h2.8M1.4 10.6h2.8M11.8 5.4h2.8M11.8 8h2.8M11.8 10.6h2.8"/>'),
     grid: I('<path d="M1.4 6h13.2M1.4 10h13.2M6 1.4v13.2M10 1.4v13.2"/><rect x="1.4" y="1.4" width="13.2" height="13.2" rx="1"/>', { w: 1.1 }),
     boxes: I('<rect x="2.6" y="3.6" width="10.8" height="8.8" rx=".6" stroke-dasharray="2 1.6"/><path d="M1.4 2.4h2.4M12.2 2.4h2.4M1.4 13.6h2.4M12.2 13.6h2.4"/>'),
     palette: I('<rect x="1.4" y="2" width="5.2" height="5.2" rx="1"/><rect x="1.4" y="8.8" width="5.2" height="5.2" rx="1"/><path d="M9.4 4.6h5.2M9.4 8h5.2M9.4 11.4h5.2"/>'),
@@ -9035,7 +15374,12 @@ ${insideObjects('.eb-paper.boxed')} {
       <button v-if="narrow" class="eb-tb side-close" @click="sideOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
     </div>
     <div class="side-actions">
-      <button class="eb-btn primary wide" @click="newDoc">＋ {{ t('New document') }}</button>
+      <!-- 「新しい文書」の右に、マークダウンから作るボタン（＋とマークダウンのマーク）。
+           オーナー 2026-09-22。 -->
+      <div class="newrow">
+        <button class="eb-btn primary wide" @click="newDoc">＋ {{ t('New document') }}</button>
+        <button class="eb-btn md-new" @click="openMarkdownPicker" :title="t('Make from a Markdown file…')" :aria-label="t('Make from a Markdown file…')">＋<span class="mdmark" v-html="icons.markdown"></span></button>
+      </div>
       <button class="eb-btn ghost wide" v-if="!naming" @click="startCategory">＋ {{ t('New category') }}</button>
       <input v-else ref="catName" class="eb-catname" type="text" maxlength="100" v-model="catNew"
         :placeholder="t('Name of the category')" @keydown.enter.prevent="makeCategory" @keydown.esc.prevent="naming = false" @blur="makeCategory">
@@ -9044,10 +15388,10 @@ ${insideObjects('.eb-paper.boxed')} {
       <p class="hint" v-if="!docs.length">{{ t('No documents yet. Everything you write here is saved to {folder} in your Files as a plain .html file.', { folder: settings.folder }) }}</p>
       <!-- Nothing is filed anywhere yet: a plain list is plainer than one box. -->
       <template v-if="docGroups.length === 1 && docGroups[0].key === ''">
-        <button v-for="d in docGroups[0].docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id }"
-          :draggable="!d.shared" @dragstart="liftDoc(d, $event)" @dragend="dragDoc = 0"
+        <button v-for="d in docGroups[0].docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id, unsupported: !!d.unsupported }"
+          :draggable="!d.shared" @dragstart="liftDoc(d, $event)" @dragend="dragDoc = 0" :title="unsupportedNote(d)"
           @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
-          <span class="t">{{ d.title }}</span>
+          <span class="t"><span class="warn" v-if="d.unsupported">⚠ </span>{{ d.title }}<span class="js" v-if="d.script" :title="t('Carries EditBase’s program')">JS</span></span>
           <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}</span>
         </button>
       </template>
@@ -9062,10 +15406,10 @@ ${insideObjects('.eb-paper.boxed')} {
           <span class="n">{{ g.docs.length }}</span>
         </button>
         <div class="cat-body" v-if="openCat === g.key">
-          <button v-for="d in g.docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id }"
+          <button v-for="d in g.docs" :key="d.id" class="eb-docitem" :class="{ active: d.id === doc.id, lifted: dragDoc === d.id, unsupported: !!d.unsupported }" :title="unsupportedNote(d)"
             :draggable="!d.shared" @dragstart="liftDoc(d, $event)" @dragend="dragDoc = 0"
             @click="openDoc(d.id)" @contextmenu.prevent.stop="docCtx($event, d)">
-            <span class="t">{{ d.title }}</span>
+            <span class="t"><span class="warn" v-if="d.unsupported">⚠ </span>{{ d.title }}<span class="js" v-if="d.script" :title="t('Carries EditBase’s program')">JS</span></span>
             <span class="m">{{ when(d.mtime) }} · {{ size(d.size) }}<span v-if="d.shared"> · {{ d.owner }}</span></span>
           </button>
           <p class="hint" v-if="!g.docs.length">{{ t('Nothing in this category yet.') }}</p>
@@ -9084,7 +15428,8 @@ ${insideObjects('.eb-paper.boxed')} {
       <span class="state" :class="{ dirty: dirty }">{{ stateText }}</span>
       <button class="eb-btn" @click="save(true)" :disabled="!doc.id || saving">💾 <span class="lbl">{{ t('Save') }}</span></button>
       <button class="eb-btn" @click="printDoc" :disabled="!doc.id">🖨 <span class="lbl">{{ t('Print / PDF') }}</span></button>
-      <button class="eb-btn ghost" @click="paperOpen = true" :disabled="!doc.id" :title="t('Paper setup')"><span v-html="icons.paper"></span></button>
+      <button class="eb-btn" @click="webPreview" :disabled="!doc.id" :title="t('Shows the saved document as a web page, its program running.')">🌐 <span class="lbl">{{ t('Web preview') }}</span></button>
+      <button class="eb-btn ghost" @click="paperOpen = true" :disabled="!doc.id" :title="t('Paper setup')"><span v-html="icons.paper"></span> <span class="lbl">{{ t('Paper setup') }}</span></button>
       <button class="eb-btn ghost" @click="showSource" :disabled="!doc.id" :title="t('View the HTML')">&lt;/&gt;</button>
       <button class="eb-btn ghost" @click="menuOpen = !menuOpen" :title="t('More')">⋯</button>
       <span class="headtools" v-if="doc.id">
@@ -9110,6 +15455,13 @@ ${insideObjects('.eb-paper.boxed')} {
             <span :style="{ fontFamily: fontPreviewStack(fontsInUse[r.key]) }">{{ fontsInUse[r.key] }}</span>
             <span class="k">{{ r.label }}</span>
           </button>
+          <template v-if="usedFonts.length">
+            <div class="eb-menu-sep"></div>
+            <div class="eb-menu-head">{{ t('Used in this document') }}</div>
+            <button v-for="f in usedFonts" :key="'u' + f" class="eb-menu-item" @click="setFamily(f); menu = ''">
+              <span :style="{ fontFamily: fontPreviewStack(f) }">{{ f }}</span>
+            </button>
+          </template>
           <div class="eb-menu-sep"></div>
           <button class="eb-menu-item" @click="openFonts('selection')">{{ t('Another typeface…') }}</button>
           <button class="eb-menu-item" @click="paperOpen = true; menu = ''">{{ t('The typefaces of the document…') }}</button>
@@ -9119,7 +15471,8 @@ ${insideObjects('.eb-paper.boxed')} {
         <span class="eb-num" :title="t('Size of the text (pt)')">
           <button class="eb-tb" @mousedown.prevent @click="stepSize(-0.5)" v-html="icons.minus"></button>
           <input type="number" min="4" max="200" step="0.5" :value="fmt.size"
-            @change="setSize($event.target.value)" @keydown.enter.prevent="setSize($event.target.value)">
+            @change="sizeBox($event.target)" @keydown.enter.prevent="sizeBox($event.target)"
+            @keydown.esc.prevent="$event.target.value = fmt.size; $event.target.blur()">
           <button class="eb-tb" @mousedown.prevent @click="stepSize(0.5)" v-html="icons.plus"></button>
           <button class="eb-tb caret" :class="{ on: menu === 'size' }" @mousedown.prevent @click="toggleMenu('size')" v-html="icons.down"></button>
         </span>
@@ -9150,7 +15503,7 @@ ${insideObjects('.eb-paper.boxed')} {
               </div>
               <div class="eb-menu-sep"></div>
             </template>
-            <button class="eb-btn wide" @click="download">⬇ {{ t('Download a copy') }}</button>
+            <button class="eb-btn wide" v-if="doc.download !== false" @click="download">⬇ {{ t('Download a copy') }}</button>
             <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
             <button class="eb-btn wide" @click="runCheck(); menuOpen = false">🔍 {{ t('Check the document') }}</button>
             <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
@@ -9166,110 +15519,6 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
       <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
     </div>
-
-    <!-- What is done to the object that is chosen. It is a row of its own, under
-         the top row, and it is there only while something is chosen: in the rail
-         it stood thirteen buttons tall and pushed the tools off the screen. -->
-    <div class="eb-toolbar sub objbar" v-if="doc.id && frame.on">
-      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
-      <span class="nm">{{ frameLabel }}</span>
-      <button class="eb-tb" :class="{ on: frame.free }" @click="frameCmd('free')" :title="t('Place it freely')"><span v-html="icons.free"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'none' }" @click="frameCmd('wrapMode', 'none')" :title="t('Above and below')"><span v-html="icons.wrapNone"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Words to its left')"><span v-html="icons.wrapRight"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Words to its right')"><span v-html="icons.wrapLeft"></span></button>
-      <button class="eb-tb" :class="{ on: frame.wrap === 'through' }" @click="frameCmd('wrapMode', 'through')" :title="t('Words underneath it')"><span v-html="icons.wrapThrough"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('stack', 'front')" :title="t('Bring to front')"><span v-html="icons.toFront"></span></button>
-      <button class="eb-tb" @click="frameCmd('stack', 'back')" :title="t('Send to back')"><span v-html="icons.toBack"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
-      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
-      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
-      <span class="sep" v-if="frame.more"></span>
-      <button class="eb-tb" v-if="frame.more" @click="frameCmd('spread')" :title="t('Space them evenly')"><span v-html="icons.spread"></span></button>
-      <button class="eb-tb" v-if="frame.more" @click="frameCmd('sameSize')" :title="t('Make them the same size')"><span v-html="icons.sameSize"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @click="openFrameProps" :title="t('Frame properties…')"><span v-html="icons.props"></span></button>
-      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
-      </span>
-    </div>
-
-    <div class="eb-find" v-if="doc.id && find.open">
-      <span class="ic" v-html="icons.search"></span>
-      <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
-      <span class="count">{{ find.hits.length ? (find.index + 1) + ' / ' + find.hits.length : t('none') }}</span>
-      <button class="eb-tb" @click="findNext(-1)" :title="t('Previous')">↑</button>
-      <button class="eb-tb" @click="findNext(1)" :title="t('Next')">↓</button>
-      <label class="opt"><input type="checkbox" v-model="find.caseSensitive" @change="runFind()"> {{ t('Match case') }}</label>
-      <span class="sep"></span>
-      <input type="text" v-model="find.replace" :placeholder="t('Replace with')" @keydown.enter.prevent="replaceOne">
-      <button class="eb-btn" @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
-      <button class="eb-btn" @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
-      <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && (review || changes)">
-      <span class="grp">{{ t('Review') }}</span>
-      <button class="eb-tb text" :class="{ on: review }" @mousedown.prevent @click="review = !review" :title="t('Record what is changed from now on')">
-        <span v-html="icons.review"></span><span class="lbl">{{ review ? t('Recording') : t('Not recording') }}</span>
-      </button>
-      <span class="sep"></span>
-      <button class="eb-tb text" :class="{ on: !showChanges }" @mousedown.prevent @click="showChanges = !showChanges">
-        <span class="lbl">{{ showChanges ? t('Showing the marks') : t('As it would read') }}</span>
-      </button>
-      <span class="sep"></span>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptOne')" :disabled="!fmt.change">{{ t('Keep this one') }}</button>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectOne')" :disabled="!fmt.change">{{ t('Undo this one') }}</button>
-      <span class="sep"></span>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
-      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
-      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
-      <span class="grp">{{ t('Picture') }}</span>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-s' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-s')">{{ t('Small') }}</button>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
-      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
-      <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="openCrop" :title="t('Crop…')"><span v-html="icons.crop"></span></button>
-      <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
-      <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
-    </div>
-
-    <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
-      <span class="grp">{{ t('Table') }}</span>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowBelow')" :title="t('Insert row below')"><span v-html="icons.rowBelow"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colLeft')" :title="t('Insert column left')"><span v-html="icons.colLeft"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colRight')" :title="t('Insert column right')"><span v-html="icons.colRight"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowDel')" :title="t('Delete row')"><span v-html="icons.rowDel"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colDel')" :title="t('Delete column')"><span v-html="icons.colDel"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb" :class="{ on: fmt.tableHeader }" @mousedown.prevent @click="tableCmd('header')" :title="t('First row is a header')"><span v-html="icons.header"></span></button>
-      <select :value="fmt.tableVariant" @change="tableCmd('variant', $event.target.value)" :title="t('Style')">
-        <option value="">{{ t('All borders') }}</option>
-        <option value="rows">{{ t('Horizontal lines only') }}</option>
-        <option value="borderless">{{ t('No borders') }}</option>
-      </select>
-      <span class="sep"></span>
-      <label class="eb-tb" :title="t('Cell colour')">
-        <span class="colour-bar" :style="{ background: cellFill || 'transparent' }"></span>
-        <span v-html="icons.highlight"></span>
-        <input type="color" :value="cellFill || '#eef1f6'" @input="tableCmd('fill', $event.target.value)">
-      </label>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('fill', '')" :title="t('No cell colour')"><span v-html="icons.nocolour"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="openCellBorder" :title="t('Rule round the cells…')"><span v-html="icons.cellBorder"></span></button>
-      <span class="sep"></span>
-      <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
-      <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
-    </div>
-
     <!-- Down the left, in two columns, and outside the part that scrolls: on a
          wide screen the room is at the sides, and the page wants the height.
          The shelf of things to put on the page is at the foot of it. -->
@@ -9391,8 +15640,8 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" :class="{ on: grid }" v-if="!flow" @mousedown.prevent @click="grid = !grid" :title="grid ? t('Hide the grid') : t('Show a five millimetre grid')"><span v-html="icons.grid"></span></button>
       <button class="eb-tb" :class="{ on: previewOpen }" @mousedown.prevent @click="previewOpen = !previewOpen" :title="t('Pages')"><span v-html="icons.pages"></span></button>
       <button class="eb-tb" :class="{ on: layersOpen }" @mousedown.prevent @click="layersOpen = !layersOpen" :title="t('Layers')"><span v-html="icons.layers"></span></button>
-      <button class="eb-tb" :class="{ on: runBandOn || hasBand('header') }" @mousedown.prevent @click="editBand('header')" :title="t('Header')"><span v-html="icons.header"></span></button>
-      <button class="eb-tb" :class="{ on: runBandOn || hasBand('footer') }" @mousedown.prevent @click="editBand('footer')" :title="t('Footer')"><span v-html="icons.footer"></span></button>
+      <button class="eb-tb" :class="{ on: (runBandOn && runBandWhich === 'header') || hasBand('header') }" @mousedown.prevent @click="editBand('header')" :title="t('Header')"><span v-html="icons.pageHead"></span></button>
+      <button class="eb-tb" :class="{ on: (runBandOn && runBandWhich === 'footer') || hasBand('footer') }" @mousedown.prevent @click="editBand('footer')" :title="t('Footer')"><span v-html="icons.pageFoot"></span></button>
       <button class="eb-tb" :class="{ on: boxes }" v-if="!flow" @mousedown.prevent @click="boxes = !boxes" :title="boxes ? t('Hide the box round every object') : t('Show the box round every object')"><span v-html="icons.boxes"></span></button>
       <!-- The page with nothing of the editor's on it: no margin boundaries, no
            boxes round the objects, no grid or ruler, no placeholder under a
@@ -9416,15 +15665,150 @@ ${insideObjects('.eb-paper.boxed')} {
         </button>
       </div>
     </div>
-    <div class="eb-desk" :class="{ empty: !doc.id }">
+    <!-- 紙の置き場の列。選んだ物の道具の段（枠・画像・表）はこの列の上に出す。左右の
+         道具や一覧の上に出すと、段が出入りするたびにレイヤーバーなどが上下にずれ、
+         二度目のクリックが別の行に当たった（2026-09-22 点検で発見）。 -->
+    <div class="eb-center">
+
+    <!-- What is done to the object that is chosen. It is a row of its own, under
+         the top row, and it is there only while something is chosen: in the rail
+         it stood thirteen buttons tall and pushed the tools off the screen. -->
+    <div class="eb-toolbar sub objbar" v-if="doc.id && frame.on">
+      <span class="eb-objgrp" v-if="frame.on" @contextmenu.prevent.stop="objectCtx($event)">
+      <span class="nm">{{ frameLabel }}</span>
+      <!-- 配置（オーナー 2026-09-29）：自由に配置／HTML のルールで配置。HTML のときだけ字の流し方。 -->
+      <select class="eb-place" :value="frame.free && frame.wrap === 'through' ? 'free' : 'standard'"
+        @change="ctxDo('placeMode', $event.target.value === 'free' ? 'free' : 'html')"
+        :title="frame.free && frame.wrap === 'through' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.')">
+        <option value="standard">{{ t('Place by the rules of HTML') }}</option>
+        <option value="free">{{ t('Place freely') }}</option>
+      </select>
+      <template v-if="!(frame.free && frame.wrap === 'through')">
+        <span class="sep"></span>
+        <button class="eb-tb" :class="{ on: ['left', 'right', 'both'].indexOf(frame.wrap) < 0 }" @click="frameCmd('wrapMode', 'none')" :title="t('Keep clear above and below')"><span v-html="icons.wrapNone"></span></button>
+        <button class="eb-tb" :class="{ on: frame.wrap === 'left' }" @click="frameCmd('wrapMode', 'left')" :title="t('Words to its left')"><span v-html="icons.wrapRight"></span></button>
+        <button class="eb-tb" :class="{ on: frame.wrap === 'right' }" @click="frameCmd('wrapMode', 'right')" :title="t('Words to its right')"><span v-html="icons.wrapLeft"></span></button>
+        <button class="eb-tb" v-if="doc.useScript" :class="{ on: frame.wrap === 'both' }" @click="frameCmd('wrapMode', 'both')" :title="t('Words on both sides')"><span v-html="icons.wrapBoth"></span></button>
+      </template>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-l')" :title="t('Put the frame at the left margin')"><span v-html="icons.boxL"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-c')" :title="t('Centre the frame in the column')"><span v-html="icons.boxC"></span></button>
+      <button class="eb-tb" @click="frameCmd('align', 'eb-al-r')" :title="t('Put the frame at the right margin')"><span v-html="icons.boxR"></span></button>
+      <button class="eb-tb" @click="frameCmd('fit')" :title="t('Make the frame the width of the column')"><span v-html="icons.boxW"></span></button>
+      <span class="sep" v-if="frame.more"></span>
+      <button class="eb-tb" v-if="frame.more" @click="frameCmd('spread')" :title="t('Space them evenly')"><span v-html="icons.spread"></span></button>
+      <button class="eb-tb" v-if="frame.more" @click="frameCmd('sameSize')" :title="t('Make them the same size')"><span v-html="icons.sameSize"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @click="openFrameProps" :title="propsLabel(frame.kind)"><span v-html="icons.props"></span></button>
+      <button class="eb-tb danger" @click="frameCmd('delete')" :title="t('Delete')"><span v-html="icons.clear"></span></button>
+      </span>
+    </div>
+
+    <div class="eb-find" v-if="doc.id && find.open">
+      <span class="ic" v-html="icons.search"></span>
+      <input ref="findInput" type="text" v-model="find.query" :placeholder="t('Find')" @input="runFind()" @keydown.enter.prevent="findNext(1)" @keydown.esc.prevent="closeFind">
+      <span class="count">{{ find.hits.length ? (find.index + 1) + ' / ' + find.hits.length : t('none') }}</span>
+      <button class="eb-tb" @mousedown.prevent @click="findNext(-1)" :title="t('Previous')">↑</button>
+      <button class="eb-tb" @mousedown.prevent @click="findNext(1)" :title="t('Next')">↓</button>
+      <label class="opt"><input type="checkbox" v-model="find.caseSensitive" @change="runFind()"> {{ t('Match case') }}</label>
+      <span class="sep"></span>
+      <input type="text" v-model="find.replace" :placeholder="t('Replace with')" @keydown.enter.prevent="replaceOne">
+      <button class="eb-btn" @mousedown.prevent @click="replaceOne" :disabled="!find.hits.length">{{ t('Replace') }}</button>
+      <button class="eb-btn" @mousedown.prevent @click="replaceAll" :disabled="!find.hits.length">{{ t('Replace all') }}</button>
+      <button class="eb-tb" @click="closeFind" :title="t('Close')"><span v-html="icons.close"></span></button>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && (review || changes)">
+      <span class="grp">{{ t('Review') }}</span>
+      <button class="eb-tb text" :class="{ on: review }" @mousedown.prevent @click="review = !review" :title="t('Record what is changed from now on')">
+        <span v-html="icons.review"></span><span class="lbl">{{ review ? t('Recording') : t('Not recording') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" :class="{ on: !showChanges }" @mousedown.prevent @click="showChanges = !showChanges">
+        <span class="lbl">{{ showChanges ? t('Showing the marks') : t('As it would read') }}</span>
+      </button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptOne')" :disabled="!fmt.change">{{ t('Keep this one') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectOne')" :disabled="!fmt.change">{{ t('Undo this one') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
+      <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
+      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
+      <span class="grp">{{ t('Picture') }}</span>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-s' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-s')">{{ t('Small') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-m' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-m')">{{ t('Medium') }}</button>
+      <button class="eb-tb text" :class="{ on: fmt.imageSize === 'eb-img-l' }" @mousedown.prevent @click="imageCmd('size', 'eb-img-l')">{{ t('Full width') }}</button>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="openCrop" :title="t('Crop…')"><span v-html="icons.crop"></span></button>
+      <button class="eb-tb danger" @mousedown.prevent @click="imageCmd('delete')" :title="t('Delete picture')"><span v-html="icons.clear"></span></button>
+      <span class="hint">{{ t('The caption sits under the picture; leave it empty and it does not print.') }}</span>
+    </div>
+
+    <div class="eb-toolbar sub" v-if="doc.id && fmt.table">
+      <span class="grp">{{ t('Table') }}</span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowAbove')" :title="t('Insert row above')"><span v-html="icons.rowAbove"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowBelow')" :title="t('Insert row below')"><span v-html="icons.rowBelow"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colLeft')" :title="t('Insert column left')"><span v-html="icons.colLeft"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colRight')" :title="t('Insert column right')"><span v-html="icons.colRight"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('rowDel')" :title="t('Delete row')"><span v-html="icons.rowDel"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('colDel')" :title="t('Delete column')"><span v-html="icons.colDel"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb" :class="{ on: fmt.tableHeader }" @mousedown.prevent @click="tableCmd('header')" :title="t('First row is a header')"><span v-html="icons.header"></span></button>
+      <select :value="fmt.tableVariant" @change="tableCmd('variant', $event.target.value)" :title="t('Style')">
+        <option value="">{{ t('All borders') }}</option>
+        <option value="rows">{{ t('Horizontal lines only') }}</option>
+        <option value="borderless">{{ t('No borders') }}</option>
+      </select>
+      <span class="sep"></span>
+      <label class="eb-tb" :title="t('Cell colour')">
+        <span class="colour-bar" :style="{ background: cellFill || 'transparent' }"></span>
+        <span v-html="icons.highlight"></span>
+        <input type="color" :value="cellFill || '#eef1f6'" @input="tableCmd('fill', $event.target.value)">
+      </label>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('fill', '')" :title="t('No cell colour')"><span v-html="icons.nocolour"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'top')" :title="t('Cell text at the top')"><span v-html="icons.vTop"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'middle')" :title="t('Cell text in the middle')"><span v-html="icons.vMid"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="tableCmd('valign', 'bottom')" :title="t('Cell text at the bottom')"><span v-html="icons.vBot"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="openCellBorder" :title="t('Rule round the cells…')"><span v-html="icons.cellBorder"></span></button>
+      <span class="sep"></span>
+      <button class="eb-tb danger" @mousedown.prevent @click="tableCmd('delete')" :title="t('Delete table')"><span v-html="icons.tableDel"></span></button>
+      <span class="hint">{{ t('Tab moves to the next cell; a new row is added at the end.') }}</span>
+    </div>
+    <!-- 数式バー（BUGS #290）：Calc と同じく、セルの名前・関数・入力欄。式を書いている
+         間に表のセルを押すと、そのセルの名前（ドラッグなら範囲）が式に入る。 -->
+    <div class="eb-toolbar sub eb-fxbar" v-if="doc.id && fmt.table">
+      <span class="eb-fx-name" :title="t('The cell')">{{ fx.name }}</span>
+      <span class="eb-pop">
+        <button class="eb-tb eb-fx-btn" :class="{ on: menu === 'fx' }" @mousedown.prevent @click="toggleMenu('fx')" :title="t('Functions')"><i>f</i>x</button>
+        <div class="eb-menu eb-fx-list" v-if="menu === 'fx'" @mousedown.prevent>
+          <div class="eb-fx-group" v-for="g in fxGroups" :key="g.group">
+            <div class="eb-fx-gname">{{ t(g.group === 'Text' ? 'Text functions' : g.group) }}</div>
+            <button v-for="f in g.items" :key="f.name" class="eb-menu-item eb-fx-item" @click="fxInsertFunction(f.name)">
+              <span class="n">{{ t(f.syntax) }}</span><span class="d">{{ t(f.about) }}</span>
+            </button>
+          </div>
+        </div>
+      </span>
+      <button class="eb-tb eb-fx-btn" @mousedown.prevent @click="fxSum" :title="t('Sum')">Σ</button>
+      <input class="eb-fx-input" ref="fxInput" type="text" spellcheck="false" v-model="fx.text"
+        @focus="fxFocus" @blur="fxBlur" @keydown.enter.prevent="fxCommit" @keydown.esc.prevent="fxCancel"
+        :placeholder="t('A value, or a formula that starts with =')">
+      <button class="eb-tb" v-if="fx.editing" @mousedown.prevent @click="fxCancel" :title="t('Cancel')">✕</button>
+      <button class="eb-tb" v-if="fx.editing" @mousedown.prevent @click="fxCommit" :title="t('Accept')">✓</button>
+    </div>
+    <div class="eb-desk" :class="{ empty: !doc.id, tate: tategaki && !flow, ruled: doc.id && ruler && !flow && !tategaki }">
       <!-- The palette. A page is laid out by taking things off a shelf and putting
            them on the paper, so the shelf stands beside the paper rather than
            hiding in a menu. Press one to put it in the flow of the text; drag one
            on to the page to put it down where it lands. -->
-      <div class="eb-paperwrap" :class="{ noguides: !guides, flow: flow, grid: grid && !flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
+      <div class="eb-paperwrap" :class="{ cellsel: csel.rects.length > 0, noguides: !guides, flow: flow, grid: grid && !flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
         <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
           <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
-          <span class="tick" v-for="n in rulerMm.ticks" :key="n" :style="{ left: ((n - 1) * 10) + 'mm' }">{{ (n - 1) * 10 }}</span>
+          <span v-for="m in rulerMm.marks" :key="m.at" class="tick" :class="m.kind" :style="{ left: m.at + 'mm' }"><span v-if="m.label" class="num">{{ m.label }}</span></span>
           <span class="hm left" :style="{ left: rulerMm.ml + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'ml')" :title="t('Left margin')"></span>
           <span class="hm right" :style="{ left: (rulerMm.w - rulerMm.mr) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'mr')" :title="t('Right margin')"></span>
           <span class="ind first" :style="{ left: (rulerMm.ml + ind.left + ind.first) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'first')" :title="t('First line')"></span>
@@ -9441,7 +15825,7 @@ ${insideObjects('.eb-paper.boxed')} {
                  and are not written back into it while it is being typed: a box
                  whose text is redrawn under the caret takes every letter to the
                  front, and the writing came out backwards. -->
-            <div class="run head live" v-if="n === 1 && runBandOn" :class="{ empty: !hasBand('header') }">
+            <div class="run head live" v-if="n === 1 && runBandOn && (runBandWhich === 'header' || hasBand('header'))" :class="{ empty: !hasBand('header') }">
               <span class="l" contenteditable="true" @focus="runAt = ['header','l']" @input="runTyped('header','l',$event)" @blur="runLeft('header','l',$event)" @keydown.enter.prevent></span>
               <span class="c" contenteditable="true" @focus="runAt = ['header','c']" @input="runTyped('header','c',$event)" @blur="runLeft('header','c',$event)" @keydown.enter.prevent></span>
               <span class="r" contenteditable="true" @focus="runAt = ['header','r']" @input="runTyped('header','r',$event)" @blur="runLeft('header','r',$event)" @keydown.enter.prevent></span>
@@ -9449,7 +15833,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <div class="run head" v-else-if="showsRun('header', n)">
               <span class="l">{{ runSay('header', 'l', n) }}</span><span class="c">{{ runSay('header', 'c', n) }}</span><span class="r">{{ runSay('header', 'r', n) }}</span>
             </div>
-            <div class="run foot live" v-if="n === 1 && runBandOn" :class="{ empty: !hasBand('footer') }">
+            <div class="run foot live" v-if="n === 1 && runBandOn && (runBandWhich === 'footer' || hasBand('footer'))" :class="{ empty: !hasBand('footer') }">
               <span class="l" contenteditable="true" @focus="runAt = ['footer','l']" @input="runTyped('footer','l',$event)" @blur="runLeft('footer','l',$event)" @keydown.enter.prevent></span>
               <span class="c" contenteditable="true" @focus="runAt = ['footer','c']" @input="runTyped('footer','c',$event)" @blur="runLeft('footer','c',$event)" @keydown.enter.prevent></span>
               <span class="r" contenteditable="true" @focus="runAt = ['footer','r']" @input="runTyped('footer','r',$event)" @blur="runLeft('footer','r',$event)" @keydown.enter.prevent></span>
@@ -9461,7 +15845,7 @@ ${insideObjects('.eb-paper.boxed')} {
         </div>
         <div class="eb-placeband" v-if="placeBox"
           :style="{ left: placeBox.x + 'px', top: placeBox.y + 'px', width: placeBox.w + 'px', height: placeBox.h + 'px' }"></div>
-        <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow, placing: !!placing }]"
+        <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow, placing: !!placing, asprinted: asPrinted, objtaken: frame.taken }]"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
         <!-- Where the other people writing in this document have their carets.
              Drawn from what they say they are doing, once a second or so. -->
@@ -9480,6 +15864,14 @@ ${insideObjects('.eb-paper.boxed')} {
              over the line above would cover the words there and slide across the
              page every time the paragraph is aligned. What can be done to a phrase
              is on the right button, under its own heading. -->
+        <!-- A photograph that will enlarge in the saved document, marked where it stands
+             (the owner: a magnifying glass with a plus, at the bottom right). Drawn over
+             the paper, never written into it. Only while the document has "Use JavaScript" on. -->
+        <div class="eb-zoommarks" v-if="doc.useScript && zoomMarks.length">
+          <span v-for="(m, i) in zoomMarks" :key="i" class="eb-zoommark" :style="{ left: m.x + 'px', top: m.y + 'px' }" :title="m.label">
+            <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="rgba(255,255,255,.92)" stroke="#333" stroke-width="2"/><path d="M15.2 15.2l5.6 5.6" stroke="#333" stroke-width="2.8" stroke-linecap="round"/><path d="M10 6.6v6.8M6.6 10h6.8" stroke="#333" stroke-width="2" stroke-linecap="round"/></svg>
+          </span>
+        </div>
         <div class="eb-tsel" v-if="tsel.on">
           <div v-for="(b, i) in tsel.boxes" :key="i" class="tbox"
             :style="{ left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' }"></div>
@@ -9498,7 +15890,8 @@ ${insideObjects('.eb-paper.boxed')} {
           <span v-for="h in frameHandles" :key="'ph' + h" class="hd" :class="h"
             @pointerdown.prevent.stop="frameGrab($event, h)"></span>
         </div>
-        <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging, onpart: frame.onPart }"
+        <div v-for="(r, i) in csel.rects" :key="'cs' + i" class="eb-csel" :style="{ left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }"></div>
+        <div class="eb-fsel" v-if="frame.on" :class="{ dragging: frame.dragging, onpart: frame.onPart, writing: frameIsWriting && !frame.free }"
           :style="{ left: (frame.x - frame.padX / 2) + 'px', top: (frame.y - frame.padY / 2) + 'px',
                     width: (frame.w + frame.padX) + 'px', height: (frame.h + frame.padY) + 'px' }">
           <div class="box"></div>
@@ -9511,8 +15904,15 @@ ${insideObjects('.eb-paper.boxed')} {
             @pointerdown.prevent="frameGrab($event, 'move')" @contextmenu.prevent.stop="objectCtx($event)"></div>
           <span v-for="h in frameHandles" :key="h" class="hd" :class="h"
             @pointerdown.prevent.stop="frameGrab($event, h)"></span>
-          <span v-for="g in frame.grips" :key="'cg' + g.index" class="cg" :style="{ left: g.x + 'px' }"
+          <span v-for="g in frame.grips" :key="'cg' + g.key" class="cg" :style="{ left: g.x + 'px', top: g.y + 'px', height: g.h + 'px' }"
             @pointerdown.prevent.stop="colGrab($event, g.index)" :title="t('Drag to set the column width')"></span>
+          <!-- 列の記号と行の番号（BUGS #292）。紙には出ない、画面だけの見出し。 -->
+          <template v-if="frame.heads && frame.heads.cols.length">
+            <span v-for="h in frame.heads.cols" :key="'hc' + h.c" class="eb-thd col" :class="{ on: fxCol === h.name }"
+              :style="{ left: h.x + 'px', width: h.w + 'px' }" @pointerdown.prevent.stop="headPick('col', h)">{{ h.name }}</span>
+            <span v-for="h in frame.heads.rows" :key="'hr' + h.n + '-' + h.y" class="eb-thd row" :class="{ on: fxRow === h.n }"
+              :style="{ top: h.y + 'px', height: h.h + 'px' }" @pointerdown.prevent.stop="headPick('row', h)">{{ h.n }}</span>
+          </template>
         </div>
       </div>
       <div class="eb-empty" v-if="!doc.id">
@@ -9520,6 +15920,7 @@ ${insideObjects('.eb-paper.boxed')} {
         <p>{{ t('No document is open.') }}</p>
         <button class="eb-btn primary" @click="newDoc">{{ t('New document') }}</button>
       </div>
+    </div>
     </div>
 
     <!-- The handles for the two panels, at the height of the eye: pointing left
@@ -9574,7 +15975,7 @@ ${insideObjects('.eb-paper.boxed')} {
          A row dropped on a line stands there in the order; dropped on a layer it
          joins it. Nothing is worked out from where in a row the pointer happens
          to be, so what the writer aims at is what happens. -->
-    <aside class="eb-layers" v-if="doc.id && layersOpen">
+    <aside class="eb-layers" v-if="doc.id && layersOpen" @keydown="layerKey($event)">
       <div class="head">
         <span>{{ t('Layers') }}</span>
         <span class="grow"></span>
@@ -9591,23 +15992,40 @@ ${insideObjects('.eb-paper.boxed')} {
             <span>{{ gi === 0 ? t('A new layer above them all') : t('A new layer here') }}</span>
           </div>
           <div class="group">
-            <div class="glabel band" :data-layer-level="g.level"
+            <div class="glabel band" :data-layer-level="g.level" @contextmenu.prevent.stop="!g.writing && layerBandCtx($event, g.level)"
               :class="{ over: dropLevel === g.level, dragging: dragBand !== null && dragBand === g.level }"
               @pointerdown="bandGrab(g.level, $event)">
-              {{ t('Layer {n}', { n: g.n }) }}
+              <!-- Illustrator と同じ：目（隠す）・鍵（固定）・名前。見出しを押すと中の物を全部選ぶ。 -->
+              <template v-if="!g.writing">
+                <button class="fl" :class="{ off: g.hide }" @pointerdown.stop @click.stop="setLayerFlag(g.level, 'hide', !g.hide)" :title="g.hide ? t('Show this layer') : t('Hide this layer')" v-html="g.hide ? icons.eyeOff : icons.eye"></button>
+              </template>
+              <input v-if="renamingLayer === g.level" class="rename" :value="g.name || ''" :placeholder="t('Layer {n}', { n: g.n })"
+                @pointerdown.stop @keydown.enter.prevent="renameLayerGroup(g.level, $event.target.value)" @keydown.esc.prevent="renamingLayer = null"
+                @blur="renameLayerGroup(g.level, $event.target.value)">
+              <span v-else class="lname" @dblclick.stop="!g.writing && startRenameLayer(g.level)">{{ g.name || t('Layer {n}', { n: g.n }) }}</span>
               <span class="empty" v-if="g.writing">{{ t('the writing') }}</span>
               <span class="empty" v-else-if="!g.items.length">{{ t('empty') }}</span>
             </div>
             <ol class="list">
               <li v-for="it in g.items" :key="it.id" :data-layer-row="it.id"
                 @contextmenu.prevent.stop="layerCtx($event, it.id)"
-                :class="{ on: it.chosen, over: dropLayer === it.id, dragging: dragLayer === it.id }"
-                @pointerdown="layerGrab(it.id, $event)">
-                <button class="pick" @click="layerPick(it.id)" :title="it.text">
-                  <span class="ic" v-html="it.icon"></span>
-                  <span class="nm">{{ it.name }}</span>
-                  <span class="tx">{{ it.text }}</span>
+                :data-holds="it.holds ? '1' : null"
+                :class="{ on: it.chosen, over: dropLayer === it.id, above: dropLayer === it.id && dropHalf === 'above', below: dropLayer === it.id && dropHalf === 'below', into: dropLayer === it.id && dropHalf === 'into', dragging: dragLayer === it.id }"
+                :style="{ paddingLeft: (it.depth * 14) + 'px' }"
+                @pointerdown="renaming === it.id ? null : layerGrab(it.id, $event)">
+                <!-- まとめ枠などは中身を木の枝として開け閉めする -->
+                <button v-if="it.holds" class="tw" @pointerdown.stop @click.stop="toggleLayerOpen(it.key)" :title="it.open ? t('Hide what is inside') : t('Show what is inside')">{{ it.open ? '▾' : '▸' }}</button>
+                <span v-else class="tw sp"></span>
+                <input v-if="renaming === it.id" class="rename" :value="it.named ? it.name : ''" :placeholder="it.name"
+                  @keydown.enter.prevent="renameLayer(it.id, $event.target.value)" @keydown.esc.prevent="renaming = -1"
+                  @blur="renameBlur(it.id, $event)" @pointerdown.stop>
+                <button v-else class="pick" @click="layerPick(it.id)" :title="it.text" :class="{ hid: it.hide }">
+                  <span class="kd">{{ it.kind }}</span>
+                  <span class="nm" :class="{ own: it.named }">{{ it.name }}</span>
                 </button>
+                <template v-if="it.movable && renaming !== it.id">
+                  <button class="fl" :class="{ off: it.hide }" @pointerdown.stop @click.stop="toggleObjFlag(it.id, 'hide')" :title="it.hide ? t('Show it') : t('Hide it')" v-html="it.hide ? icons.eyeOff : icons.eye"></button>
+                </template>
               </li>
             </ol>
           </div>
@@ -9637,9 +16055,13 @@ ${insideObjects('.eb-paper.boxed')} {
 
   <!-- paper setup -->
   <div v-if="paperOpen" class="eb-modal-back">
-    <div class="eb-modal" @click.stop>
+    <div class="eb-modal eb-tabbed" @click.stop>
       <h3>🖹 {{ t('Paper setup') }}</h3>
+      <div class="eb-fp-tabs eb-tabsbar" role="tablist">
+        <button v-for="tb in paperTabs" :key="tb.key" class="eb-fp-tab" :class="{ on: paperTab === tb.key }" role="tab" @click="paperTab = tb.key">{{ tb.label }}</button>
+      </div>
       <div class="body">
+        <template v-if="paperTab === 'paper'">
         <div class="eb-row">
           <div class="eb-field">
             <label>{{ t('Paper size') }}</label>
@@ -9659,10 +16081,14 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="eb-field"><label>{{ t('Left margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.left" @change="touchSettings"></div>
           <div class="eb-field"><label>{{ t('Right margin (mm)') }}</label><input type="number" min="0" max="100" step="1" v-model.number="doc.paper.margin.right" @change="touchSettings"></div>
         </div>
+        </template>
+        <template v-if="paperTab === 'text'">
         <div class="eb-row">
           <div class="eb-field"><label>{{ t('Default body size (pt)') }}</label><input type="number" min="6" max="36" step="0.5" v-model.number="doc.paper.fontSize" @change="touchSettings"></div>
           <div class="eb-field"><label>{{ t('Default line height') }}</label><input type="number" min="1" max="3" step="0.05" v-model.number="doc.paper.lineHeight" @change="touchSettings"></div>
         </div>
+        </template>
+        <template v-if="paperTab === 'paper'">
         <div class="eb-field">
           <label>{{ t('Direction of the text') }}</label>
           <select :value="doc.paper.vertical ? 'v' : 'h'" @change="setVertical($event.target.value === 'v')">
@@ -9670,6 +16096,8 @@ ${insideObjects('.eb-paper.boxed')} {
             <option value="v">{{ t('Down the page (vertical, 縦書き)') }}</option>
           </select>
         </div>
+        </template>
+        <template v-if="paperTab === 'text'">
         <div class="eb-field">
           <label>{{ t('Number the headings') }}</label>
           <select v-model="doc.paper.headingNumbers" @change="touchSettings">
@@ -9679,6 +16107,8 @@ ${insideObjects('.eb-paper.boxed')} {
           </select>
           <p class="eb-tip">{{ t('The numbers are counted by the file itself, so adding a section renumbers everything after it. They are not part of the text and do not appear in a contents list.') }}</p>
         </div>
+        </template>
+        <template v-if="paperTab === 'page'">
         <!-- The page as an object in its own right: what it is painted with and
              what is drawn round it. -->
         <div class="eb-field">
@@ -9734,6 +16164,8 @@ ${insideObjects('.eb-paper.boxed')} {
           </div>
           <p class="eb-tip">{{ t('The page colour, the picture and the frame are written into the file, and the file asks the browser to print them: in the print dialogue, background graphics must be left on. The frame is drawn on every page.') }}</p>
         </div>
+        </template>
+        <template v-if="paperTab === 'text'">
         <p class="eb-tip">{{ t('These are the document’s own defaults — what text is set in when nothing else has been said about it. To change one passage, use the size and typeface boxes in the toolbar; they act on what is selected, or on the paragraph the cursor is in.') }}</p>
         <div class="eb-field">
           <label>{{ t('Default typefaces') }}</label>
@@ -9747,11 +16179,110 @@ ${insideObjects('.eb-paper.boxed')} {
           </div>
           <p class="eb-tip">{{ t('Any family on Google Fonts can be used. The document carries its typefaces with it, so the file looks the same on a machine where they are not installed.') }}</p>
         </div>
-        <p class="eb-tip">{{ t('Page numbers and running headers come from your browser print dialogue: browsers do not yet support headers inside the page rule. Everything else here is written into the file.') }}</p>
+        </template>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="saveDefaultPaper">{{ t('Use as default for new documents') }}</button>
         <button class="eb-btn primary" @click="paperOpen = false">{{ t('Done') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The document's own settings (the owner, 2026-09-21: right-click the file's name
+       and choose them -- in a pop-up). What is set here is written into the file
+       itself when it is next saved. Not shut by a click outside it: it is a form,
+       and a stray click would throw away what was being set. -->
+  <div v-if="docSet.open && doc.id" class="eb-modal-back">
+    <div class="eb-modal eb-docset" style="width:min(620px,100%)" @click.stop>
+      <h3>{{ t('Document settings') }}</h3>
+      <div class="body">
+        <p class="docname">{{ doc.name }}</p>
+        <section class="first">
+          <h4>{{ t('Program') }}</h4>
+          <label class="opt"><input type="checkbox" v-model="docSet.useScript"> {{ t('Use JavaScript') }}</label>
+          <p class="eb-tip">{{ t('Turned on, this document carries a small program of EditBase’s own, which does what HTML alone cannot: a photograph is enlarged when clicked, and writing can go round both sides of an object. The document still reads correctly where the program does not run. Some mail systems and readers are wary of files with a program in them, which is why this is off unless you turn it on.') }}</p>
+        </section>
+        <section>
+          <h4>{{ t('The page') }}</h4>
+          <div class="eb-field"><label>{{ t('Page title') }}</label>
+            <input type="text" v-model="docSet.title" :placeholder="t('Untitled document')"></div>
+          <div class="eb-field"><label>{{ t('Description') }}</label>
+            <textarea rows="3" v-model="docSet.head.description"></textarea>
+            <p class="eb-tip">{{ t('What search engines show under the title. {n} characters.', { n: docSet.head.description.length }) }}</p></div>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Keywords') }}</label>
+              <input type="text" v-model="docSet.head.keywords" :placeholder="t('Separated by commas')"></div>
+            <div class="eb-field"><label>{{ t('Author') }}</label>
+              <input type="text" v-model="docSet.head.author"></div>
+            <div class="eb-field"><label>{{ t('Language') }}</label>
+              <select v-model="docSet.lang">
+                <option v-for="l in docLangs" :key="l.code" :value="l.code">{{ l.name }}</option>
+              </select></div>
+          </div>
+        </section>
+        <section>
+          <h4>{{ t('Search engines') }}</h4>
+          <div class="eb-field"><label>{{ t('Listing') }}</label>
+            <select v-model="docSet.head.robots">
+              <option value="">{{ t('Listed, and its links followed') }}</option>
+              <option value="nofollow">{{ t('Listed, but its links not followed') }}</option>
+              <option value="noindex">{{ t('Not listed') }}</option>
+              <option value="noindex, nofollow">{{ t('Not listed, and its links not followed') }}</option>
+            </select></div>
+          <div class="eb-field"><label>{{ t('Address of the page (canonical URL)') }}</label>
+            <input type="text" v-model="docSet.head.canonical" placeholder="https://">
+            <p class="eb-tip">{{ t('Where the page is published. Only an address beginning with http:// or https:// is written.') }}</p></div>
+        </section>
+        <section>
+          <h4>{{ t('When shared on social media') }}</h4>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Title shown') }}</label>
+              <input type="text" v-model="docSet.head.ogTitle" :placeholder="docSet.title"></div>
+            <div class="eb-field"><label>{{ t('Site name') }}</label>
+              <input type="text" v-model="docSet.head.ogSiteName"></div>
+          </div>
+          <div class="eb-field"><label>{{ t('Description shown') }}</label>
+            <textarea rows="2" v-model="docSet.head.ogDescription" :placeholder="docSet.head.description"></textarea></div>
+          <div class="eb-field"><label>{{ t('Picture (address)') }}</label>
+            <input type="text" v-model="docSet.head.ogImage" placeholder="https://">
+            <p class="eb-tip">{{ t('The picture shown with the link. It has to be on the web: a picture inside the document cannot be used.') }}</p></div>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Kind of page') }}</label>
+              <select v-model="docSet.head.ogType">
+                <option value="">{{ t('Not given') }}</option>
+                <option value="article">{{ t('An article') }}</option>
+                <option value="website">{{ t('A website') }}</option>
+              </select></div>
+            <div class="eb-field"><label>{{ t('Card') }}</label>
+              <select v-model="docSet.head.twitterCard">
+                <option value="">{{ t('Not given') }}</option>
+                <option value="summary">{{ t('Small picture') }}</option>
+                <option value="summary_large_image">{{ t('Large picture') }}</option>
+              </select></div>
+          </div>
+        </section>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="docSet.open = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyDocSettings">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- a file not made here, with tags EditBase does not handle: removed only if the writer agrees -->
+  <div v-if="stripAsk.open" class="eb-modal-back">
+    <div class="eb-modal eb-strip-ask" style="width:min(560px,100%)" @click.stop>
+      <h3>⚠ {{ t('This file has tags EditBase does not handle') }}</h3>
+      <div class="body">
+        <p class="eb-tip">{{ t('{name} was not made by EditBase, or was changed outside it. To open it here, these have to be removed:', { name: stripAsk.name }) }}</p>
+        <ul class="eb-warn-list">
+          <li v-for="(x, i) in stripAsk.items" :key="i">{{ x }}</li>
+        </ul>
+        <p class="eb-tip">{{ t('The file itself is not changed by opening it. When you save, it is saved as a new file under a new name, and the original stays exactly as it is.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn ghost" @click="stripAnswer(false)">{{ t('Do not open') }}</button>
+        <button class="eb-btn primary" @click="stripAnswer(true)">{{ t('Remove them and open') }}</button>
       </div>
     </div>
   </div>
@@ -9989,7 +16520,7 @@ ${insideObjects('.eb-paper.boxed')} {
   <!-- pictures from Files -->
   <div v-if="pickerOpen" class="eb-modal-back" @click="pickerOpen = false">
     <div class="eb-modal tall" @click.stop>
-      <h3><span v-html="icons.image"></span> {{ picker.mode === 'pagebg' ? t('Picture behind the page') : (picker.mode === 'objectbg' ? t('Picture behind the words') : t('Insert picture')) }}</h3>
+      <h3><span v-html="picker.mode === 'markdown' ? icons.doc : icons.image"></span> {{ picker.mode === 'markdown' ? t('Make a document from a Markdown file') : (picker.mode === 'pagebg' ? t('Picture behind the page') : (picker.mode === 'objectbg' ? t('Picture behind the words') : t('Insert picture'))) }}</h3>
       <div class="body">
         <div class="fp-path">
           <button class="eb-btn ghost" :disabled="picker.parent === null || picker.loading" @click="pickerLoad(picker.parent)"><span v-html="icons.up"></span></button>
@@ -9999,19 +16530,20 @@ ${insideObjects('.eb-paper.boxed')} {
           <p class="hint" v-if="picker.loading">{{ t('Loading…') }}</p>
           <p class="hint" v-if="picker.error">{{ picker.error }}</p>
           <button v-for="x in picker.entries" :key="x.path" class="fp-item"
-            :class="{ on: picker.selected && picker.selected.path === x.path, dim: !x.is_dir && !x.is_image }"
+            :class="{ on: picker.selected && picker.selected.path === x.path, dim: !x.is_dir && !(picker.mode === 'markdown' ? x.is_markdown : x.is_image) }"
             @click="pickerClick(x)" @dblclick="pickerConfirm(x)">
-            <span class="ic" v-html="x.is_dir ? icons.folder : icons.image"></span>
+            <span class="ic" v-html="x.is_dir ? icons.folder : (x.is_markdown ? icons.doc : icons.image)"></span>
             <span class="nm">{{ x.name }}</span>
             <span class="meta" v-if="!x.is_dir">{{ size(x.size) }}</span>
           </button>
           <p class="hint" v-if="!picker.loading && !picker.entries.length">{{ t('This folder is empty.') }}</p>
         </div>
-        <p class="eb-tip">{{ t('The picture is embedded in the document itself, so it travels with the file. Large photographs are scaled down on the way in.') }}</p>
+        <p class="eb-tip" v-if="picker.mode === 'markdown'">{{ t('The Markdown file is only read. A new document is made from it in your save folder, and the file itself stays as it was.') }}</p>
+        <p class="eb-tip" v-else>{{ t('The picture is embedded in the document itself, so it travels with the file. Large photographs are scaled down on the way in.') }}</p>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="pickerOpen = false">{{ t('Cancel') }}</button>
-        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : (picker.mode === 'pagebg' ? t('Use for the page') : (picker.mode === 'objectbg' ? t('Use behind the words') : t('Insert'))) }}</button>
+        <button class="eb-btn primary" :disabled="!picker.selected || picker.busy" @click="pickerConfirm()">{{ picker.busy ? t('Loading…') : (picker.mode === 'markdown' ? t('Make the document') : (picker.mode === 'pagebg' ? t('Use for the page') : (picker.mode === 'objectbg' ? t('Use behind the words') : t('Insert')))) }}</button>
       </div>
     </div>
   </div>
@@ -10064,6 +16596,22 @@ ${insideObjects('.eb-paper.boxed')} {
       <h3>⚙ {{ t('Settings') }}</h3>
       <div class="body">
         <div class="eb-field">
+          <label>{{ t('Placement of a new object') }}</label>
+          <select v-model="settings.placement">
+            <option value="standard">{{ t('Place by the rules of HTML') }}</option>
+            <option value="free">{{ t('Place freely') }}</option>
+          </select>
+          <p class="eb-tip">{{ settings.placement === 'free' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.') }}</p>
+        </div>
+        <div class="eb-field">
+          <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
+          <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
+          <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
+          <p class="eb-tip">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
+          <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
+        <div class="eb-field">
           <label>{{ t('Save documents in') }}</label>
           <input type="text" v-model="settings.folder">
           <p class="eb-tip">{{ t('A folder in your own Files. Documents already saved elsewhere stay where they are.') }}</p>
@@ -10099,14 +16647,6 @@ ${insideObjects('.eb-paper.boxed')} {
             </select>
           </div>
         </div>
-        <div class="eb-field">
-          <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
-          <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
-          <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
-          <p class="eb-tip">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
-          <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
-        </div>
-        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
       </div>
       <div class="foot">
         <button class="eb-btn ghost" @click="settingsOpen = false">{{ t('Cancel') }}</button>
@@ -10148,10 +16688,32 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="paper" :style="{ fontFamily: 'var(--eb-font-body)' }">
             <p class="around">{{ t('The line before it.') }}</p>
             <ul v-if="styleKey === 'li'" :style="styleSample"><li :style="styleSample">{{ styleWords }}</li></ul>
-            <p v-else :style="styleSample">{{ styleWords }}</p>
+            <p v-else :style="styleSample"><span v-if="styleNow.design" :class="'eb-hdpv eb-hdpv-' + styleNow.design" :style="designVars(styleNow.accent || styleNow.colour)">{{ styleWords }}</span><template v-else>{{ styleWords }}</template></p>
             <p class="around">{{ t('And the line after it.') }}</p>
           </div>
         </div>
+
+        <!-- 見出しのデザイン（オーナー 2026-09-29）：見本を押して選ぶ。CSS だけで描く。 -->
+        <template v-if="/^h[1-6]$/.test(styleKey)">
+          <div class="eb-hdcss" v-html="designPreviewCss"></div>
+          <h4 class="eb-sect">{{ t('Heading design') }}</h4>
+          <div class="eb-hdgrid">
+            <button class="eb-hdtile" :class="{ on: !styleNow.design }" @click="styleNow.design = ''; touchStyles()"><span class="nm">{{ t('None') }}</span><span class="pv">{{ t('Heading') }}</span></button>
+            <button v-for="d in headingDesigns" :key="d.key" class="eb-hdtile" :class="{ on: styleNow.design === d.key }" @click="styleNow.design = d.key; touchStyles()" :title="t(d.label)">
+              <span class="nm">{{ t(d.label) }}</span>
+              <span class="pv"><span :class="'eb-hdpv eb-hdpv-' + d.key" :style="designVars(styleNow.accent || styleNow.colour)">{{ t('Heading') }}</span></span>
+            </button>
+          </div>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Design colour') }}</label>
+              <div class="eb-inks">
+                <input type="color" :value="styleNow.accent || styleNow.colour || '#2563eb'" @input="styleNow.accent = $event.target.value; touchStyles()">
+                <button class="eb-btn ghost" @click="styleNow.accent = ''; touchStyles()">{{ t('Automatic') }}</button>
+                <button class="eb-btn ghost" @click="accentToAllHeadings">{{ t('Use this colour for every heading') }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
 
         <h4 class="eb-sect">{{ t('The letters') }}</h4>
         <div class="eb-row">
@@ -10161,7 +16723,8 @@ ${insideObjects('.eb-paper.boxed')} {
               <option v-for="f in styleFamilies" :key="f" :value="f">{{ f }}</option>
             </select>
           </div>
-          <div class="eb-field"><label>{{ t('Size (pt)') }}</label><input type="number" min="4" max="200" step="0.5" v-model="styleNow.size" @input="touchStyles"></div>
+          <!-- Numbers are taken when the box is left (or Enter): taken at every key, "1" of "12" was below the smallest size and was cleared, so 10 to 39 could not be typed at all (BUGS E16). -->
+          <div class="eb-field"><label>{{ t('Size (pt)') }}</label><input type="number" min="4" max="200" step="0.5" v-model.lazy="styleNow.size" @change="touchStyles"></div>
           <div class="eb-field"><label>{{ t('Colour') }}</label>
             <div class="colour-pair">
               <input type="color" :value="styleNow.colour || '#111111'" @input="styleNow.colour = $event.target.value; touchStyles()">
@@ -10181,10 +16744,10 @@ ${insideObjects('.eb-paper.boxed')} {
 
         <h4 class="eb-sect">{{ t('The lines and the space round them') }}</h4>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="styleNow.lineHeight" @input="touchStyles"></div>
-          <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-30" max="30" step="0.5" v-model="styleNow.indent" @input="touchStyles"></div>
-          <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.before" @input="touchStyles"></div>
-          <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="styleNow.after" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model.lazy="styleNow.lineHeight" @change="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-30" max="30" step="0.5" v-model.lazy="styleNow.indent" @change="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model.lazy="styleNow.before" @change="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model.lazy="styleNow.after" @change="touchStyles"></div>
         </div>
 
         <h4 class="eb-sect">{{ t('The box it sits in') }}</h4>
@@ -10195,11 +16758,11 @@ ${insideObjects('.eb-paper.boxed')} {
               <button class="eb-btn ghost" @click="styleNow.fill = ''; touchStyles()">{{ t('None') }}</button>
             </div>
           </div>
-          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="40" step="0.5" v-model="styleNow.pad" @input="touchStyles"></div>
-          <div class="eb-field"><label>{{ t('Rounded (mm)') }}</label><input type="number" min="0" max="20" step="0.5" v-model="styleNow.radius" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="40" step="0.5" v-model.lazy="styleNow.pad" @change="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Corners (mm)') }}</label><input type="number" min="0" max="20" step="0.5" v-model.lazy="styleNow.radius" @change="touchStyles"></div>
         </div>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Border') }}</label>
+          <div class="eb-field b-sides"><label>{{ t('Border') }}</label>
             <div class="eb-inks sides">
               <button class="eb-tb" v-for="s2 in styleBorderSides" :key="s2.value || 'none'" :class="{ on: (styleNow.border || '') === s2.value }"
                 @click="styleNow.border = s2.value; touchStyles()" :title="s2.label"><span class="bd" :class="'bd-' + (s2.value || 'none')"></span></button>
@@ -10213,7 +16776,7 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="double">{{ t('Double') }}</option>
             </select>
           </div>
-          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" max="12" step="0.25" v-model="styleNow.borderWidth" @input="touchStyles"></div>
+          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" max="12" step="0.25" v-model.lazy="styleNow.borderWidth" @change="touchStyles"></div>
           <div class="eb-field"><label>{{ t('Line colour') }}</label>
             <div class="colour-pair">
               <input type="color" :value="styleNow.borderColour || styleNow.colour || '#666666'" @input="styleNow.borderColour = $event.target.value; touchStyles()">
@@ -10403,6 +16966,146 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
+  <!-- セルのプロパティ（BUGS #286・#291・Excel の「セルの書式設定」と同じタブ、オーナー 2026-09-29） -->
+  <div v-if="cellPropsOpen" class="eb-modal-back">
+    <div class="eb-modal eb-cellprops" style="width:min(640px,100%)" @click.stop>
+      <h3>{{ t('Cell properties') }}</h3>
+      <div class="eb-fp-tabs" role="tablist">
+        <button v-for="tb in cellTabs" :key="tb.key" class="eb-fp-tab" :class="{ on: cellTab === tb.key }" role="tab" @click="cellTab = tb.key">{{ tb.label }}</button>
+      </div>
+      <div class="body">
+        <!-- 表示形式：左に分類、右に設定とサンプル・説明 -->
+        <div v-if="cellTab === 'number'" class="eb-nf">
+          <div class="eb-nf-cats">
+            <button v-for="c in numCats" :key="c.key" class="eb-nf-cat" :class="{ on: numUi.cat === c.key }" @click="numUi.cat = c.key; numBuild()">{{ c.label }}</button>
+          </div>
+          <div class="eb-nf-main">
+            <div class="eb-nf-sample"><span class="k">{{ t('Sample') }}</span><span class="v">{{ numPreview }}</span></div>
+            <p class="eb-tip">{{ numCatAbout }}</p>
+            <div class="eb-row eb-frow" v-if="['number', 'percent', 'currency', 'sci'].indexOf(numUi.cat) >= 0">
+              <div class="eb-field"><label>{{ t('Decimal places') }}</label><input type="number" min="0" max="10" step="1" v-model.number="numUi.dec" @input="numBuild"></div>
+              <div class="eb-field" v-if="numUi.cat === 'number' || numUi.cat === 'currency'"><label>&nbsp;</label>
+                <label class="opt"><input type="checkbox" v-model="numUi.sep" @change="numBuild"> {{ t('Thousands separator') }}</label></div>
+              <div class="eb-field" v-if="numUi.cat === 'currency'"><label>{{ t('Currency symbol') }}</label>
+                <select v-model="numUi.cur" @change="numBuild"><option>¥</option><option>$</option><option>€</option><option>£</option></select></div>
+            </div>
+            <div class="eb-field" v-if="numUi.cat === 'date'"><label>{{ t('Date style') }}</label>
+              <select v-model="numUi.date" @change="numBuild">
+                <option value="YYYY/MM/DD">2026/09/29</option>
+                <option value='YYYY"年"M"月"D"日"'>2026年9月29日</option>
+                <option value='M"月"D"日"'>9月29日</option>
+                <option value="YYYY-MM-DD">2026-09-29</option>
+              </select></div>
+            <template v-if="numUi.cat === 'custom'">
+              <div class="eb-field"><label>{{ t('Format code') }}</label><input type="text" v-model="cellProps.numFmt" spellcheck="false"></div>
+              <div class="eb-nf-examples">
+                <button v-for="x in numExamples" :key="x.code" class="eb-nf-ex" :class="{ on: cellProps.numFmt === x.code }" @click="cellProps.numFmt = x.code">
+                  <code>{{ x.code }}</code><span class="d">{{ x.about }}</span><span class="s">{{ numSampleOf(x.code) }}</span>
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+        <!-- 配置 -->
+        <div v-if="cellTab === 'align'" class="eb-row eb-frow">
+          <div class="eb-field"><label>{{ t('Across the cell') }}</label>
+            <select v-model="cellProps.align">
+              <option value="">{{ t('As the style says') }}</option>
+              <option value="left">{{ t('Left') }}</option>
+              <option value="center">{{ t('Centre') }}</option>
+              <option value="right">{{ t('Right') }}</option>
+              <option value="justify">{{ t('Justify') }}</option>
+            </select></div>
+          <div class="eb-field"><label>{{ t('Up and down in the cell') }}</label>
+            <select v-model="cellProps.valign">
+              <option value="">{{ t('As the style says') }}</option>
+              <option value="top">{{ t('At the top') }}</option>
+              <option value="middle">{{ t('In the middle') }}</option>
+              <option value="bottom">{{ t('At the bottom') }}</option>
+            </select></div>
+          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="20" step="0.5" v-model="cellProps.pad" :placeholder="t('As the style says')"></div>
+          <div class="eb-field"><label>{{ t('Cell width (mm)') }}</label><input type="number" min="5" max="400" step="0.5" v-model="cellProps.width"></div>
+        </div>
+        <!-- フォント（Word・Excel の「フォント」と同じ：3 列の候補の枠と、サンプル） -->
+        <div v-if="cellTab === 'font'" class="eb-fontpick">
+          <div class="col fam">
+            <label>{{ t('Font') }}</label>
+            <input type="text" v-model="cellProps.font" :placeholder="t('As the style says')">
+            <div class="list">
+              <button class="it" :class="{ on: !cellProps.font }" @click="cellProps.font = ''">{{ t('As the style says') }}</button>
+              <button v-for="f in cellFontChoices" :key="f" class="it" :class="{ on: cellProps.font === f }" :style="{ fontFamily: fontPreviewStack(f) }" @click="cellProps.font = f">{{ f }}</button>
+            </div>
+          </div>
+          <div class="col sty">
+            <label>{{ t('Font style') }}</label>
+            <input type="text" readonly :value="cellStyleName">
+            <div class="list">
+              <button class="it" :class="{ on: !cellProps.bold && !cellProps.italic }" @click="cellProps.bold = false; cellProps.italic = false">{{ t('Regular') }}</button>
+              <button class="it" :class="{ on: !cellProps.bold && cellProps.italic }" style="font-style:italic" @click="cellProps.bold = false; cellProps.italic = true">{{ t('Italic') }}</button>
+              <button class="it" :class="{ on: cellProps.bold && !cellProps.italic }" style="font-weight:700" @click="cellProps.bold = true; cellProps.italic = false">{{ t('Bold') }}</button>
+              <button class="it" :class="{ on: cellProps.bold && cellProps.italic }" style="font-weight:700;font-style:italic" @click="cellProps.bold = true; cellProps.italic = true">{{ t('Bold italic') }}</button>
+            </div>
+          </div>
+          <div class="col siz">
+            <label>{{ t('Size (pt)') }}</label>
+            <input type="number" min="4" max="200" step="0.5" v-model="cellProps.size" :placeholder="t('As the style says')">
+            <div class="list">
+              <button v-for="n in fontSizes" :key="n" class="it" :class="{ on: Number(cellProps.size) === n }" @click="cellProps.size = n">{{ n }}</button>
+            </div>
+          </div>
+          <div class="row2">
+            <label>{{ t('Text colour') }}</label>
+            <input type="color" :value="cellProps.colour || '#111111'" @input="cellProps.colour = $event.target.value">
+            <button class="eb-btn ghost" @click="cellProps.colour = ''">{{ t('Automatic') }}</button>
+            <label class="opt"><input type="checkbox" v-model="cellProps.underline"> {{ t('Underline') }}</label>
+          </div>
+          <div class="preview">
+            <span :style="{ fontFamily: cellProps.font ? fontPreviewStack(cellProps.font) : null, fontSize: cellProps.size ? cellProps.size + 'pt' : null,
+              fontWeight: cellProps.bold ? 700 : null, fontStyle: cellProps.italic ? 'italic' : null, textDecoration: cellProps.underline ? 'underline' : null,
+              color: cellProps.colour || null }">{{ t('Aa あア亜 123') }}</span>
+          </div>
+        </div>
+        <!-- 罫線（Excel と同じ：線を選び、プリセットか絵の辺を押して引く） -->
+        <div v-if="cellTab === 'border'" class="eb-bd">
+          <div class="eb-bd-line">
+            <label>{{ t('Line style') }}</label>
+            <button v-for="st in borderStyles" :key="st.key" class="eb-bd-st" :class="{ on: bord.style === st.key }" @click="bord.style = st.key">
+              <span class="ln" :style="{ borderTop: st.key === 'none' ? '0' : (st.w + 'pt ' + st.key.replace(/-.*/, '') + ' currentColor') }"></span><span class="nm">{{ st.label }}</span></button>
+            <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" max="6" step="0.25" v-model.number="bord.width"></div>
+            <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="bord.colour"></div>
+          </div>
+          <div class="eb-bd-main">
+            <div class="eb-bd-presets">
+              <button class="eb-btn" @click="bordPreset('none')">{{ t('No borders') }}</button>
+              <button class="eb-btn" @click="bordPreset('outline')">{{ t('Outline') }}</button>
+              <button class="eb-btn" v-if="cellSpan.rows > 1 || cellSpan.cols > 1" @click="bordPreset('inside')">{{ t('Inside') }}</button>
+              <button class="eb-btn" @click="bordPreset('all')">{{ t('All borders') }}</button>
+            </div>
+            <div class="eb-bd-pic" :class="{ one: cellSpan.rows < 2 && cellSpan.cols < 2 }"
+              :style="{ gridTemplateColumns: 'repeat(' + (cellSpan.cols > 1 ? 2 : 1) + ', 1fr)', gridTemplateRows: 'repeat(' + (cellSpan.rows > 1 ? 2 : 1) + ', 1fr)' }">
+              <span v-for="n in (cellSpan.cols > 1 ? 2 : 1) * (cellSpan.rows > 1 ? 2 : 1)" :key="'w' + n" class="txt">{{ t('Words') }}</span>
+              <button v-for="e in bordEdges" :key="e" v-show="(e !== 'insideH' || cellSpan.rows > 1) && (e !== 'insideV' || cellSpan.cols > 1)"
+                class="edge" :class="[e, bord.edges[e]]" @click="bordToggle(e)" :title="edgeLabel(e)"></button>
+            </div>
+            <p class="eb-tip">{{ t('Choose a line, then press a preset or an edge of the picture. Edges left grey are not changed.') }}</p>
+          </div>
+        </div>
+        <!-- 塗りつぶし -->
+        <div v-if="cellTab === 'fill'" class="eb-fillpick">
+          <button class="eb-btn" :class="{ primary: !cellProps.fill }" @click="cellProps.fill = ''">{{ t('No colour') }}</button>
+          <div class="eb-swatches">
+            <button v-for="c in fillSwatches" :key="c" class="sw" :class="{ on: cellProps.fill === c }" :style="{ background: c }" @click="cellProps.fill = c" :title="c"></button>
+          </div>
+          <label>{{ t('Other colour') }} <input type="color" :value="cellProps.fill || '#ffffff'" @input="cellProps.fill = $event.target.value"></label>
+        </div>
+        <p class="eb-tip">{{ t('This is put on every cell the selection touches. Select across several cells first to do a block of them at once.') }}</p>
+      </div>
+      <div class="foot">
+        <button class="eb-btn" @click="cellPropsOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn primary" @click="applyCellProps">{{ t('Apply') }}</button>
+      </div>
+    </div>
+  </div>
   <!-- a rule round the chosen cells -->
   <div v-if="cellBorderOpen" class="eb-modal-back">
     <div class="eb-modal" style="width:min(560px,100%)" @click.stop>
@@ -10565,139 +17268,68 @@ ${insideObjects('.eb-paper.boxed')} {
   <!-- frame properties: everything here is written on the object as inline CSS,
        so the saved file carries its own layout and needs nothing to read it -->
   <div v-if="fpropsOpen" class="eb-modal-back">
-    <div class="eb-modal tall" @click.stop>
+    <!-- 物のプロパティ。LibreOffice の「枠」の画面と同じく、何に対する設定かでタブに
+         分ける（オーナー 2026-09-22「どれが何に対する設定なのか全く分からない」）。
+         枠そのもの（位置・大きさ・回り込み・枠線・背景）と、枠の中の文字全体への飾り、
+         写真だけの設定を混ぜない。欄の幅は中身に合わせる。 -->
+    <div class="eb-modal tall eb-fp" @click.stop>
       <h3>{{ t('{name} properties', { name: frameLabel }) }}</h3>
+      <div class="eb-fp-tabs" role="tablist">
+        <button v-for="tb in fpropsTabs" :key="tb.key" class="eb-fp-tab" :class="{ on: fpTab === tb.key }" role="tab" @click="fpTab = tb.key">{{ tb.label }}</button>
+      </div>
       <div class="body">
-        <h4 class="eb-sect">{{ t('Where it stands') }}</h4>
-        <div class="eb-row">
-          <div class="eb-field">
-            <label>{{ t('Placement') }}</label>
-            <select v-model="fprops.place">
+        <!-- 位置と大きさ -->
+        <template v-if="fpTab === 'type'">
+          <p class="eb-fp-what">{{ t('Where the object stands on the page, and how big it is.') }}</p>
+          <div class="eb-fp-grid">
+            <label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')" class="w-s">
+            <label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')" class="w-s">
+            <label>{{ t('Turn (degrees)') }}</label><input type="number" min="-180" max="180" step="5" v-model="fprops.rotate" placeholder="0" class="w-s">
+            <label></label><label class="opt"><input type="checkbox" v-model="fprops.keep"> {{ t('Do not split across pages') }}</label>
+          </div>
+        </template>
+        <!-- 折り返し -->
+        <template v-if="fpTab === 'wrap'">
+          <div class="eb-pick">
+            <button class="eb-pickitem" :class="{ on: fprops.wrapMode !== 'through' }" @click="if (fprops.wrapMode === 'through') { fprops.wrapMode = 'none'; }" :title="t('Place by the rules of HTML')">
+              <span v-html="icons.placeStd"></span><span class="nm">{{ t('Place by the rules of HTML') }}</span></button>
+            <button class="eb-pickitem" :class="{ on: fprops.wrapMode === 'through' }" @click="fprops.wrapMode = 'through'" :title="t('Place freely')">
+              <span v-html="icons.free"></span><span class="nm">{{ t('Place freely') }}</span></button>
+          </div>
+          <p class="eb-fp-what">{{ fprops.wrapMode === 'through' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.') }}</p>
+          <div class="eb-pick" v-if="fprops.wrapMode !== 'through'">
+            <button class="eb-pickitem" :class="{ on: ['left', 'right', 'both'].indexOf(fprops.wrapMode) < 0 }" @click="fprops.wrapMode = 'none'"><span v-html="icons.wrapNone"></span><span class="nm">{{ t('Keep clear above and below') }}</span></button>
+            <button class="eb-pickitem" :class="{ on: fprops.wrapMode === 'left' }" @click="fprops.wrapMode = 'left'"><span v-html="icons.wrapRight"></span><span class="nm">{{ t('Words to its left') }}</span></button>
+            <button class="eb-pickitem" :class="{ on: fprops.wrapMode === 'right' }" @click="fprops.wrapMode = 'right'"><span v-html="icons.wrapLeft"></span><span class="nm">{{ t('Words to its right') }}</span></button>
+            <button class="eb-pickitem" v-if="doc.useScript" :class="{ on: fprops.wrapMode === 'both' }" @click="fprops.wrapMode = 'both'"><span v-html="icons.wrapBoth"></span><span class="nm">{{ t('Words on both sides') }}</span></button>
+          </div>
+          <div class="eb-fp-grid">
+            <label>{{ t('Position') }}</label>
+            <select v-model="fprops.place" class="w-l">
               <option value="">{{ t('In the flow of the text') }}</option>
               <option value="left">{{ t('In the flow, at the left') }}</option>
               <option value="center">{{ t('In the flow, centred') }}</option>
               <option value="right">{{ t('In the flow, at the right') }}</option>
               <option value="free">{{ t('Placed freely') }}</option>
             </select>
+            <template v-if="freePlacement">
+              <label>{{ t('From the left (mm)') }}</label><input type="number" step="1" v-model="fprops.x" class="w-s">
+              <label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y" class="w-s">
+            </template>
+            <label>{{ t('Gap to the text (mm)') }}</label><input type="number" min="0" max="60" step="0.5" v-model="fprops.wrapGap" :placeholder="'3'" class="w-s">
+            <label>{{ t('Space above (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mt" class="w-s">
+            <label>{{ t('Space below (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mb" class="w-s">
+            <label>{{ t('Space left (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.ml" class="w-s">
+            <label>{{ t('Space right (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mr" class="w-s">
           </div>
-          <div class="eb-field wide">
-            <label>{{ t('Where the words go') }}</label>
-            <div class="eb-pick">
-              <button v-for="w in wrapChoices" :key="w.kind" class="eb-pickitem"
-                :class="{ on: fprops.wrapMode === w.kind }" @click="fprops.wrapMode = w.kind" :title="w.label">
-                <span v-html="w.icon"></span><span class="nm">{{ w.label }}</span>
-              </button>
-            </div>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Gap to the text (mm)') }}</label>
-            <input type="number" min="0" max="60" step="0.5" v-model="fprops.wrapGap" :placeholder="'3'">
-          </div>
-          <div class="eb-field" v-if="frameHoldsWords">
-            <label>{{ t('Which way the words run') }}</label>
-            <select v-model="fprops.flow">
-              <option value="">{{ t('As the page runs') }}</option>
-              <option value="eb-yoko">{{ t('Across (horizontal)') }}</option>
-              <option value="eb-tate">{{ t('Down (vertical)') }}</option>
-            </select>
-          </div>
-          <div class="eb-field" v-if="frameHoldsWords">
-            <label>{{ t('Text down the box') }}</label>
-            <select v-model="fprops.vpos">
-              <option value="">{{ t('At the top') }}</option>
-              <option value="eb-v-mid">{{ t('In the middle') }}</option>
-              <option value="eb-v-bot">{{ t('At the bottom') }}</option>
-            </select>
-          </div>
-        </div>
-        <!-- How the writing itself is dressed: a picture behind it, an outline
-             round each letter, a shadow under them. Written as CSS on the object,
-             so the saved file carries the look with it. -->
-        <h4 class="eb-sect" v-if="frameHoldsWords">{{ t('How the words are dressed') }}</h4>
-        <div class="eb-row eb-frow" v-if="frameHoldsWords">
-          <div class="eb-field">
-            <label>{{ t('Picture behind the words') }}</label>
-            <div class="btn-pair">
-              <button class="eb-btn" @click="openObjectBg()">{{ fprops.bgImage ? t('Change…') : t('Choose…') }}</button>
-              <button class="eb-btn" :disabled="!fprops.bgImage" @click="clearObjectBg()">{{ t('None') }}</button>
-            </div>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('How it fills') }}</label>
-            <select v-model="fprops.bgFit" :disabled="!fprops.bgImage">
-              <option value="cover">{{ t('Fill the box') }}</option>
-              <option value="contain">{{ t('Fit inside') }}</option>
-              <option value="tile">{{ t('Tiled') }}</option>
-            </select>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Outline (mm)') }}</label>
-            <input type="number" min="0" max="3" step="0.05" v-model="fprops.strokeWidth" placeholder="0">
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Outline colour') }}</label>
-            <input type="color" v-model="fprops.strokeColour">
-          </div>
-        </div>
-        <div class="eb-row eb-frow" v-if="frameHoldsWords">
-          <div class="eb-field">
-            <label>{{ t('Shadow under the letters') }}</label>
-            <label class="opt"><input type="checkbox" v-model="fprops.textShadow"> {{ t('On') }}</label>
-          </div>
-          <div class="eb-field"><label>{{ t('Across (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowX" :disabled="!fprops.textShadow"></div>
-          <div class="eb-field"><label>{{ t('Down (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowY" :disabled="!fprops.textShadow"></div>
-          <div class="eb-field"><label>{{ t('Softness (pt)') }}</label><input type="number" min="0" max="30" step="0.5" v-model="fprops.shadowBlur" :disabled="!fprops.textShadow"></div>
-          <div class="eb-field"><label>{{ t('Shadow colour') }}</label><input type="color" v-model="fprops.shadowColour" :disabled="!fprops.textShadow"></div>
-          <div class="eb-field">
-            <label>{{ t('Text inside it') }}</label>
-            <select v-model="fprops.inner">
-              <option value="">{{ t('As the document is set') }}</option>
-              <option value="eb-al-l">{{ t('Ranged left') }}</option>
-              <option value="eb-al-c">{{ t('Centred') }}</option>
-              <option value="eb-al-r">{{ t('Ranged right') }}</option>
-              <option value="eb-al-j">{{ t('Justified') }}</option>
-            </select>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Text wrap') }}</label>
-            <select v-model="fprops.wrap">
-              <option value="">{{ t('None') }}</option>
-              <option value="left">{{ t('Text wraps on the right') }}</option>
-              <option value="right">{{ t('Text wraps on the left') }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="eb-row" v-if="freePlacement">
-          <div class="eb-field"><label>{{ t('From the left (mm)') }}</label><input type="number" step="1" v-model="fprops.x"></div>
-          <div class="eb-field"><label>{{ t('From the top (mm)') }}</label><input type="number" step="1" v-model="fprops.y"></div>
-          <div class="eb-field">
-            <label>{{ t('Overlapping') }}</label>
-            <div class="btn-pair">
-              <button class="eb-btn ghost" @click="stackFromProps('front')">{{ t('Bring to front') }}</button>
-              <button class="eb-btn ghost" @click="stackFromProps('back')">{{ t('Send to back') }}</button>
-            </div>
-          </div>
-        </div>
-        <p class="eb-tip" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
-        <p class="eb-tip" v-else-if="fprops.wrap">{{ t('The text runs round a wrapped frame. Move it with the four spacings below: they are what holds it away from the words.') }}</p>
-        <h4 class="eb-sect">{{ t('How big it is') }}</h4>
-        <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Width (mm)') }}</label><input type="number" min="5" step="1" v-model="fprops.width" :placeholder="t('auto')"></div>
-          <div class="eb-field"><label>{{ t('Height (mm)') }}</label><input type="number" min="3" step="1" v-model="fprops.height" :placeholder="t('auto')"></div>
-          <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" :placeholder="t('auto')"></div>
-        </div>
-        <h4 class="eb-sect">{{ t('The room round it') }}</h4>
-        <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Space above (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mt"></div>
-          <div class="eb-field"><label>{{ t('Space below (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mb"></div>
-          <div class="eb-field"><label>{{ t('Space left (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.ml"></div>
-          <div class="eb-field"><label>{{ t('Space right (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mr"></div>
-        </div>
-        <h4 class="eb-sect">{{ t('Its own look') }}</h4>
-        <div class="eb-row eb-frow">
-          <div class="eb-field b-style">
+          <p class="eb-tip" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
+        </template>
+        <!-- 枠線 -->
+        <template v-if="fpTab === 'borders'">
+          <p class="eb-fp-what">{{ t('The line round the object, its corners and its shadow.') }}</p>
+          <div class="eb-fp-grid">
             <label>{{ t('Border') }}</label>
-            <select v-model="fprops.border">
+            <select v-model="fprops.border" class="w-m b-style">
               <option value="">{{ t('As the style says') }}</option>
               <option value="none">{{ t('None') }}</option>
               <option value="solid">{{ t('Solid') }}</option>
@@ -10705,37 +17337,120 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="dotted">{{ t('Dotted') }}</option>
               <option value="double">{{ t('Double') }}</option>
             </select>
+            <label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="fprops.borderWidth" class="w-s">
+            <label>{{ t('Line colour') }}</label><input type="color" v-model="fprops.borderColour" class="w-c">
+            <label>{{ t('Corners (pt)') }}</label><input type="number" min="0" step="1" v-model="fprops.radius" class="w-s">
+            <label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" :placeholder="t('auto')" class="w-s">
+            <label></label><label class="opt"><input type="checkbox" v-model="fprops.shadow"> {{ t('Drop shadow') }}</label>
           </div>
-          <div class="eb-field"><label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="fprops.borderWidth"></div>
-          <div class="eb-field"><label>{{ t('Line colour') }}</label><input type="color" v-model="fprops.borderColour"></div>
-          <div class="eb-field"><label>{{ t('Corners (pt)') }}</label><input type="number" min="0" step="1" v-model="fprops.radius"></div>
-        </div>
-        <div class="eb-row">
-          <div class="eb-field">
+        </template>
+        <!-- 背景 -->
+        <template v-if="fpTab === 'area'">
+          <p class="eb-fp-what">{{ t('What fills the object behind its contents.') }}</p>
+          <div class="eb-fp-grid">
             <label>{{ t('Fill colour') }}</label>
             <div class="colour-pair">
-              <input type="color" :value="fprops.fill || '#ffffff'" @input="fprops.fill = $event.target.value">
+              <input type="color" :value="fprops.fill || '#ffffff'" @input="fprops.fill = $event.target.value" class="w-c">
               <button class="eb-btn ghost" :class="{ on: !fprops.fill }" @click="fprops.fill = ''">{{ t('Transparent') }}</button>
             </div>
+            <label>{{ t('Opacity (%)') }}</label><input type="number" min="10" max="100" step="5" v-model="fprops.opacity" placeholder="100" class="w-s">
+            <template v-if="frameHoldsWords">
+              <label>{{ t('Picture behind the words') }}</label>
+              <div class="btn-pair">
+                <button class="eb-btn" @click="openObjectBg()">{{ fprops.bgImage ? t('Change…') : t('Choose…') }}</button>
+                <button class="eb-btn" :disabled="!fprops.bgImage" @click="clearObjectBg()">{{ t('None') }}</button>
+              </div>
+              <label>{{ t('How it fills') }}</label>
+              <select v-model="fprops.bgFit" :disabled="!fprops.bgImage" class="w-m">
+                <option value="cover">{{ t('Fill the box') }}</option>
+                <option value="contain">{{ t('Fit inside') }}</option>
+                <option value="tile">{{ t('Tiled') }}</option>
+              </select>
+            </template>
           </div>
-          <div class="eb-field">
-            <label>{{ t('Opacity (%)') }}</label>
-            <input type="number" min="10" max="100" step="5" v-model="fprops.opacity" placeholder="100">
+          <p class="eb-tip">{{ t('Opacity is how much of the whole object shows: 100 is solid, lower lets what is behind show through.') }}</p>
+          <p class="eb-tip">{{ t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.') }}</p>
+        </template>
+        <!-- 中の文字 -->
+        <template v-if="fpTab === 'text'">
+          <p class="eb-fp-what">{{ t('These apply to all the text inside the object. To change only some of it, choose those words and use the toolbar.') }}</p>
+          <div class="eb-fp-grid">
+            <label>{{ t('Text inside it') }}</label>
+            <select v-model="fprops.inner" class="w-m">
+              <option value="">{{ t('As the document is set') }}</option>
+              <option value="eb-al-l">{{ t('Ranged left') }}</option>
+              <option value="eb-al-c">{{ t('Centred') }}</option>
+              <option value="eb-al-r">{{ t('Ranged right') }}</option>
+              <option value="eb-al-j">{{ t('Justified') }}</option>
+            </select>
+            <label>{{ t('Text down the box') }}</label>
+            <select v-model="fprops.vpos" class="w-m">
+              <option value="">{{ t('At the top') }}</option>
+              <option value="eb-v-mid">{{ t('In the middle') }}</option>
+              <option value="eb-v-bot">{{ t('At the bottom') }}</option>
+            </select>
+            <label>{{ t('Which way the words run') }}</label>
+            <select v-model="fprops.flow" class="w-m">
+              <option value="">{{ t('As the page runs') }}</option>
+              <option value="eb-yoko">{{ t('Across (horizontal)') }}</option>
+              <option value="eb-tate">{{ t('Down (vertical)') }}</option>
+            </select>
+            <label>{{ t('Outline (mm)') }}</label>
+            <div class="inline"><input type="number" min="0" max="3" step="0.05" v-model="fprops.strokeWidth" placeholder="0" class="w-s"><input type="color" v-model="fprops.strokeColour" class="w-c" :title="t('Outline colour')"></div>
+            <label>{{ t('Shadow under the letters') }}</label>
+            <label class="opt"><input type="checkbox" v-model="fprops.textShadow"> {{ t('On') }}</label>
+            <template v-if="fprops.textShadow">
+              <label>{{ t('Across (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowX" class="w-s">
+              <label>{{ t('Down (pt)') }}</label><input type="number" min="-20" max="20" step="0.5" v-model="fprops.shadowY" class="w-s">
+              <label>{{ t('Softness (pt)') }}</label><input type="number" min="0" max="30" step="0.5" v-model="fprops.shadowBlur" class="w-s">
+              <label>{{ t('Shadow colour') }}</label><input type="color" v-model="fprops.shadowColour" class="w-c">
+            </template>
           </div>
-          <div class="eb-field">
-            <label>{{ t('Turn (degrees)') }}</label>
-            <input type="number" min="-180" max="180" step="5" v-model="fprops.rotate" placeholder="0">
+        </template>
+        <!-- 画像 -->
+        <!-- 表の列の幅（パーセント）と、行の高さ・列の幅の最適化（BUGS #288） -->
+        <template v-if="fpTab === 'columns'">
+          <div class="eb-row eb-frow">
+            <div class="eb-field" v-for="(p, i) in fprops.colPct" :key="'cp' + i">
+              <label>{{ t('Column {n} (%)', { n: i + 1 }) }}</label>
+              <input type="number" min="1" max="100" step="0.1" v-model.number="fprops.colPct[i]">
+            </div>
           </div>
-          <div class="eb-field">
-            <label>{{ t('Effects') }}</label>
-            <label class="opt"><input type="checkbox" v-model="fprops.shadow"> {{ t('Drop shadow') }}</label>
-            <label class="opt"><input type="checkbox" v-model="fprops.keep"> {{ t('Do not split across pages') }}</label>
+          <p class="eb-tip">{{ t('Together {n}%. The widths are shared out so that they make the whole table.', { n: colPctSum }) }}</p>
+          <div class="eb-row">
+            <button class="eb-btn" @click="fitTableFromProps('rows')">{{ t('Optimal row height') }}</button>
+            <button class="eb-btn" @click="fitTableFromProps('cols')">{{ t('Optimal column width') }}</button>
           </div>
-        </div>
-        <p class="eb-tip">{{ t('Fill colours are printed: the file tells the browser to print them even when it would normally leave backgrounds out.') }}</p>
+        </template>
+        <template v-if="fpTab === 'picture'">
+          <p class="eb-fp-what">{{ t('Settings of the picture itself.') }}</p>
+          <div class="eb-fp-grid">
+            <label>{{ t('Caption') }}</label><input type="text" v-model="fprops.caption" :placeholder="t('Caption')" class="w-l">
+            <label>{{ t('Where the caption stands') }}</label>
+            <select v-model="fprops.captionPlace" class="w-m">
+              <option value="below">{{ t('Caption under the picture') }}</option>
+              <option value="above">{{ t('Caption over the picture') }}</option>
+              <option value="inside">{{ t('Caption inside the picture') }}</option>
+              <option value="none">{{ t('No caption') }}</option>
+            </select>
+            <template v-if="doc.useScript">
+              <label>{{ t('Enlargement') }}</label>
+              <select v-model="fprops.zoom" class="w-m">
+                <option value="">{{ t('None') }}</option>
+                <option value="full">{{ t('Whole screen') }}</option>
+                <option value="grow">{{ t('Grow where it stands') }}</option>
+                <option value="loupe">{{ t('Magnifying glass') }}</option>
+                <option value="lift">{{ t('Rise a little when pointed at') }}</option>
+                <option value="gallery">{{ t('All the photographs in turn') }}</option>
+              </select>
+            </template>
+          </div>
+          <p class="eb-tip" v-if="doc.useScript">{{ t('It works where the saved document is opened in a browser that runs its program. Printed, and where the program does not run, the photograph is shown as it is.') }}</p>
+        </template>
       </div>
       <div class="foot">
-        <button class="eb-btn ghost" @click="clearFrameProps">{{ t('Clear') }}</button>
+        <!-- LibreOffice の画面の「リセット」と同じ：画面を開いたときの値に戻す。 -->
+        <button class="eb-btn ghost" @click="resetFrameProps" :title="t('Back to the values this window opened with')">{{ t('Reset (as opened)') }}</button>
         <button class="eb-btn" @click="fpropsOpen = false">{{ t('Cancel') }}</button>
         <button class="eb-btn primary" @click="applyFrameProps">{{ t('Apply') }}</button>
       </div>
@@ -10743,7 +17458,7 @@ ${insideObjects('.eb-paper.boxed')} {
   </div>
 
   <div v-if="ctx.open" class="eb-ctx-back" @mousedown.prevent @click="closeCtxIfSettled" @touchend.prevent="closeCtxIfSettled" @contextmenu.prevent="closeCtx"></div>
-  <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.prevent @contextmenu.prevent>
+  <div v-if="ctx.open" class="eb-ctxmenu" :class="{ flip: ctx.flip, tall: ctx.tall }" :style="{ left: ctx.x + 'px', top: ctx.y + 'px', maxHeight: ctx.tall ? ctx.tall + 'px' : null }" @mousedown.prevent @contextmenu.prevent>
     <!-- The right button on a category in the list down the left. -->
     <template v-if="ctx.cat !== null">
       <div class="hd">{{ ctx.cat.label }}</div>
@@ -10760,8 +17475,9 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="hd">{{ ctx.doc.title }}</div>
       <button class="ci" @click="closeCtx(); openDoc(ctx.doc.id)">{{ t('Open') }}</button>
       <div class="sep"></div>
-      <button class="ci" @click="duplicateDoc(ctx.doc.id)">{{ t('Duplicate') }}</button>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+      <!-- A share that hides downloads may be read here, not copied away (S3). -->
+      <button class="ci" v-if="ctx.doc.download !== false" @click="duplicateDoc(ctx.doc.id)">{{ t('Duplicate') }}</button>
+      <div class="ci has-sub" v-if="ctx.doc.download !== false" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Move to…') }}</span><span class="s">›</span>
         <div class="fly">
           <button class="ci" @click="moveDoc(ctx.doc, '')">{{ t('No category') }}</button>
@@ -10770,6 +17486,7 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
       <button class="ci" @click="openVersions(ctx.doc)">{{ t('Versions…') }}</button>
       <button class="ci" @click="openShare(ctx.doc)">{{ t('Share…') }}</button>
+      <button class="ci" @click="openDocSettings(ctx.doc)">{{ t('Document settings…') }}</button>
       <button class="ci" @click="openDocProps(ctx.doc)">{{ t('Properties…') }}</button>
       <div class="sep"></div>
       <button class="ci danger" @click="deleteDoc(ctx.doc)">{{ t('Delete') }}</button>
@@ -10788,10 +17505,20 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="ci" @click="closeCtx(); addPage(ctx.page, true)">{{ t('Add a page below') }}</button>
       <div class="sep"></div>
       <button class="ci danger" @click="closeCtx(); deletePage(ctx.page)">{{ t('Delete everything on this page') }}</button>
+      <button class="ci danger" @click="closeCtx(); removePage(ctx.page)">{{ t('Delete this page') }}</button>
+    </template>
+    <template v-else-if="ctx.pagebreak">
+      <div class="hd">{{ t('Page break') }}</div>
+      <button class="ci danger" @click="ctxDo('breakDel')">{{ t('Delete the page break') }}</button>
+    </template>
+    <!-- レイヤーの見出しの右クリック：そのレイヤーを中の物ごと削除（確かめてから。Ctrl+Z で戻せる） -->
+    <template v-else-if="ctx.layerBand !== null">
+      <div class="hd">{{ t('Layer') }}</div>
+      <button class="ci danger" :disabled="!ctx.layerBandCount" @click="closeCtx(); deleteLayerBand(ctx.layerBand)">{{ t('Delete this layer ({n} things)', { n: ctx.layerBandCount }) }}</button>
     </template>
     <template v-else>
-    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
-    <button class="ci" :disabled="!ctx.selection" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s k">Ctrl+C</span></button>
+    <button class="ci" :disabled="!ctx.selection && !frame.on" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
+    <button class="ci" :disabled="!ctx.selection && !frame.on" @click="ctxDo('copy')"><span>{{ t('Copy') }}</span><span class="s k">Ctrl+C</span></button>
     <button class="ci" @click="ctxDo('paste')"><span>{{ t('Paste') }}</span><span class="s k">Ctrl+V</span></button>
     <button class="ci" @click="ctxDo('pasteText')"><span>{{ t('Paste as plain text') }}</span><span class="s k">Ctrl+Shift+V</span></button>
     <div class="sep"></div>
@@ -10800,23 +17527,32 @@ ${insideObjects('.eb-paper.boxed')} {
          anchor, the size. It stands first, because it is what was clicked. -->
     <template v-if="(ctx.frame || ctx.text) && !ctx.writingRow">
       <div class="hd">{{ frameLabel }}</div>
-      <button class="ci strong" @click="ctxDo('frameProps')">{{ t('Object properties…') }}</button>
+      <!-- 配置（オーナー 2026-09-29）：「自由に配置」と「HTML のルールで配置」の2つ。
+           HTML のルールのときだけ、字の流し方（上下・左・右）を添える。 -->
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Wrap') }}</span><span class="s">›</span>
+        <span>{{ t('Placement') }}</span><span class="s">›</span>
         <div class="fly">
-          <button class="ci" :class="{ on: frame.wrap === 'none' }" @click="ctxDo('wrapMode','none')">{{ t('Above and below') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Words to its left') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Words to its right') }}</button>
-          <button class="ci" :class="{ on: frame.wrap === 'through' }" @click="ctxDo('wrapMode','through')">{{ t('Words underneath it') }}</button>
+          <button class="ci" :class="{ on: !(frame.free && frame.wrap === 'through') }" @click="ctxDo('placeMode','html')">{{ t('Place by the rules of HTML') }}</button>
+          <button class="ci" :class="{ on: frame.free && frame.wrap === 'through' }" @click="ctxDo('placeMode','free')">{{ t('Place freely') }}</button>
+          <template v-if="!(frame.free && frame.wrap === 'through')">
+            <div class="sep"></div>
+            <button class="ci" :class="{ on: ['left', 'right', 'both'].indexOf(frame.wrap) < 0 }" @click="ctxDo('wrapMode','none')">{{ t('Keep clear above and below') }}</button>
+            <button class="ci" :class="{ on: frame.wrap === 'left' }" @click="ctxDo('wrapMode','left')">{{ t('Words to its left') }}</button>
+            <button class="ci" :class="{ on: frame.wrap === 'right' }" @click="ctxDo('wrapMode','right')">{{ t('Words to its right') }}</button>
+            <button class="ci" v-if="doc.useScript" :class="{ on: frame.wrap === 'both' }" @click="ctxDo('wrapMode','both')">{{ t('Words on both sides') }}</button>
+          </template>
         </div>
       </div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
+      <!-- 重ね順はレイヤーバーの中だけで変える（オーナー 2026-09-22）。紙の上の右クリック
+           には出さず、レイヤーバーの行の右クリックにだけ出す。動くのは同じ層の中（枠の
+           中に置いた物なら枠の中）。層をまたぐのは行を引きずる。 -->
+      <div class="ci has-sub" v-if="ctx.fromLayers" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Arrange') }}</span><span class="s">›</span>
         <div class="fly">
-          <button class="ci" @click="ctxDo('frameFront')">{{ t('Bring to front') }}</button>
-          <button class="ci" @click="ctxDo('stackStep',1)">{{ t('Forward one') }}</button>
-          <button class="ci" @click="ctxDo('stackStep',-1)">{{ t('Back one') }}</button>
-          <button class="ci" @click="ctxDo('frameBack')">{{ t('Send to back') }}</button>
+          <button class="ci" @click="ctxDo('layerOrder','front')">{{ t('To the front of its layer') }}</button>
+          <button class="ci" @click="ctxDo('layerOrder',1)">{{ t('Forward one') }}</button>
+          <button class="ci" @click="ctxDo('layerOrder',-1)">{{ t('Back one') }}</button>
+          <button class="ci" @click="ctxDo('layerOrder','back')">{{ t('To the back of its layer') }}</button>
         </div>
       </div>
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
@@ -10829,14 +17565,6 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="ci" @click="ctxDo('frameFit')">{{ t('Make the frame the width of the column') }}</button>
         </div>
       </div>
-      <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
-        <span>{{ t('Anchor') }}</span><span class="s">›</span>
-        <div class="fly">
-          <button class="ci" :class="{ on: !frame.free }" @click="ctxDo('frameInFlow')">{{ t('As character') }}</button>
-          <button class="ci" :class="{ on: frame.free }" @click="ctxDo('frameToPage')">{{ t('To paragraph') }}</button>
-        </div>
-      </div>
-      <button class="ci" v-if="ctx.frame" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
       <div class="sep"></div>
     </template>
 
@@ -10848,6 +17576,7 @@ ${insideObjects('.eb-paper.boxed')} {
     <button v-else class="ci" @click="ctxDo('link')"><span>{{ t('Hyperlink…') }}</span><span class="s k">Ctrl+K</span></button>
     <div class="sep"></div>
 
+    <template v-if="!ctx.textless">
     <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('Paragraph style') }}</span><span class="s">›</span>
       <div class="fly">
@@ -10898,19 +17627,19 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </div>
 
-    <button class="ci" @click="ctxDo('para')">{{ t('Paragraph settings…') }}</button>
     <button class="ci" @click="ctxDo('chars')">{{ t('Special character…') }}</button>
     <button class="ci" @click="ctxDo('emoji')">{{ t('Emoji…') }}</button>
+    </template>
 
     <template v-if="ctx.table">
       <div class="sep"></div>
       <div class="ci has-sub" @mouseenter="placeFly" @click="toggleFly">
         <span>{{ t('Table') }}</span><span class="s">›</span>
         <div class="fly">
-          <button class="ci" @click="ctxDo('table','rowAbove')">{{ t('Insert a row above') }}</button>
-          <button class="ci" @click="ctxDo('table','rowBelow')">{{ t('Insert a row below') }}</button>
-          <button class="ci" @click="ctxDo('table','colLeft')">{{ t('Insert a column to the left') }}</button>
-          <button class="ci" @click="ctxDo('table','colRight')">{{ t('Insert a column to the right') }}</button>
+          <button class="ci" @click="ctxDo('table','rowAbove')">{{ t('Insert row above') }}</button>
+          <button class="ci" @click="ctxDo('table','rowBelow')">{{ t('Insert row below') }}</button>
+          <button class="ci" @click="ctxDo('table','colLeft')">{{ t('Insert column left') }}</button>
+          <button class="ci" @click="ctxDo('table','colRight')">{{ t('Insert column right') }}</button>
           <div class="sep"></div>
           <button class="ci" @click="ctxDo('table','rowDel')">{{ t('Delete the row') }}</button>
           <button class="ci" @click="ctxDo('table','colDel')">{{ t('Delete the column') }}</button>
@@ -10923,7 +17652,9 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="ci" @click="ctxDo('cellAlign','right')">{{ t('Cell text right') }}</button>
           <div class="sep"></div>
           <button class="ci" @click="ctxDo('table','header')">{{ t('Header row') }}</button>
-          <button class="ci" @click="ctxDo('table','delete')">{{ t('Delete the table') }}</button>
+          <div class="sep"></div>
+          <button class="ci" @click="ctxDo('table','fitRows')">{{ t('Optimal row height') }}</button>
+          <button class="ci" @click="ctxDo('table','fitCols')">{{ t('Optimal column width') }}</button>
         </div>
       </div>
     </template>
@@ -10935,34 +17666,52 @@ ${insideObjects('.eb-paper.boxed')} {
         <div class="fly">
           <button class="ci" @click="ctxDo('image','eb-img-s')">{{ t('Small') }}</button>
           <button class="ci" @click="ctxDo('image','eb-img-m')">{{ t('Medium') }}</button>
-          <button class="ci" @click="ctxDo('image','eb-img-l')">{{ t('Large') }}</button>
-          <div class="sep"></div>
-          <button class="ci" @click="ctxDo('float','')">{{ t('No text wrap') }}</button>
-          <button class="ci" @click="ctxDo('float','left')">{{ t('Wrap text on the right') }}</button>
-          <button class="ci" @click="ctxDo('float','right')">{{ t('Wrap text on the left') }}</button>
+          <button class="ci" @click="ctxDo('image','eb-img-l')">{{ t('Full width') }}</button>
           <div class="sep"></div>
           <button class="ci" :class="{ on: ctxCaption === 'below' }" @click="ctxDo('caption','below')">{{ t('Caption under the picture') }}</button>
           <button class="ci" :class="{ on: ctxCaption === 'above' }" @click="ctxDo('caption','above')">{{ t('Caption over the picture') }}</button>
           <button class="ci" :class="{ on: ctxCaption === 'inside' }" @click="ctxDo('caption','inside')">{{ t('Caption inside the picture') }}</button>
           <button class="ci" :class="{ on: ctxCaption === 'none' }" @click="ctxDo('caption','none')">{{ t('No caption') }}</button>
-          <div class="sep"></div>
-          <button class="ci" @click="ctxDo('alt')">{{ t('Alternative text…') }}</button>
-          <button class="ci" @click="ctxDo('imageDel')">{{ t('Delete the picture') }}</button>
         </div>
       </div>
     </template>
 
-    <template v-if="ctx.selection">
-      <div class="sep"></div>
-      <button class="ci strong" @click="ctxDo('runProps')">{{ t('Properties of the chosen words…') }}</button>
-    </template>
-
-    <div class="sep"></div>
     <!-- One command, named for what it will actually clear: the words that are
          chosen, or everything inside the thing that was clicked. Two commands
          called "clear formatting" and "clear the formatting inside" left the
          writer guessing which was which. -->
-    <button class="ci" v-if="clearWhat.how" @click="ctxDo(clearWhat.how)">{{ clearWhat.label }}</button>
+    <template v-if="clearWhat.how">
+      <div class="sep"></div>
+      <button class="ci" @click="ctxDo(clearWhat.how)">{{ clearWhat.label }}</button>
+    </template>
+    <!-- Every right-click menu is in one order (owner, 2026-09-29: 「右クリックで表示
+         される項目の並び順に統一感が全くない」), LibreOffice's: cut, copy and paste;
+         what belongs to the thing clicked; the formatting of the words; the windows
+         that set things (…) together near the end; deleting, in red, last; the view. -->
+    <template v-if="ctx.selection || !ctx.textless || ((ctx.frame || ctx.text) && !ctx.writingRow) || ctx.image || ctx.fromLayers">
+      <div class="sep"></div>
+      <!-- レイヤーバーの行の右クリック：名前を付ける -->
+      <button class="ci" v-if="ctx.fromLayers" @click="ctxDo('layerRename')">{{ t('Name…') }}</button>
+      <button class="ci" v-if="ctx.selection" @click="ctxDo('runProps')">{{ t('Properties of the chosen words…') }}</button>
+      <button class="ci" v-if="!ctx.textless" @click="ctxDo('para')">{{ t('Paragraph settings…') }}</button>
+      <button class="ci" v-if="(ctx.frame || ctx.text) && !ctx.writingRow" @click="ctxDo('frameProps')">{{ propsLabel(ctx.frame ? ctx.kind : 'TEXT') }}</button>
+      <button class="ci" v-if="ctx.table" @click="ctxDo('cellProps')">{{ t('Cell properties…') }}</button>
+      <button class="ci" v-if="ctx.image" @click="ctxDo('alt')">{{ t('Alternative text…') }}</button>
+    </template>
+    <template v-if="ctx.frame || ctx.table || ctx.image || ctx.fromLayers">
+      <div class="sep"></div>
+      <button class="ci danger" v-if="ctx.image && !ctx.fromLayers" @click="ctxDo('imageDel')">{{ t('Delete the picture') }}</button>
+      <button class="ci danger" v-if="ctx.table && !ctx.fromLayers" @click="ctxDo('table','delete')">{{ t('Delete the table') }}</button>
+      <!-- A table or a picture standing on the page is also "the frame" chosen: one
+           delete for it, in its own name (owner 2026-09-29, BUGS #285). -->
+      <button class="ci danger" v-if="ctx.frame && !ctx.fromLayers && !ctx.table && !ctx.image" @click="ctxDo('frameDel')">{{ t('Delete the frame') }}</button>
+      <!-- レイヤーバーの行の削除（オーナー 2026-09-22「レイヤーを右クリックしても削除が表示されない」）。
+           本文の最後の一段落は、字を書く所と物を結び付ける所が無くなるので消せない（LibreOffice と同じ）。 -->
+      <button class="ci danger" v-if="ctx.fromLayers" :disabled="ctx.lastPara"
+        :title="ctx.lastPara ? t('The last paragraph of the writing cannot be deleted: there must always be somewhere to write, and something for the objects to be tied to.') : ''"
+        @click="ctxDo('layerDelete')"><span>{{ t('Delete') }}</span><span class="s k">Delete</span></button>
+    </template>
+    <div class="sep"></div>
     <div class="ci has-sub" v-if="!flow" @mouseenter="placeFly" @click="toggleFly">
       <span>{{ t('View') }}</span><span class="s">›</span>
       <div class="fly">
@@ -11181,7 +17930,7 @@ ${insideObjects('.eb-paper.boxed')} {
       <h3>{{ link.editing ? t('Edit the link…') : t('Hyperlink…') }}</h3>
       <div class="body">
         <div class="eb-field"><label>{{ t('Text') }}</label><input type="text" v-model="link.text" :placeholder="t('The words that carry the link')"></div>
-        <div class="eb-field"><label>{{ t('Address') }}</label><input type="text" v-model="link.url" placeholder="example.org/page" @keydown.enter.prevent="applyLinkDialog"></div>
+        <div class="eb-field"><label>{{ t('Address') }}</label><input type="text" data-eb-first v-model="link.url" placeholder="example.org/page" @keydown.enter.prevent="applyLinkDialog"></div>
         <p class="eb-tip">{{ t('A bare address becomes https://, and an e-mail address becomes a mailto: link.') }}</p>
       </div>
       <div class="foot">
@@ -11255,13 +18004,16 @@ ${insideObjects('.eb-paper.boxed')} {
         lately: new Map(),
         dirty: false,
         saving: false,
+        // Why the last save failed, until one goes in: shown where "unsaved" is.
+        saveError: '',
         opening: false,
         // Writing in the running header and footer: the bands on the first sheet
         // are open to the caret, and what is written in them is written on every
         // page. Off again as soon as the writer is done with them.
         runBandOn: false,
+        runBandWhich: '',
         savedAt: 0,
-        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual' },
+        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual', placement: 'standard' },
         autosave: true,
         guides: true,
         colour: '#111111',
@@ -11269,10 +18021,18 @@ ${insideObjects('.eb-paper.boxed')} {
         fmt: { block: 'P', align: '', list: '', size: null, family: '', marker: '', ruby: false },
         rubyOpen: false, rubyWord: '', rubyText: '',
         noteOpen: false, noteText: '',
-        colsOpen: false, cols: { count: 2, gap: 8 },
+        colsOpen: false, cols: { count: 2, gap: 8 }, colsGapWas: null, paperWas: null,
+        csel: { rects: [] }, fx: { name: '', text: '', editing: false }, numUi: { cat: '', dec: 0, sep: true, cur: '¥', date: 'YYYY/MM/DD' }, numSample: 1234.5, paperTab: 'paper', cellSpan: { rows: 1, cols: 1 }, cellTab: 'number', bord: { style: 'solid', width: 0.75, colour: '#000000', edges: { top: 'keep', bottom: 'keep', left: 'keep', right: 'keep', insideH: 'keep', insideV: 'keep' } },
+        cellWidthWas: '', cellPropsOpen: false, cellProps: { fill: '', align: '', valign: '', pad: '', width: '', font: '', size: '', colour: '', bold: false, italic: false, underline: false, rule: { style: '', sides: 'all', width: 0.75, colour: '#666666' } },
         runOpen: false,
         brush: null,
         toast: '',
+        fpropsPhoto: false,
+        usedFonts: [],
+        fpTab: 'type',
+        docSet: { open: false, useScript: false, title: '', lang: 'ja', head: normaliseHead({}) },
+        zoomMarks: [],
+        stripAsk: { open: false, name: '', items: [], resolve: null },
         build: '', newBuild: false,
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
@@ -11293,13 +18053,13 @@ ${insideObjects('.eb-paper.boxed')} {
         htmlOpen: false,
         htmlText: '',
         defaultPaper: normalisePaper(null),
-        ctx: { open: false, x: 0, y: 0, flip: false, table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, frameWords: false, text: false, writingRow: false, page: 0, doc: null, cat: null },
+        ctx: { open: false, x: 0, y: 0, flip: false, tall: 0, kind: '', table: false, image: false, captionPlace: '', link: false, list: false, selection: false, frame: false, frameWords: false, textless: false, pagebreak: false, text: false, writingRow: false, fromLayers: false, lastPara: false, layerBand: null, layerBandCount: 0, page: 0, doc: null, cat: null },
         // The categories the documents are kept in: which one is open (one at a
         // time, as a drawer), what each is called, and the colour it is drawn in.
         folders: [], openCat: '', naming: false, catNew: '', catColours: {},
         dragDoc: 0, dropCat: null,
         props: { open: false, busy: false, id: 0, name: '', title: '', size: 0, mtime: 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' },
-        frame: { on: false, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, solid: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], parts: [], more: 0, onPart: false },
+        frame: { on: false, heads: null, x: 0, y: 0, w: 0, h: 0, padX: 0, padY: 0, free: false, solid: false, wrap: '', drop: -1, kind: '', bar: false, dragging: false, mm: '', grips: [], gx: null, gy: null, extras: [], parts: [], more: 0, onPart: false, taken: false },
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
@@ -11328,6 +18088,11 @@ ${insideObjects('.eb-paper.boxed')} {
         i18nTick: 0,
         saidAboutRunning: false,
         asPrinted: false,
+        // レイヤーバー：名前を書き換え中の行と、閉じた枠の行（data-eb-id ごと）
+        renaming: -1,
+        renamingLayer: null,
+        dropHalf: '',
+        layerShut: {},
         wasShowing: null,
         charsOpen: false,
         charSets: CHAR_SETS,
@@ -11368,10 +18133,91 @@ ${insideObjects('.eb-paper.boxed')} {
       };
     },
     computed: {
+      /** 物のプロパティのタブ。LibreOffice の「枠」の画面と同じ分け方。 */
+      fxGroups() {
+        const list = (window.EditBaseCalc && window.EditBaseCalc.FUNCS) || [];
+        const out = [];
+        list.forEach((f) => {
+          let g = out.find((x) => x.group === f.group);
+          if (!g) { g = { group: f.group, items: [] }; out.push(g); }
+          g.items.push(f);
+        });
+        return out;
+      },
+      fxCol() { return String(this.fx.name || '').replace(/\d+$/, ''); },
+      fxRow() { const m = /(\d+)$/.exec(String(this.fx.name || '')); return m ? Number(m[1]) : 0; },
+      paperTabs() {
+        this.i18nTick;
+        return [{ key: 'paper', label: this.t('Paper') }, { key: 'text', label: this.t('Text and typefaces') }, { key: 'page', label: this.t('Page colour and frame') }];
+      },
+      cellTabs() {
+        this.i18nTick;
+        return [{ key: 'number', label: this.t('Number format') }, { key: 'align', label: this.t('Cell alignment') },
+          { key: 'font', label: this.t('Font') }, { key: 'border', label: this.t('Cell rules') }, { key: 'fill', label: this.t('Fill') }];
+      },
+      numCats() {
+        this.i18nTick;
+        return [['', 'General'], ['number', 'Number'], ['currency', 'Currency'], ['percent', 'Percent'], ['date', 'Date'],
+          ['sci', 'Scientific'], ['text', 'As text'], ['custom', 'Custom']].map(([key, l]) => ({ key, label: this.t(l) }));
+      },
+      numCatAbout() {
+        return this.t({ '': 'No particular format: the number as it is.', number: 'Decimal places and a thousands separator.',
+          currency: 'A currency symbol in front of the amount.', percent: 'The number times 100, with %.',
+          date: 'A day count shown as a date.', sci: 'The number as a power of ten.', text: 'Shown as it was typed, even when it is a number.',
+          custom: 'A format code of your own. Press an example to start from it.' }[this.numUi.cat] || '');
+      },
+      numExamples() {
+        this.i18nTick;
+        return [['#,##0"cm"', 'A unit after the number'], ['#,##0.0"kg"', 'One decimal place and a unit'], ['"計 "#,##0"円"', 'Words before and after'],
+          ['0"個"', 'A count'], ['0.00"%"', 'A per cent sign without times 100'], ['YYYY"年"M"月"D"日"', 'A date in 年月日'],
+          ['M"/"D', 'Month and day'], ['@', 'The number as text']].map(([code, about]) => ({ code, about: this.t(about) }));
+      },
+      borderStyles() {
+        this.i18nTick;
+        return [{ key: 'none', w: 0, label: this.t('None') }, { key: 'solid', w: 0.75, label: this.t('Solid') }, { key: 'solid-thick', w: 2, label: this.t('Thick') },
+          { key: 'dashed', w: 0.75, label: this.t('Dashed') }, { key: 'dotted', w: 1, label: this.t('Dotted') }, { key: 'double', w: 2.25, label: this.t('Double') }];
+      },
+      bordEdges() { return ['top', 'insideH', 'bottom', 'left', 'insideV', 'right']; },
+      cellFontChoices() {
+        const f = resolveFonts(this.doc.paper, 'ja');
+        return Array.from(new Set([f.body, f.head, 'BIZ UDPGothic', 'BIZ UDPMincho', 'Noto Sans JP', 'Noto Serif JP', 'M PLUS Rounded 1c', 'Zen Maru Gothic'].filter(Boolean)));
+      },
+      fillSwatches() {
+        return ['#fff2cc', '#fce4d6', '#ddebf7', '#e2efda', '#ededed', '#ffe699', '#f8cbad', '#bdd7ee', '#c6e0b4', '#d9d9d9',
+          '#ffc000', '#ed7d31', '#5b9bd5', '#70ad47', '#a5a5a5', '#ffff00', '#ff0000', '#0070c0', '#00b050', '#000000'];
+      },
+      cellStyleName() {
+        const p = this.cellProps;
+        return this.t(p.bold && p.italic ? 'Bold italic' : p.bold ? 'Bold' : p.italic ? 'Italic' : 'Regular');
+      },
+      numPreview() {
+        const calc = window.EditBaseCalc;
+        return calc ? this.numSampleOf(this.cellProps.numFmt || '') : '';
+      },
+      colPctSum() { return round1((this.fprops.colPct || []).reduce((a, b) => a + (Number(b) || 0), 0)); },
+      fpropsTabs() {
+        this.i18nTick;
+        const tabs = [{ key: 'type', label: this.t('Size') }, { key: 'wrap', label: this.t('Placement') },
+          { key: 'borders', label: this.t('Borders') }, { key: 'area', label: this.t('Area') }];
+        if (this.frameHoldsWords) { tabs.push({ key: 'text', label: this.t('Text inside') }); }
+        if (this.fpropsPhoto) { tabs.push({ key: 'picture', label: this.t('Picture') }); }
+        if (this.fprops.colPct && this.fprops.colPct.length) { tabs.push({ key: 'columns', label: this.t('Columns and rows') }); }
+        return tabs;
+      },
+      /** 文書の言語（html の lang）。名前はその言語自身の書き方で。今の値が一覧に無ければ加える。 */
+      docLangs() {
+        const list = [['ja', '日本語'], ['en', 'English'], ['zh-CN', '中文（简体）'], ['zh-TW', '中文（繁體）'],
+          ['ko', '한국어'], ['de', 'Deutsch'], ['fr', 'Français'], ['es', 'Español'], ['it', 'Italiano'],
+          ['pt', 'Português'], ['ru', 'Русский']].map(([code, name]) => ({ code, name }));
+        const now = this.docSet.lang;
+        if (now && !list.some((l) => l.code === now)) { list.unshift({ code: now, name: now }); }
+        return list;
+      },
       stateText() {
         this.i18nTick;   // read, so a change of language works it out again
         if (this.saving) { return this.t('Saving…'); }
         if (!this.doc.id) { return ''; }
+        if (this.dirty && this.saveError) { return this.t('Could not save: {msg}', { msg: this.saveError }); }
         if (this.dirty) { return this.t('Unsaved changes'); }
         return this.savedAt ? this.t('Saved {time}', { time: this.when(this.savedAt / 1000) }) : this.t('Saved');
       },
@@ -11396,6 +18242,8 @@ ${insideObjects('.eb-paper.boxed')} {
           '--eb-band-t': band.top + 'mm',
           '--eb-band-b': band.bottom + 'mm',
           '--eb-pageh': (s.h - p.margin.top - p.margin.bottom) + 'mm',
+          // 1ページの字の領域の幅（縦書きの写真が紙をまたがないように・#259）。
+          '--eb-pagew': (s.w - p.margin.left - p.margin.right) + 'mm',
           '--eb-pageart': art.any ? 'url("' + art.url + '")' : 'none',
           '--eb-font-body': fontStack(f.body, 'serif'),
           '--eb-font-head': fontStack(f.head, 'sans'),
@@ -11469,7 +18317,7 @@ ${insideObjects('.eb-paper.boxed')} {
           { kind: 'left', label: this.t('Words to its left'), icon: this.icons.wrapRight },
           { kind: 'right', label: this.t('Words to its right'), icon: this.icons.wrapLeft },
           { kind: 'through', label: this.t('Words underneath it'), icon: this.icons.wrapThrough },
-        ];
+        ].concat(this.doc.useScript ? [{ kind: 'both', label: this.t('Words on both sides'), icon: this.icons.wrapBoth }] : []);
       },
       fontChoices() {
         const used = [];
@@ -11561,7 +18409,16 @@ ${insideObjects('.eb-paper.boxed')} {
       rulerMm() {
         const p = normalisePaper(this.doc.paper);
         const s2 = sheet(p);
-        return { w: s2.w, ml: p.margin.left, mr: p.margin.right, ticks: Math.floor(s2.w / 10) + 1 };
+        // 目盛りは LibreOffice と同じく左の余白線を 0 として cm で数える（余白の側も
+        // 左へ 1, 2…）。1cm ごとに数字、0.5cm に長め、0.25cm に短い目盛り。
+        const marks = [];
+        for (let q = -Math.floor(p.margin.left / 2.5); q * 2.5 <= s2.w - p.margin.left + 0.01; q += 1) {
+          const at = p.margin.left + q * 2.5;
+          if (at < 0.5 || at > s2.w - 0.5) { continue; }
+          const kind = q % 4 === 0 ? 'cm' : (q % 2 === 0 ? 'half' : 'quarter');
+          marks.push({ at, kind, label: kind === 'cm' && q !== 0 ? String(Math.abs(q / 4)) : '' });
+        }
+        return { w: s2.w, ml: p.margin.left, mr: p.margin.right, marks };
       },
       numberClass() {
         const out = [];
@@ -11590,8 +18447,10 @@ ${insideObjects('.eb-paper.boxed')} {
           { value: 'all', label: this.t('All round') },
           { value: 'top', label: this.t('Above') },
           { value: 'bottom', label: this.t('Below') },
-          { value: 'left', label: this.t('Left') },
-          { value: 'right', label: this.t('Right') },
+          // "Left" and "Right" are the alignment buttons' words ("align left"):
+          // these are the edges of the box (BUGS #247).
+          { value: 'left', label: this.t('At the left') },
+          { value: 'right', label: this.t('At the right') },
         ];
       },
       /** The same four little pictures the toolbar uses for alignment. */
@@ -11616,6 +18475,11 @@ ${insideObjects('.eb-paper.boxed')} {
        * same settings that go into the file, so what the writer sees while they
        * work the controls is the thing itself and not a picture of it.
        */
+      headingDesigns() { return ALL_DESIGNS; },
+      /** The design CSS for the samples in the style dialog (the colour comes from each sample). */
+      designPreviewCss() {
+        return '<style>' + ALL_DESIGNS.map((d) => designCss('#editbase-root .eb-hdpv-' + d.key, d.key, '')).join('\n') + '</style>';
+      },
       styleSample() {
         const v = this.styleNow;
         const out = {};
@@ -11871,10 +18735,10 @@ ${insideObjects('.eb-paper.boxed')} {
     },
     methods: {
       t: T,
-      notify(msg) {
+      notify(msg, ms) {
         this.toast = msg;
         clearTimeout(this._toastTimer);
-        this._toastTimer = setTimeout(() => { this.toast = ''; }, 2600);
+        this._toastTimer = setTimeout(() => { this.toast = ''; }, ms || 2600);
       },
       when(ts) {
         if (!ts) { return ''; }
@@ -11974,7 +18838,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.closeCtx();
         if (!d || !d.id) { return; }
         try {
-          if (d.id === this.doc.id && this.dirty) { await this.save(); }
+          if (d.id === this.doc.id) { await this.saveNow(); }
           await api('documents/' + d.id + '/move', { method: 'POST', body: { folder: folder } });
           await this.loadDocs();
           this.openCat = folder;
@@ -11999,7 +18863,17 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       async openDoc(id) {
         if (this.narrow) { this.sideOpen = false; }
-        if (this.dirty && this.doc.id && this.doc.id !== id) { await this.save(true); }
+        // The last document asked for is the one that opens: one asked for while
+        // another is still being read is not overwritten by the slower answer.
+        const ticket = (this._openTicket || 0) + 1;
+        this._openTicket = ticket;
+        // What is on the screen goes into its file first -- a save still on the
+        // wire waited for, and one that failed not passed over. Both used to be
+        // dropped here without a word (review D2). The same document opened again
+        // is read back from the file, so it is saved first too.
+        if (!(await this.leaveDoc())) { return; }
+        if (ticket !== this._openTicket) { return; }
+        const settled = this._edits || 0;
         // Opening is not writing. Setting the paper of the document being opened
         // used to count as a change made by the writer: the file was saved a
         // couple of seconds later and a version kept of it, so a document nobody
@@ -12007,16 +18881,58 @@ ${insideObjects('.eb-paper.boxed')} {
         this.opening = true;
         try {
           const d = await api('documents/' + id);
-          const parsed = parseHtml(d.content);
+          const stripReport = newStripReport();
+          const scriptState = await docScriptState(d.content);
+          const parsed = parseHtml(d.content, stripReport, { ownScript: scriptState.ours });
+          // A file with tags EditBase does not handle is not opened until the writer
+          // agrees to their being taken out; refused, nothing changes -- the document
+          // that was open stays open. Asked here, before this one is let go of.
+          // (The owner, 2026-09-21: ask whether they may be removed, and do not open
+          // it if the answer is no.)
+          const stripped = stripTotal(stripReport) > 0;
+          if (stripped && !(await this.askStrip(d.name, stripReport))) {
+            if (ticket === this._openTicket) { this.opening = false; }
+            return;
+          }
+          if (ticket !== this._openTicket) { return; }
+          // Typed in the document on the screen while this one was being read.
+          if (this.dirty && (this._edits || 0) !== settled && !(await this.leaveDoc())) {
+            if (ticket === this._openTicket) { this.opening = false; }
+            return;
+          }
+          if (ticket !== this._openTicket) { return; }
+          const encodingNote = d.encoding;
+          // Another document begins at its top. The desk kept the scroll of the one
+          // before, and a short document opened on the empty grey below its last
+          // page (BUGS #155). Reopening the same document keeps its place.
+          const another = this.doc.id !== id;
           if (this.doc.id && this.doc.id !== id) { this.letGo(this.doc.id); }
           this.mine = new Set();
           this.people = [];
+          this.saveError = '';
+          this._saveAsked = false;
           this.doc = {
             id: d.id, name: d.name, title: parsed.title || d.title, etag: d.etag || '',
-            paper: parsed.paper, styles: parsed.styles, css: parsed.css, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable,
+            paper: parsed.paper, styles: parsed.styles, css: parsed.css, lang: parsed.lang, foreign: parsed.foreign, writable: d.writable, download: d.download !== false,
+            // Opened with tags taken out: never written back over the original.
+            mustRename: stripped, origFolderId: d.folderId || 0,
+            // "Use JavaScript" belongs to the document (the owner, 2026-09-21: in its
+            // settings, not the app's), and is kept in the file itself: on when the
+            // file carries EditBase's own program, checked by its fingerprint.
+            useScript: !!scriptState.ours,
+            head: parsed.head || normaliseHead({}),
+            // 「変更を記録」は文書のもの（BUGS #225）：ファイルに書き、開いた人みなに効く。
+            review: !!parsed.review,
           };
+          this.review = this.doc.review;
+          if (this.doc.review) { this.notify(this.t('Changes to this document are being recorded.')); }
           canvas().innerHTML = parsed.body || '<p><br></p>';
           normaliseCanvas(this.t('Page break'), this.t('Caption'));
+          healSource(canvas());
+          if (another) {
+            const desk = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-desk') : null;
+            if (desk) { desk.scrollTop = 0; desk.scrollLeft = 0; }
+          }
           // A family the built-in list does not know needs the catalogue, or the
           // saved file would lose its stylesheet link on the next save.
           const chosen = Object.values(parsed.paper.fonts || {}).filter(Boolean);
@@ -12046,16 +18962,107 @@ ${insideObjects('.eb-paper.boxed')} {
           // From here on, this copy listens: who else has it open, and whether
           // they have written anything.
           this.startWatching();
+          this.bringInPictures(parsed.foreign ? (d.path || '') : '');
+          // Both of these say how the file will change when it is saved, and the
+          // second used to cover the first a moment after it appeared. Said together.
+          const aboutFile = [];
           if (parsed.foreign) {
-            this.notify(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
+            aboutFile.push(this.t('This file was not written by EditBase. Its own styles are replaced by the EditBase stylesheet when you save.'));
           }
+          const readAs = this.encodingText(encodingNote, true);
+          if (readAs) { aboutFile.push(readAs); }
+          if (aboutFile.length) { this.notify(aboutFile.join(' '), (readAs || aboutFile.length > 1) ? 9000 : undefined); }
         } catch (e) {
+          if (ticket !== this._openTicket) { return; }
           this.opening = false;
           this.notify(this.t('Could not open the document: {msg}', { msg: e.message }));
         }
       },
+      /**
+       * Pictures the document points at but the editor cannot show, brought into
+       * the document itself -- the way a picture put in from Files is carried.
+       *
+       * Beside the file: a page saved from a browser or written by Word or
+       * LibreOffice keeps its pictures in files next to it and points at them by
+       * name ("demo_html_1.png"). Read from here those names led nowhere and every
+       * picture was an empty box (BUGS #72). LibreOffice finds them in the same
+       * folder, and so does this -- for a file made elsewhere (localPath given).
+       *
+       * On another site: Nextcloud's own policy lets the editor load pictures from
+       * this server only, so every picture of a page brought in from the web, a
+       * Markdown note or a saved page was an empty box too (BUGS #75). The server
+       * reads each one (api fetch-image) and it is kept in the document.
+       *
+       * Anything that cannot be read is left exactly as it was.
+       */
+      async bringInPictures(localPath) {
+        const c = canvas();
+        if (!c) { return; }
+        const docId = this.doc.id;
+        const m = /^\/([^/]+)\/files(\/.*)?\/[^/]*$/.exec(String(localPath || ''));
+        const token = requestToken();
+        const jobs = [];
+        Array.from(c.querySelectorAll('img')).forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          if (!src || /^(data:|blob:)/i.test(src) || img.getAttribute('data-eb-unread')) { return; }
+          if (/^https?:\/\//i.test(src)) {
+            if (src.indexOf(window.location.origin + '/') === 0) { return; }
+            jobs.push({ img, read: () => api('fetch-image?url=' + encodeURIComponent(src)).then((r) => 'data:' + r.mime + ';base64,' + r.data) });
+            return;
+          }
+          if (!m || /^([a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(src)) { return; }
+          const dir = m[2] || '';
+          jobs.push({ img, read: async () => {
+            const where = new URL(src, 'https://eb.invalid' + dir.split('/').map(encodeURIComponent).join('/') + '/').pathname;
+            const r = await fetch('/remote.php/dav/files/' + encodeURIComponent(m[1]) + where, { headers: { requesttoken: token }, credentials: 'same-origin' });
+            if (!r.ok) { throw new Error('not found'); }
+            const blob = await r.blob();
+            if (!/^image\//.test(blob.type || '')) { throw new Error('not a picture'); }
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            });
+          } });
+        });
+        if (!jobs.length) { return; }
+        let got = 0;
+        // A page saved from the web can point at hundreds of pictures on a host
+        // that no longer answers. Asking for every one of them held the editor
+        // busy for minutes (measured: a Wikipedia article with 303 of them).
+        // A few dozen are read, and a run of failures stops the rest: nothing is
+        // lost -- an unread picture is left exactly as it was.
+        let missed = 0;
+        const one = async (job) => {
+          try {
+            const raw = await job.read();
+            const mime = (/^data:([^;,]+)/.exec(raw) || [])[1] || '';
+            const url = await shrinkImage(raw, mime);
+            if (this.doc.id !== docId || !job.img.isConnected) { return; }
+            job.img.setAttribute('src', url);
+            job.img.removeAttribute('loading');
+            job.img.removeAttribute('decoding');
+            got += 1;
+            missed = 0;
+          } catch (e) {
+            // Not asked for again while this document is open.
+            job.img.setAttribute('data-eb-unread', '1');
+            missed += 1;
+          }
+        };
+        // A few at a time: a Wikipedia article points at a hundred.
+        const queue = jobs.slice(0, 60);
+        const workers = Array.from({ length: 4 }, async () => {
+          while (queue.length && missed < 12) { await one(queue.shift()); if (this.doc.id !== docId) { return; } }
+        });
+        await Promise.all(workers);
+        if (got && this.doc.id === docId) {
+          this.$nextTick(() => this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); }));
+        }
+      },
       /** The body as it goes into the file: editor-only marks taken back out. */
-      exportBody() {
+      exportBody(paged) {
         // Names first. Pressing Enter splits a paragraph into two elements with
         // one name between them; if the file is written in that moment, both
         // copies of the document rename it -- differently -- and from then on
@@ -12063,6 +19070,40 @@ ${insideObjects('.eb-paper.boxed')} {
         // duplicated paragraph came from when two people were writing.
         nameBlocks(canvas());
         const clone = canvas().cloneNode(true);
+        // 式を書いている最中のセルは、ファイルには式でなく答えを書く（BUGS #289）。
+        clone.querySelectorAll('[data-eb-fxedit]').forEach((cell) => {
+          const live = fxCell && fxCell.isConnected ? fxCell : null;
+          cell.removeAttribute('data-eb-fxedit');
+          if (!cell.classList.length) { cell.removeAttribute('class'); }
+          if (live) {
+            const text = String(live.textContent || '').trim();
+            if (text.charAt(0) === '=' && text.length > 1) { cell.setAttribute(FORMULA_ATTR, text); }
+            cell.textContent = fxAnswer(live);
+          }
+        });
+        const pageNos = paged ? pageNumbersOf(canvas()) : null;
+        const moves = pageNos ? anchorMoves(canvas(), pageNos) : null;
+        const tateDoc = !!(canvas().classList && canvas().classList.contains('eb-tategaki'));
+        const tops = pageNos ? (tateDoc ? sheetShiftsTate(canvas(), pageNos) : sheetTops(canvas(), pageNos, moves)) : null;
+        const onSheet = [];
+        if (pageNos) {
+          Array.from(clone.children).forEach((el, i) => {
+            const mv = moves.get(i);
+            const n = mv ? mv.page : pageNos.list[i];
+            if (n && el.setAttribute) { el.setAttribute('data-eb-pg', String(n)); }
+            if (mv && el.firstElementChild) {
+              el.setAttribute('data-eb-top0', mv.was);
+              el.setAttribute('data-eb-home', '');
+              el.firstElementChild.style.setProperty('top', mv.off);
+            }
+            const at = tops.get(i);
+            if (at && el.querySelectorAll) {
+              const objs = Array.from(el.querySelectorAll('.eb-anchor > *'));
+              if (at.st && el.firstElementChild) { onSheet.push([el.firstElementChild, '--eb-st', at.st]); }
+              at.sp.forEach(([j, k]) => { if (objs[j]) { onSheet.push([objs[j], '--eb-sp', String(k)]); } });
+            }
+          });
+        }
         clone.querySelectorAll('[contenteditable]').forEach((el) => el.removeAttribute('contenteditable'));
         // A paragraph held for whoever is writing in it is this screen's business.
         clone.querySelectorAll('.eb-lockedby').forEach((el) => {
@@ -12070,14 +19111,18 @@ ${insideObjects('.eb-paper.boxed')} {
           el.removeAttribute('data-eb-who');
           if (!el.getAttribute('class')) { el.removeAttribute('class'); }
         });
-        clone.querySelectorAll('.eb-pagebreak, .eb-blankpage').forEach((el) => el.removeAttribute('data-label'));
+        clone.querySelectorAll('.eb-pagebreak, .eb-blankpage').forEach((el) => { el.removeAttribute('data-label'); el.classList.remove('eb-picked'); });
         clone.querySelectorAll('figcaption').forEach((el) => el.removeAttribute('data-ph'));
         clone.querySelectorAll('.eb-pagespacer').forEach((el) => el.remove());
+        clone.querySelectorAll('[data-eb-unread]').forEach((el) => el.removeAttribute('data-eb-unread'));
+        healSource(clone, { keepMoves: true });
         // A paragraph the editor cut at the foot of a page is one paragraph, and
         // that is what is written to the file. The browser cuts it again in the
         // same place when it prints it, because it is the same writing at the
         // same width on the same paper -- which is the whole point.
-        joinFlowCuts(clone);
+        // ページの区切りを書くときは、ページで切った段落は切ったまま、それぞれの
+        // ページに入れる。
+        if (!pageNos) { joinFlowCuts(clone); }
         // The gaps between the sheets are the editor's, not the document's.
         clone.querySelectorAll('.eb-anchor > *').forEach((el) => {
           el.style.removeProperty('--eb-shift');
@@ -12089,7 +19134,20 @@ ${insideObjects('.eb-paper.boxed')} {
         // with nothing else around it, so what goes OUT is cleaned as well. A
         // script or a handler that ever found its way into the writing would
         // otherwise be written into a page and run when it was opened.
+        if (pageNos) {
+          stableNames(clone);
+          // 移した入れ物の元の場所＝すぐ前にあった物の名前（先頭なら ^）。
+          Array.from(clone.children).forEach((el) => {
+            if (!el.hasAttribute || !el.hasAttribute('data-eb-home')) { return; }
+            let prev = el.previousElementSibling;
+            while (prev && prev.classList && prev.classList.contains('eb-pagespacer')) { prev = prev.previousElementSibling; }
+            el.setAttribute('data-eb-home', (prev && prev.getAttribute('data-eb-id')) || '^');
+          });
+          intoPages(clone, Math.max(pageNos.pages, this.pageCount || 1));
+        }
         sanitiseInto(clone);
+        // 紙に分けた画面で描く位置（#88）。消毒は --eb-st を捨てるので、その後で書く。
+        onSheet.forEach(([o, prop, v]) => { if (clone.contains(o)) { o.style.setProperty(prop, v); } });
         fillEmbeds(clone);
         // An empty paragraph holds its line in the editor, where contenteditable
         // gives it one; on a plain page it collapses to nothing and everything
@@ -12108,7 +19166,10 @@ ${insideObjects('.eb-paper.boxed')} {
           lang: this.doc.lang,
           name: this.doc.name,
           fill: this.lastPageGap(),
-          body: this.exportBody(),
+          body: this.exportBody(true),
+          script: !!this.doc.useScript,
+          review: !!this.doc.review,
+          head: this.doc.head,
         });
       },
       /**
@@ -12117,34 +19178,192 @@ ${insideObjects('.eb-paper.boxed')} {
        *   keeps one too only if the writer has asked for that in the settings.
        */
       async save(asked) {
-        if (!this.doc.id || this.saving) { return; }
+        if (!this.doc.id) { return false; }
+        if (this.saving) {
+          // One save at a time. Asked for while one is on the wire (Ctrl+S during
+          // an autosave), it is made as soon as that one is back, with whatever
+          // has been typed since.
+          if (asked) { this._saveAsked = true; }
+          return false;
+        }
+        if (this.doc.mustRename) { return this.saveRenamed(); }
+        // The document this save is of. Another one can be opened while the answer
+        // is on its way, and the answer is about this one: it used to be written
+        // into whatever was open by then -- its etag, "saved", the paragraphs held
+        // back -- and what was typed there was lost (review D2).
+        const doc = this.doc;
+        let ok = false;
+        let again = false;
         this.saving = true;
-        try {
-          // Twice at most: if somebody else wrote while this was being typed, their
-          // version comes back instead of being overwritten, their paragraphs are
-          // taken into this copy, and the whole is written once more.
-          for (let go = 0; go < 2; go += 1) {
-            const saved = await api('documents/' + this.doc.id, {
-              method: 'PUT',
-              body: { content: this.currentHtml(), etag: this.doc.etag || '', manual: !!asked },
-            });
-            if (saved.stale && saved.content) {
-              this.doc.etag = saved.etag;
-              this.takeTheirWork(saved.content);
-              continue;
+        const run = (async () => {
+          try {
+            // Twice at most: if somebody else wrote while this was being typed, their
+            // version comes back instead of being overwritten, their paragraphs are
+            // taken into this copy, and the whole is written once more.
+            for (let go = 0; go < 2; go += 1) {
+              // Only what goes out now is saved when the answer comes back. What is
+              // typed while it is on the wire is not in the file: it used to be marked
+              // saved all the same, and was neither saved nor warned about when the
+              // page was closed (review D1).
+              const edits = this._edits || 0;
+              const takenAt = Date.now();
+              const saved = await api('documents/' + doc.id, {
+                method: 'PUT',
+                body: { content: this.currentHtml(), etag: doc.etag || '', manual: !!asked },
+              });
+              if (this.doc !== doc) {
+                if (!saved.stale) { doc.etag = saved.etag || ''; ok = true; }
+                return;
+              }
+              if (saved.stale) {
+                // Refused, because the file has moved on. A refusal with nothing in it
+                // used to be taken for a save that had gone in: nothing was written,
+                // and the writer was told it was saved (review D5). An empty file
+                // (0 bytes) has nothing of theirs to take in, and this copy is written
+                // over it on the next go. One that is not empty but came back without
+                // its words could not be read: it is not written over unread -- this
+                // stays unsaved, and says so.
+                if (!saved.content && saved.size !== 0) {
+                  throw new Error(this.t('The file was changed elsewhere and could not be read.'));
+                }
+                doc.etag = saved.etag || '';
+                if (saved.content) { this.takeTheirWork(saved.content); }
+                again = true;
+                continue;
+              }
+              again = false;
+              doc.etag = saved.etag || '';
+              doc.foreign = false;
+              this.savedAt = Date.now();
+              this.saveError = '';
+              if ((this._edits || 0) === edits) { this.dirty = false; }
+              // Held back from the other copy: whatever has been written in since
+              // this save was taken, which is not in the file yet.
+              this.mine = new Set(Array.from(this.mine).filter((id) => (this.lately.get(id) || 0) >= takenAt));
+              const row = this.docs.find((d) => d.id === saved.id);
+              if (row) { row.mtime = saved.mtime; row.size = saved.size; }
+              ok = true;
+              return;
             }
-            this.doc.etag = saved.etag || '';
-            this.dirty = false;
-            this.doc.foreign = false;
-            this.savedAt = Date.now();
-            this.mine = new Set();
-            const row = this.docs.find((d) => d.id === saved.id);
-            if (row) { row.mtime = saved.mtime; row.size = saved.size; }
-            break;
+          } catch (e) {
+            if (this.doc === doc) {
+              // Said in the status bar as well, for as long as it holds: a toast is
+              // gone in a moment, and "unsaved changes" reads like any other pause.
+              this.saveError = e.message || String(e);
+              this.notify(this.t('Could not save: {msg}', { msg: this.saveError }), 9000);
+            }
           }
-        } catch (e) {
-          this.notify(this.t('Could not save: {msg}', { msg: e.message }));
-        } finally { this.saving = false; }
+        })();
+        this._saveRun = run;
+        try { await run; } finally { this.saving = false; this._saveRun = null; }
+        const asking = !!this._saveAsked;
+        this._saveAsked = false;
+        if (this.doc !== doc || !this.dirty) { return ok; }
+        // Typed while it was on the wire, or the file moved on under it twice:
+        // saved again. The timer set by the typing may have gone off in the
+        // meantime and found a save already running.
+        if (asking && (ok || again)) { return (await this.save(true)) && ok; }
+        if (ok || again) { this.scheduleAutosave(); }
+        return ok;
+      },
+      /**
+       * Everything on the screen into its file: the save on the wire waited for,
+       * and what was typed while it was out saved as well. True when nothing is
+       * left unsaved. What leaves the document -- opening another, putting a
+       * version back -- goes through here, or it went ahead with a save still
+       * out, or one that had failed (review D2, D6).
+       */
+      async saveNow(asked) {
+        const doc = this.doc;
+        for (let go = 0; go < 4; go += 1) {
+          if (this._saveRun) { try { await this._saveRun; } catch (e) { /* said already */ } }
+          if (this.doc !== doc) { return false; }
+          if (!doc.id || !this.dirty) { return true; }
+          if (this.saving) { continue; }
+          const ok = await this.save(asked);
+          if (!ok && this.dirty && !this.saving) { return false; }
+        }
+        return !this.dirty;
+      },
+      /**
+       * Before the document on the screen gives way to another: saved, or -- if it
+       * cannot be -- the writer asked. Nothing unsaved is thrown away unasked.
+       */
+      async leaveDoc() {
+        if (!this.doc.id || (!this.dirty && !this.saving)) { return true; }
+        if (await this.saveNow(true)) { return true; }
+        return !!window.confirm(this.t('Changes to {name} could not be saved. Go on anyway? What was not saved will be lost.',
+          { name: this.doc.title || this.doc.name || this.t('Untitled document') }));
+      },
+      /**
+       * A file opened with tags taken out of it is never written back over itself.
+       * It is saved as a new file beside the original, named after it, and from
+       * then on that new file is the one being edited. The original is left
+       * exactly as it was, and stays in the list with its mark.
+       *
+       * The owner, 2026-09-21: first "let the writer choose between overwriting and
+       * a new name", then, "no -- always save it under a new name". The name is not
+       * asked for: it can be changed afterwards, and the mark on the original keeps
+       * the two apart.
+       */
+      async saveRenamed() {
+        if (this.saving) { return false; }
+        // As in save(): the answer is about this document, and only what went out
+        // with it is saved (review D1, D2).
+        const doc = this.doc;
+        const old = doc.id;
+        let ok = false;
+        this.saving = true;
+        const run = (async () => {
+          try {
+            const stem = String(doc.name || '').replace(/\.x?html?$/i, '') || this.t('Untitled document');
+            const name = this.t('{name} (EditBase)', { name: stem });
+            const edits = this._edits || 0;
+            const takenAt = Date.now();
+            const content = this.currentHtml();
+            let created = null;
+            try {
+              created = await api('documents', { method: 'POST', body: { name, folder: '', folderId: doc.origFolderId || 0, content } });
+            } catch (e) {
+              // Beside the original if it can be; if that folder cannot be written in
+              // (a category shared read-only), in the save folder.
+              // Not a document shared without downloads: saving it into one's own
+              // folder would be keeping the copy the share does not allow (S3).
+              if (!doc.origFolderId || doc.download === false) { throw e; }
+              created = await api('documents', { method: 'POST', body: { name, folder: '', folderId: 0, content } });
+            }
+            doc.id = created.id;
+            doc.name = created.name;
+            doc.etag = created.etag || '';
+            doc.mustRename = false;
+            doc.foreign = false;
+            doc.writable = true;
+            ok = true;
+            if (this.doc !== doc) { await this.loadDocs(); return; }
+            if ((this._edits || 0) === edits) { this.dirty = false; }
+            this.savedAt = Date.now();
+            this.saveError = '';
+            this.mine = new Set(Array.from(this.mine).filter((id) => (this.lately.get(id) || 0) >= takenAt));
+            this.letGo(old);
+            await this.loadDocs();
+            if (this.doc === doc) { this.startWatching(); }
+            this.notify(this.t('The original file was left as it is, and this was saved as {name}.', { name: created.name }), 9000);
+          } catch (e) {
+            if (this.doc === doc) {
+              this.saveError = e.message || String(e);
+              this.notify(this.t('Could not save: {msg}', { msg: this.saveError }), 9000);
+            }
+          }
+        })();
+        this._saveRun = run;
+        try { await run; } finally { this.saving = false; this._saveRun = null; }
+        const asking = !!this._saveAsked;
+        this._saveAsked = false;
+        if (ok && this.doc === doc && this.dirty) {
+          if (asking) { return (await this.save(true)) && ok; }
+          this.scheduleAutosave();
+        }
+        return ok;
       },
       /**
        * Somebody else's version of this document, folded into this one. What is
@@ -12158,19 +19377,41 @@ ${insideObjects('.eb-paper.boxed')} {
         const theirs = document.createElement('div');
         theirs.innerHTML = parsed.body || '';
         nameBlocks(theirs);
-        const mark = caretMark(c);
+        const mark = wholeCaretMark(c);
+        // Their file has every paragraph whole; here one may be cut at a page foot,
+        // its second piece under a name of this screen's own. Compared piece by
+        // piece, the second piece was taken for a paragraph they had deleted, or
+        // the whole of theirs was put beside it: half a paragraph gone, or twice
+        // over (review D4). So the paragraphs here are put together first, and
+        // whatever is being written in a piece is held as the whole paragraph.
+        // The next layout cuts them again.
+        const headOf = new Map();
+        Array.from(c.children).forEach((el) => {
+          if (!el.hasAttribute || !el.hasAttribute(FLOWCUT) || cutHead(el) !== el) { return; }
+          const head = el.getAttribute('data-eb-id');
+          if (!head) { return; }
+          cutPieces(el).slice(1).forEach((k) => {
+            const id = k.getAttribute && k.getAttribute('data-eb-id');
+            if (id) { headOf.set(id, head); }
+          });
+        });
+        const joined = joinFlowCuts(c);
+        Array.from(this.mine).forEach((id) => { if (headOf.has(id)) { this.mine.add(headOf.get(id)); } });
         // Paragraphs this keyboard wrote in lately, so that one of them being
         // written over by somebody else is said out loud.
         const fresh = new Set();
         const now = Date.now();
-        this.lately.forEach((at, id) => { if (now - at < 60000) { fresh.add(id); } else { this.lately.delete(id); } });
+        this.lately.forEach((at, id) => { if (now - at < 60000) { fresh.add(headOf.get(id) || id); } else { this.lately.delete(id); } });
         const before = new Map();
         Array.from(c.children).forEach((el) => {
           const id = el.getAttribute && el.getAttribute('data-eb-id');
           if (id && fresh.has(id)) { before.set(id, el.outerHTML); }
         });
         const got = takeTheirs(c, theirs, this.mine);
-        if (!got.taken && !got.kept) { return; }
+        if (!got.taken && !got.kept) {
+          if (joined) { putWholeCaretBack(c, mark); this.repaginate(); }
+          return;
+        }
         let overwritten = 0;
         before.forEach((was, id) => {
           const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
@@ -12178,7 +19419,7 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         this.heldBack = got.kept;
         normaliseCanvas(this.t('Page break'), this.t('Caption'));
-        putCaretBack(c, mark);
+        putWholeCaretBack(c, mark);
         this.recount();
         this.$nextTick(() => { this.refreshLayers(); this.refreshPreview(); });
         if (overwritten) {
@@ -12225,27 +19466,40 @@ ${insideObjects('.eb-paper.boxed')} {
       /** One turn of the fast lane: what was typed here, and what they typed. */
       async liveTick() {
         if (!this.doc.id || this.live.busy || this.composing) { return; }
+        const doc = this.doc;
         this.live.busy = true;
         try {
           const c = canvas();
           if (!c) { return; }
           if (!this.snap) { this.snap = new Map(); }
           // What has changed here since the last turn.
+          //
+          // Every block goes under a name of its own. Enter makes a paragraph
+          // that still wears the name of the one it was split from, and so does
+          // the piece of a paragraph cut at a page foot: two blocks went out under
+          // one name, turn after turn, and the other copy wrote the one over the
+          // other -- a paragraph replaced by its neighbour's words (review D3).
+          // Names are given here as the save gives them; and a cut paragraph goes
+          // whole, under the name of its first piece, as it is in the file.
+          nameBlocks(c);
           const blocks = [];
           const now = new Set();
           let after = '';
-          Array.from(c.children).forEach((el) => {
-            if (!el.getAttribute || (el.classList && el.classList.contains('eb-pagespacer'))) { return; }
+          const kids = Array.from(c.children).filter((el) => el.getAttribute && !(el.classList && el.classList.contains('eb-pagespacer')));
+          for (let i = 0; i < kids.length; i += 1) {
+            const el = kids[i];
             const id = el.getAttribute('data-eb-id');
-            if (!id) { return; }
+            if (!id) { continue; }
+            const pieces = cutPieces(el);
+            i += pieces.length - 1;
             now.add(id);
-            const html = this.liveHtml(el);
+            const html = this.liveHtml(pieces.length > 1 ? wholeCopy(pieces) : el);
             if (this.snap.get(id) !== html) { blocks.push({ id: id, html: html, after: after }); }
             after = id;
-          });
+          }
           this.snap.forEach((was, id) => { if (!now.has(id)) { blocks.push({ id: id, gone: true }); } });
-          const mark = caretMark(c);
-          const answer = await api('documents/' + this.doc.id + '/live', {
+          const mark = wholeCaretMark(c);
+          const answer = await api('documents/' + doc.id + '/live', {
             method: 'POST',
             body: {
               since: this.live.since,
@@ -12253,6 +19507,8 @@ ${insideObjects('.eb-paper.boxed')} {
               where: { block: mark ? mark.id : '', caret: mark ? mark.at : 0, writing: !!this.dirty },
             },
           });
+          // Their answer is about the document it was asked about.
+          if (this.doc !== doc) { return; }
           // Only once it has gone is it the last thing they have seen from here.
           blocks.forEach((b) => { if (b.gone) { this.snap.delete(b.id); } else { this.snap.set(b.id, b.html); } });
           this.live.since = answer.seq || this.live.since;
@@ -12275,34 +19531,51 @@ ${insideObjects('.eb-paper.boxed')} {
       takeLive(items) {
         const c = canvas();
         if (!c || !items.length) { return; }
-        const mark = caretMark(c);
+        // The paragraph the caret is in -- all of it, if it is cut at a page foot.
+        const mark = wholeCaretMark(c);
         const mineNow = mark ? mark.id : '';
         let changed = false;
         items.forEach((item) => {
           (item.blocks || []).forEach((b) => {
             if (!b.id || b.id === mineNow) { return; }
             const here = c.querySelector(':scope > [data-eb-id="' + b.id + '"]');
+            // A paragraph this screen has cut at a page foot is taken or taken away
+            // whole: the pieces after the first are this screen's, and go with it.
+            const pieces = here && here.parentNode === c ? cutPieces(here) : [];
             if (b.gone) {
-              if (here && here.parentNode === c) { here.remove(); changed = true; }
+              if (pieces.length) { pieces.forEach((p) => p.remove()); changed = true; }
               return;
             }
             const holder = document.createElement('div');
             holder.innerHTML = sanitiseHtml(b.html);
             const fresh = holder.firstElementChild;
             if (!fresh) { return; }
-            if (here && here.parentNode === c) {
-              if (here.outerHTML === fresh.outerHTML) { return; }
+            // Where their screen cut it is nothing to this one, which cuts its own.
+            fresh.removeAttribute(FLOWCUT);
+            fresh.removeAttribute('data-split');
+            if (pieces.length) {
+              const was = pieces.length > 1 ? wholeCopy(pieces) : here;
+              if (was.outerHTML === fresh.outerHTML) { return; }
               here.replaceWith(fresh);
+              pieces.slice(1).forEach((p) => p.remove());
+            } else if (!b.after) {
+              c.insertBefore(fresh, c.firstChild);
             } else {
-              const prev = b.after ? c.querySelector(':scope > [data-eb-id="' + b.after + '"]') : null;
-              if (prev && prev.parentNode === c) { prev.after(fresh); } else { c.appendChild(fresh); }
+              // After the paragraph it follows -- after the last piece of it, when
+              // this screen has that one cut. One whose place cannot be found here
+              // is not put at the end of the document, where it used to go and be
+              // saved (review D16): it comes with their next save, in its place.
+              const prev = c.querySelector(':scope > [data-eb-id="' + b.after + '"]');
+              if (!prev || prev.parentNode !== c) { return; }
+              const run = cutPieces(prev);
+              run[run.length - 1].after(fresh);
             }
             this.snap.set(b.id, this.liveHtml(fresh));
             changed = true;
           });
         });
         if (!changed) { return; }
-        putCaretBack(c, mark);
+        putWholeCaretBack(c, mark);
         this.recount();
         this.$nextTick(() => this.reflowWrap());
       },
@@ -12327,7 +19600,16 @@ ${insideObjects('.eb-paper.boxed')} {
           // Their caret is drawn wherever it is; the paragraph is only held while
           // they are actually writing in it.
           if (p.active) { wanted[p.block] = p.name; }
-          const spot = this.spotIn(block, p.caret);
+          // They count their caret through the whole paragraph; here it may be cut
+          // at a page foot, and the character is in whichever piece it falls in.
+          let left = p.caret || 0;
+          const pieces = cutPieces(block);
+          let k = 0;
+          while (k < pieces.length - 1 && left > String(pieces[k].textContent || '').length) {
+            left -= String(pieces[k].textContent || '').length;
+            k += 1;
+          }
+          const spot = this.spotIn(pieces[k], left);
           if (spot) {
             carets.push({
               id: p.id, name: p.name, colour: MATE_COLOURS[i % MATE_COLOURS.length],
@@ -12337,18 +19619,23 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         this.live.carets = carets;
         // Hold the paragraphs they are in, and let go of the ones they have left.
+        // A paragraph cut at a page foot is held, and let go of, in all its pieces.
         Object.keys(this.live.locks).forEach((id) => {
           if (wanted[id]) { return; }
           const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
-          if (el) { el.removeAttribute('contenteditable'); el.classList.remove('eb-lockedby'); el.removeAttribute('data-eb-who'); }
+          if (el) {
+            cutPieces(el).forEach((k) => { k.removeAttribute('contenteditable'); k.classList.remove('eb-lockedby'); k.removeAttribute('data-eb-who'); });
+          }
           delete this.live.locks[id];
         });
         Object.keys(wanted).forEach((id) => {
           const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
           if (!el) { return; }
-          el.setAttribute('contenteditable', 'false');
-          el.classList.add('eb-lockedby');
-          el.setAttribute('data-eb-who', wanted[id]);
+          cutPieces(el).forEach((k) => {
+            k.setAttribute('contenteditable', 'false');
+            k.classList.add('eb-lockedby');
+            k.setAttribute('data-eb-who', wanted[id]);
+          });
           this.live.locks[id] = true;
         });
       },
@@ -12389,7 +19676,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const url = OC.generateUrl('/apps/editbase/api/documents/' + id + '/leave');
           if (navigator.sendBeacon) {
             // A page being closed has no time for a round trip.
-            navigator.sendBeacon(url + '?requesttoken=' + encodeURIComponent(TOKEN), new Blob([], { type: 'text/plain' }));
+            navigator.sendBeacon(url + '?requesttoken=' + encodeURIComponent(requestToken()), new Blob([], { type: 'text/plain' }));
             return;
           }
           api('documents/' + id + '/leave', { method: 'POST' }).catch(() => {});
@@ -12397,20 +19684,28 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       async beat() {
         if (!this.doc.id || this.saving) { return; }
+        // Asked about this document: an answer that comes back after another one
+        // has been opened, or after a save of this one has moved it on, is about
+        // something that is no longer on the screen.
+        const doc = this.doc;
+        const etag = doc.etag;
         try {
-          const state = await api('documents/' + this.doc.id + '/state?writing=' + (this.dirty ? '1' : '0'));
+          const state = await api('documents/' + doc.id + '/state?writing=' + (this.dirty ? '1' : '0'));
+          if (this.doc !== doc) { return; }
           if (!this.live.on) { this.people = state.people || []; }
           // Somebody else has it open: shared mode, and everything typed here goes
           // to them as it is typed.
           this.setLive((this.people || []).filter((p) => !p.me).length > 0);
-          if (!state.etag || state.etag === this.doc.etag) { return; }
+          if (!state.etag || state.etag === doc.etag) { return; }
+          if (this.saving || doc.etag !== etag) { return; }
           // Somebody has written. Their version is read and folded in -- but not
           // in the middle of a Japanese word, and not while a key is still warm:
           // the next turn is a second and a half away and nothing is lost by it.
           if (this.composing) { return; }
           if (this.typedAt && Date.now() - this.typedAt < 900) { return; }
-          const got = await api('documents/' + this.doc.id);
-          this.doc.etag = got.etag || state.etag;
+          const got = await api('documents/' + doc.id);
+          if (this.doc !== doc || this.saving || doc.etag !== etag) { return; }
+          doc.etag = got.etag || state.etag;
           this.takeTheirWork(got.content);
         } catch (e) { /* the network will come back; the next beat will ask again */ }
       },
@@ -12431,7 +19726,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!id) { return; }
         // Only what is on the screen can be out of date; another file is already
         // whatever it is on disk.
-        if (id === this.doc.id) { await this.save(); }
+        if (id === this.doc.id) { await this.saveNow(); }
         try {
           const copy = await api('documents/' + id + '/duplicate', { method: 'POST' });
           await this.loadDocs();
@@ -12469,7 +19764,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.props = { open: true, busy: true, id: d.id, name: d.name || '', title: d.title || '',
           size: d.size || 0, mtime: d.mtime || 0, chars: 0, pictures: 0, tables: 0, paper: '', error: '' };
         try {
-          if (d.id === this.doc.id && this.dirty) { await this.save(); }
+          if (d.id === this.doc.id) { await this.saveNow(); }
           const got = await api('documents/' + d.id);
           const parsed = parseHtml(got.content);
           const box = document.createElement('div');
@@ -12493,8 +19788,21 @@ ${insideObjects('.eb-paper.boxed')} {
         this.props.busy = false;
       },
       download() {
+        if (this.doc.download === false) { return; }
         this.menuOpen = false;
         downloadHtml(this.doc.name || (this.doc.title + '.html'), this.currentHtml());
+      },
+      /**
+       * Web プレビュー（BUGS #16）：保存してから、保存した文書をウェブページとして別の
+       * タブに開く。文書のプログラム（写真の拡大など）もそこで動く。
+       */
+      async webPreview() {
+        if (!this.doc.id) { return; }
+        const id = this.doc.id;
+        const w = window.open('', '_blank');
+        try { await this.saveNow(true); } catch (e) { /* said already */ }
+        const url = BASE + 'preview/' + id + '?t=' + Date.now();
+        if (w) { w.location.href = url; } else { window.open(url, '_blank'); }
       },
       printDoc() {
         const paper = normalisePaper(this.doc.paper);
@@ -12530,19 +19838,105 @@ ${insideObjects('.eb-paper.boxed')} {
        * getTargetRanges is the whole trick.
        */
       onBeforeInput(e) {
+        if (e.cancelable && caretInPeg(getRange())) { e.preventDefault(); return; }
+        // ふりがなの読みの中や語の終わりで打たれた字は、ふりがなの外へ入れる。
+        if (e.inputType === 'insertText' && e.data && e.cancelable) {
+          if (caretOutOfRuby(e.data)) { e.preventDefault(); this.touch(); return; }
+        } else if (/^insert/.test(String(e.inputType || '')) && e.inputType !== 'insertCompositionText') { caretOutOfRuby(); }
         frameTaken = false;
-        history.push(false);
-        if (!this.review || !this.doc.id) { return; }
+        // Not in the middle of a word being converted: the half-made word (かきく,
+        // or the ｔ of a reading) was kept as a step, and Ctrl+Z stopped there
+        // (BUGS #193, PS P15). The step is taken when the conversion begins.
+        if (!(e.inputType === 'insertCompositionText' || e.isComposing || this.composing)) { history.push(false); }
+        // 注の番号を Delete/Backspace で消すのは、注そのものを消すこと（LibreOffice と
+        // 同じ）。ブラウザに任せると番号の字だけが消えて注の本文が残り、続けて打った字が
+        // 番号の小さな字の大きさの span になって保存された（BUGS #221）。番号は丸ごと
+        // こちらで外し、注の一覧を並べ直す。記録している時は記録の方で扱う。
+        if (!this.review && /^delete(Content|Word)(Backward|Forward)$/.test(String(e.inputType || '')) && e.cancelable) {
+          const tr = (e.getTargetRanges && e.getTargetRanges()) || [];
+          const t0 = tr.length ? tr[0] : null;
+          const holder = t0 ? (t0.startContainer.nodeType === 1 ? t0.startContainer : t0.startContainer.parentNode) : null;
+          const sup = holder && holder.closest ? holder.closest('sup.eb-fnref') : null;
+          const same = sup && t0 && sup.contains(t0.endContainer);
+          if (same && inCanvas(sup)) {
+            e.preventDefault();
+            history.push(true);
+            const at = document.createRange();
+            at.setStartBefore(sup);
+            at.collapse(true);
+            sup.remove();
+            try { selectRange(at); } catch (err) { /* the text moved under us */ }
+            renumberNotes();
+            this.touch();
+            this.recount();
+            return;
+          }
+        }
         const type = String(e.inputType || '');
-        if (/^delete/.test(type)) {
+        const targetRange = () => {
           const ranges = (e.getTargetRanges && e.getTargetRanges()) || [];
           const target = ranges.length ? ranges[0] : null;
-          const range = target ? (function () {
-            const r = document.createRange();
-            r.setStart(target.startContainer, target.startOffset);
-            r.setEnd(target.endContainer, target.endOffset);
-            return r;
-          }()) : null;
+          if (!target) { return null; }
+          const r = document.createRange();
+          r.setStart(target.startContainer, target.startOffset);
+          r.setEnd(target.endContainer, target.endOffset);
+          return r;
+        };
+        if (!this.review || !this.doc.id) {
+          if (!this.doc.id || !canvas()) { return; }
+          // Not recording, but the document has marked runs in it. A letter
+          // typed at the end of a struck-out one (or inside it) went into it,
+          // and keeping the deletion took the new letter away as well (BUGS
+          // #216). At the end of an added one it went into that, and undoing the
+          // addition took it away. Unrecorded typing belongs to neither.
+          if (type === 'insertText' && e.data && e.cancelable) {
+            const at = getRange();
+            const mark = at && at.collapsed ? (delAt(at.startContainer) || insAt(at.startContainer)) : null;
+            if (mark) {
+              e.preventDefault();
+              caretOutOfDel(at, mark);
+              insertText(e.data);
+              this.touch();
+              this.recount();
+              return;
+            }
+          }
+          // "As it would read" hides the struck-out runs, and the browser, not
+          // seeing them, took a hidden one away whole with the letter before it
+          // (BUGS #217) -- though the range it announced held the letter alone.
+          // So the letters it announces are deleted here, and nothing else.
+          if (/^delete/.test(type) && !this.showChanges && e.cancelable && canvas().querySelector('del.eb-del')) {
+            const range = targetRange();
+            if (!range || range.collapsed || !inCanvas(range.startContainer)) { return; }
+            const seen = range.toString().replace(/\u200b/g, '') && !range.cloneContents().querySelector('img, svg, math, table, .eb-anchor, sup, br');
+            const hidden = seen || Array.from(canvas().querySelectorAll('del.eb-del')).some((d) => range.intersectsNode(d))
+              || !!delAt(range.startContainer) || !!delAt(range.endContainer);
+            if (!hidden) { return; }
+            e.preventDefault();
+            history.push(true);
+            const back = /Backward|ByCut/.test(type);
+            const nodes = textNodesInRange(range).filter((n) => rangeHolds(range, n) && !delAt(n));
+            const at = document.createRange();
+            if (nodes.length) {
+              const block = joinBlockOf(nodes[0]);
+              at.setStartBefore(nodes[0]);
+              nodes.forEach((n) => n.remove());
+              // A paragraph left with nothing to show keeps its <br>, as the browser's own delete leaves it.
+              const br = keepBlockOpen(block);
+              if (br) { at.setStartBefore(br); }
+            } else {
+              at.setStart(back ? range.startContainer : range.endContainer, back ? range.startOffset : range.endOffset);
+            }
+            at.collapse(true);
+            try { selectRange(at); } catch (err) { /* the text moved under us */ }
+            this.touch();
+            this.recount();
+            return;
+          }
+          return;
+        }
+        if (/^delete/.test(type)) {
+          const range = targetRange();
           if (!range || range.collapsed || !inCanvas(range.startContainer)) { return; }
           e.preventDefault();
           history.push(true);
@@ -12550,7 +19944,49 @@ ${insideObjects('.eb-paper.boxed')} {
           const at = document.createRange();
           at.setStart(back ? range.startContainer : range.endContainer, back ? range.startOffset : range.endOffset);
           at.collapse(true);
+          // Nothing but the end of a paragraph between the two points: the end
+          // itself is struck out (see markJoins), and the caret steps over it.
+          const { from, to } = joinEnds(range);
+          const bare = from && to && from !== to && !range.toString().replace(/[​]/g, '')
+            && !range.cloneContents().querySelector('img, svg, math, table, .eb-anchor, sup');
+          if (bare && isCutContinuation(from, to)) {
+            // The two pieces of one paragraph a page foot cut: the next letter
+            // over, in the direction the key goes, is what is deleted.
+            const w = document.createTreeWalker(back ? from : to, NodeFilter.SHOW_TEXT, null);
+            let t = null;
+            for (let n = w.nextNode(); n; n = w.nextNode()) {
+              if (!n.data.replace(/​/g, '') || delAt(n)) { continue; }
+              t = n;
+              if (!back) { break; }
+            }
+            if (t) {
+              const one = document.createRange();
+              const cp = back ? t.data.codePointAt(Math.max(0, t.data.length - 2)) : t.data.codePointAt(0);
+              const len = cp > 0xffff && t.data.length > 1 ? 2 : 1;
+              if (back) { one.setStart(t, t.data.length - len); one.setEnd(t, t.data.length); } else { one.setStart(t, 0); one.setEnd(t, len); }
+              const step = document.createRange();
+              markDeleted(one);
+              if (back) { step.setStart(one.startContainer, one.startOffset); } else { step.setStart(one.endContainer, one.endOffset); }
+              step.collapse(true);
+              try { selectRange(step); } catch (err) { /* the text moved under us */ }
+            }
+            this.settleReview();
+            return;
+          }
+          let mark = markJoins(range);
+          if (!mark && bare && nextJoinable(from) === to) { mark = markJoin(from); }
           markDeleted(range);
+          if (bare && mark && !back) {
+            // The caret steps over the struck-out end into the next paragraph.
+            at.setStart(to, 0);
+            at.collapse(true);
+          }
+          if (bare && mark && back) {
+            // Backspace at the head of a paragraph: the caret goes to the end of
+            // the one before, in front of the struck-out end, as LibreOffice's does.
+            at.setStartBefore(mark);
+            at.collapse(true);
+          }
           try { selectRange(at); } catch (err) { /* the text moved under us */ }
           this.settleReview();
           return;
@@ -12560,11 +19996,7 @@ ${insideObjects('.eb-paper.boxed')} {
           if (sel && !sel.collapsed) {
             e.preventDefault();
             history.push(true);
-            const end = document.createRange();
-            end.setStart(sel.endContainer, sel.endOffset);
-            end.collapse(true);
-            markDeleted(sel);
-            try { selectRange(end); } catch (err) { /* the text moved under us */ }
+            strikeSelection();
             ensureIns();
             if (type === 'insertText' && e.data) { insertText(e.data); }
             this.settleReview();
@@ -12590,9 +20022,15 @@ ${insideObjects('.eb-paper.boxed')} {
         this.$nextTick(() => this.refreshState());
       },
       touch() {
-        this.dirty = true;
+        this.markDirty();
         this.markMine();
         this.scheduleAutosave();
+      },
+      /** Something has changed that is not in the file yet. Counted, so that a
+       *  save can tell whether anything changed while it was on the wire. */
+      markDirty() {
+        this.dirty = true;
+        this._edits = (this._edits || 0) + 1;
       },
       scheduleAutosave() {
         clearTimeout(this._saveTimer);
@@ -12632,6 +20070,14 @@ ${insideObjects('.eb-paper.boxed')} {
         clearTimeout(this._pageTimer);
         this._pageTimer = setTimeout(() => {
           const was = this.pageCount;
+          // 組み直しの前のカーソル（要素と位置）。組み直しで段落が取り外されると、
+          // ブラウザはカーソルを外側（枠や紙の入れ物）へ逃がし、戻す処理の無い経路も
+          // ある。終わったとき、元の要素がまだ文書にあるのにカーソルが段落の外に
+          // いれば戻す（縦書きのまとめ枠の続きで、打った字が最初の段落に入った）。
+          const c0 = canvas();
+          const r0 = getRange();
+          const caretWas = (r0 && r0.collapsed && c0 && c0.contains(r0.startContainer) && !this.composing)
+            ? { node: r0.startContainer, at: r0.startOffset } : null;
           // The paragraphs the editor cut at a page foot are put back together
           // and cut again from scratch, the way the frame chain is: a given
           // amount of writing then has exactly one arrangement, and there is no
@@ -12669,8 +20115,11 @@ ${insideObjects('.eb-paper.boxed')} {
             // Where the objects stand. Making room for them moves the writing,
             // moving the writing moves the pages, and moving the pages moves the
             // objects again -- so a round that moves nothing is the one to stop on.
+            // 動いたかどうかは縦横の両方で見る。縦書きでは物は横へ動くので、
+            // 上からの距離だけを見ていると「動いていない」と読み違える。
             const where = () => Array.from(c.querySelectorAll('.eb-anchor > *'))
-              .map((el) => Math.round(el.getBoundingClientRect().top)).join(',');
+              .map((el) => { const r = el.getBoundingClientRect();
+                return Math.round(r.top) + ':' + Math.round(r.left); }).join(',');
             for (let round = 0; round < 4; round += 1) {
               const was = where();
               // Settled again on every round: making room for one object moves
@@ -12679,11 +20128,32 @@ ${insideObjects('.eb-paper.boxed')} {
               // where it used to be -- forty millimetres of nothing, hanging off
               // the foot of the last page and making a blank sheet after it.
               settleFreeObjects();
-              applyWrap(c, this.frameZoom());
+              applyWrap(c, this.frameZoom(), { both: !!this.doc.useScript });
+              // 回り込みで場所を空けると、枠の中の文章は増える ―― 増えた結果
+              // 枠に収まらなくなっても、ここで確かめ直さなければ鎖は切られない。
+              // 実測：縦書きの図形で、輪を抜けた時点では「収まっている」と判断
+              // され、そのあと回り込みが入って本文が紙の外へ244mm出ていた。
+              recutFlow();
+              reflowFrames();
               pages = paginate();
               if (where() === was) { break; }
             }
 
+          }
+          if (caretWas && !this.composing && caretWas.node.isConnected && canvas() && canvas().contains(caretWas.node)) {
+            const now = getRange();
+            const n = now ? now.startContainer : null;
+            const outside = !n || !canvas().contains(n)
+              || (n.nodeType === 1 && n.matches && n.matches('#eb-canvas, .eb-anchor, div.eb-frame, aside.eb-box, div.eb-note'));
+            if (outside) {
+              try {
+                const max = caretWas.node.nodeType === 3 ? caretWas.node.data.length : caretWas.node.childNodes.length;
+                const back = document.createRange();
+                back.setStart(caretWas.node, Math.min(caretWas.at, max));
+                back.collapse(true);
+                selectRange(back);
+              } catch (e) { /* the place is gone */ }
+            }
           }
           const done = () => {
             // A changed page count makes the page bar wrong wherever the change
@@ -12710,23 +20180,28 @@ ${insideObjects('.eb-paper.boxed')} {
         }, 60);
       },
       refreshState() {
+        if (this.frame.taken && !frameTaken) { this.frame.taken = false; }
         if (!canvas()) { return; }
+        this.fxFollow();
+        if (cellSel) { this.drawCellSel(); }
         const s = activeFormats();
-        s.size = sizeAt(normalisePaper(this.doc.paper).fontSize);
-        s.family = familyAt();
-        const at = getRange();
-        const list = at ? listAt(at.startContainer) : null;
+        const own = this.objectText();
+        const at = own ? objectFirstText(own) : null;
+        s.size = sizeAt(normalisePaper(this.doc.paper).fontSize, at);
+        s.family = familyAt(at);
+        const rg = getRange();
+        const list = rg ? listAt(rg.startContainer) : null;
         s.marker = list ? (list.style.listStyleType || (list.nodeName === 'OL' ? 'decimal' : 'disc')) : '';
-        const cell = at ? cellAt(at.startContainer) : null;
+        const cell = rg ? cellAt(rg.startContainer) : null;
         s.cellFill = cell ? (rgbToHex(cell.style.backgroundColor) || '') : '';
-        const block = selectedBlocks(true)[0];
+        const block = cutHead(selectedBlocks(true)[0]);
         this.ind = block ? {
           left: Number(numberIn(block.style.getPropertyValue('margin-left'), 'mm')) || 0,
           right: Number(numberIn(block.style.getPropertyValue('margin-right'), 'mm')) || 0,
           first: Number(numberIn(block.style.getPropertyValue('text-indent'), 'mm')) || 0,
         } : { left: 0, right: 0, first: 0 };
-        s.ruby = !!(at && rubyAt(at.startContainer));
-        s.change = !!(at && (insAt(at.startContainer) || delAt(at.startContainer)));
+        s.ruby = !!(rg && rubyAt(rg.startContainer));
+        s.change = !!(rg && (insAt(rg.startContainer) || delAt(rg.startContainer)));
         this.changes = countChanges();
         this.fmt = s;
         this.syncFrame();
@@ -12735,6 +20210,61 @@ ${insideObjects('.eb-paper.boxed')} {
           const owner = ancestorWithStyle(range.startContainer.nodeType === 3 ? range.startContainer : (range.startContainer.firstChild || range.startContainer), 'color');
           if (owner) { this.colour = rgbToHex(owner.style.color) || this.colour; }
         }
+      },
+      /**
+       * 枠を選んでいて、中にカーソルが無いとき、その枠（文字を持つもの）。案A：
+       * このとき道具の列の文字の命令は、その枠の中の文字全体に効く。LibreOffice
+       * Writer では灰色になって使えない（実測 2026-09-21）が、オーナーの判断で
+       * Impress や Word のように、選んだ物に効かせる。
+       */
+      objectText() {
+        if (!frameTaken || !frameEl || !frameEl.parentNode || !this.frame.on) { return null; }
+        if (!this.frameHoldsWords || this.frameIsWriting) { return null; }
+        // 縁を掴んで選んだ枠（frameTaken）。縁を押すとカーソルも中に入るので、
+        // カーソルの場所では決めない。中の文字を押せば frameTaken は外れる。
+        return frameEl;
+      },
+      /** 文字の命令を、選んだ枠の文字全体へ。枠を選んでいなければ、いつもどおり。 */
+      /**
+       * A picture or a shape without words is what is chosen: the text commands
+       * have nothing of it to act on, and the caret left in a paragraph somewhere
+       * else is not what the writer is looking at. LibreOffice greys them out; here
+       * they do nothing. Heading 1 turned a heading far up the page into one, and +
+       * made its words bigger (BUGS #240).
+       */
+      wordlessHeld() {
+        if (!frameTaken || !frameEl || !frameEl.parentNode || !this.frame.on) { return false; }
+        if (this.frameHoldsWords || this.frameIsWriting) { return false; }
+        const r = getRange();
+        return !(r && frameEl.contains(r.startContainer));
+      },
+      textRun(fn) {
+        if (cellSel && this.cellsRun(fn)) { return; }
+        if (this.wordlessHeld()) { return; }
+        const obj = this.objectText();
+        if (!obj) { takeHeldRange(); this.run(fn); return; }
+        const parts = objectParts(obj);
+        const last = parts[parts.length - 1];
+        const r = document.createRange();
+        r.setStart(parts[0], 0);
+        r.setEnd(last, last.childNodes.length);
+        const c = canvas();
+        if (document.activeElement !== c) { c.focus(); }
+        selectRange(r);
+        objectTextParts = parts;
+        try {
+          command(fn, this.t('Page break'), this.t('Caption'));
+        } finally { objectTextParts = null; }
+        // 枠は選んだまま。文字の選択は外す（外さないと枠の中の編集に移ってしまう）。
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); }
+        heldRange = null;
+        frameEl = obj;
+        frameTaken = true;
+        this.touch();
+        this.refreshState();
+        this.recount();
+        this.$nextTick(() => this.syncFrame());
       },
       run(fn) {
         // Toolbar buttons suppress mousedown so the selection survives the click;
@@ -12752,24 +20282,47 @@ ${insideObjects('.eb-paper.boxed')} {
         this.refreshState();
         this.recount();
       },
-      inline(key) { this.run(() => toggleInline(key)); },
-      /** These act on the paragraph, so the box goes round the paragraph. */
-      blockRun(fn) { this.run(fn); },
-      setBlock(tag) { this.blockRun(() => setBlockType(tag)); },
-      list(tag) { this.blockRun(() => toggleList(tag)); },
+      inline(key) { this.textRun(() => toggleInline(key)); },
+      /** These act on the paragraph, so the box goes round the paragraph -- the
+       *  whole of it, where a page foot has cut it in two (D9). */
+      blockRun(fn) { this.run(() => { joinCutsAround(selectedBlocks()); fn(); }); },
+      setBlock(tag) {
+        if (cellSel && this.cellsRun(() => setBlockType(tag))) { return; }
+        if (this.wordlessHeld()) { this.refreshState(); this.$forceUpdate(); return; }
+        this.blockRun(() => setBlockType(tag));
+      },
+      list(tag) { if (this.wordlessHeld()) { return; } this.blockRun(() => toggleList(tag)); },
       align(cls) {
         // An object with its box up is what is being aligned -- not whatever
         // paragraph the caret was left in, somewhere else on the page. But when
         // the caret is in the frame's own text, the words in it are what is being
         // aligned, and the frame stays where it is.
+        // 文字を持つ枠を選んでいれば、揃えるのは枠の中の文字（案A）。
+        // 範囲で選んだセル：各セルの中の文字の配置（BUGS #293）。
+        if (cellSel) {
+          const v = { 'eb-al-l': 'left', 'eb-al-c': 'center', 'eb-al-r': 'right', 'eb-al-j': 'justify' }[cls] || '';
+          const cells = cellSelCells();
+          if (cells.length) {
+            history.push(true);
+            const all = v && cells.every((cell) => cell.style.textAlign === v);
+            cells.forEach((cell) => {
+              if (v && !all) { cell.style.textAlign = v; } else { cell.style.removeProperty('text-align'); }
+              if (!cell.getAttribute('style')) { cell.removeAttribute('style'); }
+            });
+            this.touch();
+            this.refreshState();
+            return;
+          }
+        }
+        if (this.objectText()) { this.textRun(() => setBlockClass('align', cls)); return; }
         if (frameTaken && frameEl && !caretInside(frameEl)
           && this.alignObject(frameEl, cls)) { return; }
         this.blockRun(() => setBlockClass('align', cls));
       },
       indent(dir) { this.blockRun(() => stepIndent(dir)); },
-      clearFmt() { this.run(() => clearFormatting()); },
-      setColour(value) { this.colour = value; this.run(() => applyInlineStyle('color', value)); },
-      clearColour() { this.run(() => applyInlineStyle('color', '')); },
+      clearFmt() { this.textRun(() => clearFormatting()); },
+      setColour(value) { this.colour = value; this.textRun(() => applyInlineStyle('color', value)); },
+      clearColour() { this.textRun(() => applyInlineStyle('color', '')); },
       /**
        * Changing to a smaller paper keeps the margins it had, and 25mm of margin
        * on a 100mm postcard leaves 50mm to write in. No margin is allowed to eat
@@ -12803,7 +20356,23 @@ ${insideObjects('.eb-paper.boxed')} {
         const rows = Math.min(60, Math.max(1, this.table.rows || 1));
         const cols = Math.min(16, Math.max(1, this.table.cols || 1));
         this.tableOpen = false;
-        this.run(() => insertTable(rows, cols, this.table.header, this.table.variant));
+        const drawn = this.pendingDrop && this.pendingDrop.w ? this.pendingDrop : null;
+        if (!drawn) {
+          this.pendingDrop = null;
+          this.run(() => insertTable(rows, cols, this.table.header, this.table.variant));
+          return;
+        }
+        // Drawn on the page: a table standing where it was drawn, exactly the size
+        // of the box, the rows sharing its height.
+        let made = null;
+        this.run(() => {
+          made = insertTable(rows, cols, this.table.header, this.table.variant);
+          if (!made) { return; }
+          setObjectFree(made, true);
+          made.style.width = drawn.w + 'mm';
+          made.style.height = drawn.h + 'mm';
+        });
+        this.placeAtPendingDrop(made);
       },
       addBox(variant) {
         this.run(() => (variant === 'note' ? insertNote() : insertBox(variant)));
@@ -12820,6 +20389,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.webBusy = true;
         try {
           const got = await api('fetch?url=' + encodeURIComponent(/^https?:/i.test(url) ? url : 'https://' + url));
+          this.noteEncoding(got.encoding, false);
           this.webOpen = false;
           this.webUrl = '';
           const c = canvas();
@@ -12837,6 +20407,7 @@ ${insideObjects('.eb-paper.boxed')} {
             this.settleFrame();
           }
           this.askAboutForeign(out.foreign);
+          this.bringInPictures('');
         } catch (e) {
           this.notify(this.t('Could not read that page: {msg}', { msg: e.message }));
         } finally { this.webBusy = false; }
@@ -12873,7 +20444,7 @@ ${insideObjects('.eb-paper.boxed')} {
       async openFonts(role) {
         // Choosing from the list puts the canvas out of focus, so where the text was
         // has to be remembered before the dialogue takes over.
-        if (role === 'selection') { ctxRange = getRange() ? getRange().cloneRange() : null; }
+        if (role === 'selection') { keepRange(getRange()); }
         this.fontRole = role;
         this.fontsOpen = true;
         this.menu = '';
@@ -12897,9 +20468,9 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       chooseFont(family) {
         if (this.fontRole === 'selection') {
-          if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+          if (ctxRange || ctxKeep) { restoreKept(); }
           this.setFamily(family);
-          ctxRange = getRange() ? getRange().cloneRange() : ctxRange;
+          if (getRange()) { keepRange(getRange()); }
           return;
         }
         this.doc.paper.fonts[this.fontRole] = family;
@@ -12982,6 +20553,18 @@ ${insideObjects('.eb-paper.boxed')} {
           document.head.appendChild(tag);
         }
         tag.textContent = this.doc.id ? pageRule(paper, runAbout(this.doc)) : '';
+        this.applyLayerRules();
+      },
+      /** レイヤーの目（隠す）と鍵（固定）を、編集画面に効かせる。 */
+      applyLayerRules() {
+        const paper = normalisePaper(this.doc.paper);
+        let tag = document.getElementById('eb-layer-rules');
+        if (!tag) {
+          tag = document.createElement('style');
+          tag.id = 'eb-layer-rules';
+          document.head.appendChild(tag);
+        }
+        tag.textContent = this.doc.id ? layerRules(paper) : '';
       },
       applyDocFonts() {
         const f = resolveFonts(normalisePaper(this.doc.paper), this.doc.lang);
@@ -13022,14 +20605,42 @@ ${insideObjects('.eb-paper.boxed')} {
         linkStylesheet('eb-font-preview', fontsUrl(names, text.slice(0, 1200)));
       },
 
-      toggleMenu(key) { this.menu = this.menu === key ? '' : key; },
+      toggleMenu(key) {
+        this.menu = this.menu === key ? '' : key;
+        // 書体の一覧には、この文書で使っている書体（「別の書体…」で探したものも）を並べる
+        // （オーナー 2026-09-22）。役割の三つ（本文・見出し・等幅）と重なるものは除く。
+        if (this.menu === 'font') {
+          const c = canvas();
+          const roles = Object.values(this.fontsInUse || {});
+          this.usedFonts = familiesInBody(c ? c.innerHTML : '')
+            .concat(stylesFamilies(this.doc.styles))
+            .filter((f, i, all) => f && all.indexOf(f) === i && roles.indexOf(f) < 0);
+        }
+      },
       /** The toolbar's size box: the selection, or the block the caret is in. */
       setSize(pt) {
-        takeHeldRange();
-        if (pt === '' || pt == null) { this.run(() => styleTextOrBlock('fontSize', '')); return; }
+        if (pt === '' || pt == null) {
+          const o = this.objectText();
+          this.textRun(() => (o ? styleObjectBlocks(o, 'fontSize', '') : styleTextOrBlock('fontSize', '')));
+          return;
+        }
         const v = Number(pt);
         if (!(v >= 4 && v <= 200)) { this.refreshState(); return; }
-        this.run(() => styleTextOrBlock('fontSize', (Math.round(v * 2) / 2) + 'pt'));
+        const val = (Math.round(v * 2) / 2) + 'pt';
+        const obj = this.objectText();
+        if (obj) { this.textRun(() => styleObjectBlocks(obj, 'fontSize', val)); return; }
+        this.textRun(() => styleTextOrBlock('fontSize', val));
+      },
+      /**
+       * The size box: a number is the new size; a box left empty is not an
+       * order to take the size away -- that is "As the paragraph style says" in
+       * the list -- so it gets back the size the words have, as LibreOffice's
+       * box does. Emptied to type a new number and then left, it took the size
+       * off the words (BUGS #242).
+       */
+      sizeBox(el) {
+        if (String(el.value).trim() === '') { el.value = this.fmt.size; return; }
+        this.setSize(el.value);
       },
       stepSize(d) {
         const now = this.fmt.size || normalisePaper(this.doc.paper).fontSize;
@@ -13037,12 +20648,13 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       /** The toolbar's typeface box, on the same terms. */
       setFamily(family) {
-        takeHeldRange();
-        this.run(() => styleTextOrBlock('fontFamily', family ? fontStack(family, 'sans') : ''));
+        const val = family ? fontStack(family, 'sans') : '';
+        const obj = this.objectText();
+        this.textRun(() => (obj ? styleObjectBlocks(obj, 'fontFamily', val) : styleTextOrBlock('fontFamily', val)));
         this.applyDocFonts();
       },
       stepZoom(d) { this.zoomSetByHand = true; this.zoom = Math.min(200, Math.max(25, this.zoom + d)); },
-      clearHighlight() { this.run(() => clearMarks()); },
+      clearHighlight() { this.textRun(() => clearMarks()); },
       // ---- the other apps on this server ----
       async loadSources() {
         try {
@@ -13086,7 +20698,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** Notes has its own API on this same session; no server-side bridge needed. */
       async loadNotes() {
         const url = (window.OC && OC.generateUrl) ? OC.generateUrl('/apps/notes/api/v1/notes') : '/apps/notes/api/v1/notes';
-        const res = await fetch(url, { credentials: 'same-origin', headers: { requesttoken: TOKEN } });
+        const res = await fetch(url, { credentials: 'same-origin', headers: { requesttoken: requestToken() } });
         if (!res.ok) { throw new Error('HTTP ' + res.status); }
         const body = await res.json();
         const list = Array.isArray(body) ? body : (body && Array.isArray(body.notesData) ? body.notesData : []);
@@ -13237,8 +20849,18 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       insertNote(note) {
         this.sourceOpen = false;
-        const html = markdownToHtml(note.content || '');
-        this.run(() => insertHtmlBlock('<h2>' + String(note.title || '').replace(/</g, '&lt;') + '</h2>' + html));
+        const content = String(note.content || '');
+        const html = markdownToHtml(content);
+        // ノートは本文の1行目に「# タイトル」を持っていることが多い。それに
+        // 重ねてタイトルを見出しとして足すと、同じ見出しが二つ並ぶ ―― 実測で
+        // 「会議メモ」が H2 と H1 の二回入っていた。本文の最初の見出しがタイトルと
+        // 同じなら、足さない。
+        const title = String(note.title || '').trim();
+        const first = content.split(/\r?\n/).find((line) => line.trim() !== '') || '';
+        const heading = first.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+        const has = !!(heading && heading[1].trim() === title);
+        const head = (title && !has) ? '<h2>' + title.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</h2>' : '';
+        this.run(() => insertHtmlBlock(head + html));
       },
       /** Put a merge field at the caret, e.g. {{name}}. */
       insertField(key) {
@@ -13260,7 +20882,8 @@ ${insideObjects('.eb-paper.boxed')} {
       openMerge(source) {
         this.sourceOpen = false;
         this.merge.source = source;
-        this.merge.keys = placeholdersIn(this.exportBody());
+        const runs = ['header', 'footer'].map((w) => ['l', 'c', 'r'].map((k) => ((this.doc.paper[w] || {})[k] || '')).join(' ')).join(' ');
+        this.merge.keys = placeholdersIn(this.exportBody() + ' ' + runs);
         this.merge.count = source === 'contacts' ? (this.src.items || []).length : (this.src.records || []).length;
         this.merge.separate = false;
         this.mergeOpen = true;
@@ -13278,6 +20901,18 @@ ${insideObjects('.eb-paper.boxed')} {
         try {
           const body = this.exportBody();
           const title = this.doc.title || this.t('Untitled document');
+          // 出来た文書も、元の文書のスタイル・独自の CSS・説明を持つ。紙の設定しか
+          // 渡していなかったので、見出しの色や本文の大きさが落ちた（BUGS #227）。
+          const same = { styles: this.doc.styles, css: this.doc.css, lang: this.doc.lang, head: this.doc.head, script: !!this.doc.useScript };
+          // ヘッダー・フッターの欄も、1通ずつの文書では埋める。
+          const paperFor = (values) => {
+            const paper = JSON.parse(JSON.stringify(this.doc.paper));
+            ['header', 'footer'].forEach((w) => {
+              if (!paper[w]) { return; }
+              ['l', 'c', 'r'].forEach((k) => { if (paper[w][k]) { paper[w][k] = fillPlainPlaceholders(paper[w][k], values); } });
+            });
+            return paper;
+          };
           if (this.merge.separate) {
             for (const row of rows) {
               const values = this.mergeValuesFor(row);
@@ -13286,16 +20921,16 @@ ${insideObjects('.eb-paper.boxed')} {
                 method: 'POST',
                 body: {
                   name: title + ' — ' + name,
-                  content: buildHtml({ title: title + ' — ' + name, paper: this.doc.paper, lang: this.doc.lang, body: fillPlaceholders(body, values) }),
+                  content: buildHtml(Object.assign({}, same, { title: title + ' — ' + name, paper: paperFor(values), body: fillPlaceholders(body, values) })),
                 },
               });
             }
           } else {
-            const parts = rows.map((row, i) => (i ? '<div class="eb-pagebreak"></div>' : '') + fillPlaceholders(body, this.mergeValuesFor(row)));
+            const parts = rows.map((row) => fillPlaceholders(body, this.mergeValuesFor(row)));
             const name = title + ' — ' + this.t('merged');
             await api('documents', {
               method: 'POST',
-              body: { name, content: buildHtml({ title: name, paper: this.doc.paper, lang: this.doc.lang, body: parts.join('\n') }) },
+              body: { name, content: buildHtml(Object.assign({}, same, { title: name, paper: this.doc.paper, body: mergeParts(parts) })) },
             });
           }
           this.mergeOpen = false;
@@ -13319,50 +20954,174 @@ ${insideObjects('.eb-paper.boxed')} {
         });
       },
       closeFind() {
+        const held = heldFindHit();
+        markFindHit(null);
         this.find.open = false;
         this.find.hits = [];
         canvas().focus();
+        // Back in the text with the word found chosen, as LibreOffice leaves it.
+        if (held) { try { selectRange(held); } catch (e) { /* the text moved on */ } }
       },
       runFind(keepIndex) {
         const r = findAll(this.find.query, this.find.caseSensitive);
         this.find.hits = r.hits;
         this._findChunks = r.chunks;
-        if (!r.hits.length) { this.find.index = 0; return; }
+        if (!r.hits.length) { this.find.index = 0; markFindHit(null); return; }
         this.find.index = keepIndex ? Math.min(this.find.index, r.hits.length - 1) : 0;
-        selectHit(r.chunks, r.hits[this.find.index]);
+        selectHit(r.chunks, r.hits[this.find.index], inFindBar());
       },
       findNext(dir) {
         if (!this.find.hits.length) { return; }
         const n = this.find.hits.length;
         this.find.index = (this.find.index + dir + n) % n;
-        selectHit(this._findChunks, this.find.hits[this.find.index]);
+        selectHit(this._findChunks, this.find.hits[this.find.index], inFindBar());
       },
+      /**
+       * Replace what is chosen if it is what is being looked for, then go on to the
+       * next -- as LibreOffice does. The occurrences found earlier are not trusted:
+       * the text may have been changed since, or another document opened, and the
+       * old offsets then replaced whatever letters had moved into their place
+       * (BUGS E2: 「ねこ好き：」 became 「虎こ好き虎」 and the 猫 stayed).
+       */
       replaceOne() {
-        if (!this.find.hits.length) { return; }
-        const hit = this.find.hits[this.find.index];
+        if (!this.find.query) { return; }
+        const fresh = findAll(this.find.query, this.find.caseSensitive);
+        // From the find bar, what is replaced is the occurrence it has marked; the
+        // selection in the page went when the focus came to the bar (BUGS #233).
+        const bar = inFindBar() ? document.activeElement : null;
+        const r = (bar && heldFindHit()) || getRange() || heldFindHit();
+        let hit = null;
+        if (r && !r.collapsed) {
+          const from = offsetIn(fresh.chunks, r.startContainer, r.startOffset);
+          const to = offsetIn(fresh.chunks, r.endContainer, r.endOffset);
+          hit = fresh.hits.find((h) => h[0] === from && h[1] === to) || null;
+        }
+        if (!hit) { this.runFind(true); return; }
         history.push(true);
-        replaceRange(this._findChunks, hit, this.find.replace);
+        replaceRange(fresh.chunks, hit, this.find.replace, !!this.review);
         normaliseCanvas(this.t('Page break'), this.t('Caption'));
         this.touch();
         this.recount();
+        // Replacing puts the selection in the page, and the focus with it: the
+        // writer goes on from the find bar, so the focus goes back there.
+        if (bar && bar.isConnected) { bar.focus(); }
         this.runFind(true);
       },
       replaceAll() {
-        if (!this.find.hits.length) { return; }
+        if (!this.find.query) { return; }
+        // What is there now, not what was there when the search was typed (E2).
+        this.find.hits = findAll(this.find.query, this.find.caseSensitive).hits;
+        if (!this.find.hits.length) { this.runFind(); return; }
+        const bar = inFindBar() ? document.activeElement : null;
         history.push(true);
         // Backwards, so the offsets of the occurrences still to come stay valid —
         // a replacement only ever shifts the text after it. The node map has to be
         // rebuilt each time even so, because the nodes themselves have changed.
         const hits = this.find.hits.slice().reverse();
         hits.forEach((hit) => {
-          replaceRange(textMap().chunks, hit, this.find.replace);
+          replaceRange(textMap(true).chunks, hit, this.find.replace, !!this.review);
         });
         normaliseCanvas(this.t('Page break'), this.t('Caption'));
         this.touch();
         this.recount();
         const done = hits.length;
+        if (bar && bar.isConnected) { bar.focus(); }
         this.runFind();
         this.notify(this.t('{n} replaced', { n: done }));
+      },
+
+      /**
+       * What the writer needs to know about how a file's text was read -- and only
+       * that. UTF-8 read as what it said it was needs no word at all.
+       *
+       * A declaration that contradicts the bytes is said out loud: the file claimed
+       * one thing and was another, and the writer may want to fix it at the source.
+       * Text that was not UTF-8 is named, and for a document it is said that saving
+       * will write it in UTF-8 -- the file on disk will change, though its words do
+       * not. Characters that could not be read at all are said to be there, as �.
+       */
+      noteEncoding(enc, isDocument) {
+        const said = this.encodingText(enc, isDocument);
+        // Two sentences about a file's writing cannot be read in the two and a half
+        // seconds an ordinary notice stays up.
+        if (said) { this.notify(said, 9000); }
+      },
+      encodingText(enc, isDocument) {
+        if (!enc || !enc.read) { return ''; }
+        const names = {
+          'CP932': 'Shift_JIS', 'eucJP-win': 'EUC-JP', 'ISO-2022-JP': 'ISO-2022-JP (JIS)',
+          'Windows-1252': 'Windows-1252', 'UTF-16LE': 'UTF-16', 'UTF-16BE': 'UTF-16',
+          'UTF-32LE': 'UTF-32', 'UTF-32BE': 'UTF-32', 'UTF-8': 'UTF-8',
+        };
+        const name = (e) => names[e] || e;
+        const said = [];
+        if (enc.mismatch && enc.declared) {
+          said.push(this.t('It said it was {declared}, but it is written in {read}, and was read as {read}.',
+            { declared: name(enc.declared), read: name(enc.read) }));
+        } else if (enc.read !== 'UTF-8') {
+          said.push(this.t('It was read as {read}.', { read: name(enc.read) }));
+        }
+        if (isDocument && enc.read !== 'UTF-8') {
+          said.push(this.t('Saving it writes it in UTF-8; the words stay the same.'));
+        }
+        if (enc.lossy) {
+          said.push(this.t('Some characters could not be read and are shown as �.'));
+        }
+        return said.join(' ');
+      },
+
+      // ---- a document made from a Markdown file ----
+      /** The file picker, asked for a Markdown file to make a document of. */
+      openMarkdownPicker() {
+        if (this.narrow) { this.sideOpen = false; }
+        this.picker.mode = 'markdown';
+        this.pickerOpen = true;
+        this.picker.selected = null;
+        this.pickerLoad('');
+      },
+      async markdownConfirm(x) {
+        const chosen = x && !x.is_dir ? x : this.picker.selected;
+        if (!chosen || !chosen.is_markdown || this.picker.busy) { return; }
+        this.picker.busy = true;
+        try {
+          await this.newDocFromMarkdown(chosen);
+          this.pickerOpen = false;
+        } catch (e) {
+          this.notify(this.t('Could not make the document: {msg}', { msg: e.message }));
+        } finally { this.picker.busy = false; }
+      },
+      /**
+       * A new document from a Markdown file. The file is only read: the document is
+       * a new file in the save folder, and the Markdown stays exactly as it was.
+       *
+       * The title is the first heading if the file starts with one, and the file's
+       * own name otherwise -- the same thing a reader of the Markdown would call it.
+       */
+      async newDocFromMarkdown(file) {
+        const r = await api('files/' + file.id + '/markdown');
+        const md = String(r.content || '');
+        // Said together with "made", or "made" would cover it up a moment later.
+        const readAs = this.encodingText(r.encoding, false);
+        const stem = String(r.name || file.name || '').replace(/\.(md|markdown|mdown|mkd)$/i, '');
+        const first = md.split(/\r?\n/).find((line) => line.trim() !== '') || '';
+        const heading = first.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+        const title = (heading ? heading[1] : stem).trim() || this.t('Untitled document');
+        const holder = document.createElement('div');
+        holder.innerHTML = markdownToHtml(md);
+        sanitiseInto(holder);
+        const body = holder.innerHTML.trim() || '<p><br></p>';
+        const paper = normalisePaper(this.defaultPaper);
+        const drawer = this.docGroups.find((g) => g.key === this.openCat);
+        const theirs = drawer && drawer.theirs ? drawer.folderId : 0;
+        const where = drawer && !drawer.theirs ? drawer.key : '';
+        const created = await api('documents', {
+          method: 'POST',
+          body: { name: stem || title, folder: where, folderId: theirs, content: buildHtml({ title, paper, body, lang: this.docLang() }) },
+        });
+        await this.loadDocs();
+        await this.openDoc(created.id);
+        const made = this.t('Made {name} from {file}', { name: created.name, file: r.name || file.name });
+        this.notify(readAs ? made + ' ' + readAs : made, readAs ? 9000 : undefined);
       },
 
       // ---- pictures ----
@@ -13377,6 +21136,52 @@ ${insideObjects('.eb-paper.boxed')} {
        * canvas. It is not thrown away without asking: the writer decides whether
        * to keep it as an inline frame, knowing what that costs.
        */
+      /**
+       * What a greyed row in the list says when the pointer rests on it: that the
+       * file was not made by EditBase (or was changed outside it), what it holds
+       * that EditBase does not handle, and what opening it will do.
+       */
+      unsupportedNote(d) {
+        if (!d || !d.unsupported) { return ''; }
+        // Plain names, not <form>: the translation function cleans its result as
+        // HTML, and a "<form>" in it swallowed the rest of the sentence.
+        const tags = (d.unsupported.tags || []).join(', ');
+        return this.t('This file has tags EditBase does not handle: {tags}. Opening it asks first whether they may be removed, and saving it makes a new file under a new name.', { tags });
+      },
+      /** Ask whether the tags may be taken out. Resolves true to open, false not to. */
+      askStrip(name, report) {
+        return new Promise((resolve) => {
+          this.stripAsk = { open: true, name: name, items: this.stripItems(report), resolve: resolve };
+        });
+      },
+      stripAnswer(yes) {
+        const answer = this.stripAsk.resolve;
+        this.stripAsk = { open: false, name: '', items: [], resolve: null };
+        if (answer) { answer(!!yes); }
+      },
+      /** What would be taken out, in words a writer knows, with how many of each. */
+      stripItems(report) {
+        const tags = report.tags;
+        const sum = (keys) => keys.reduce((a, k) => a + (tags[k] || 0), 0);
+        const named = new Set(['script', 'style', 'form', 'input', 'button', 'select', 'textarea',
+          'iframe', 'object', 'embed', 'video', 'audio', 'canvas', 'svg', 'link', 'meta', 'base']);
+        const out = [];
+        const add = (count, label) => { if (count) { out.push(label + ' × ' + count); } };
+        add(sum(['script']) + report.handlers + report.jsLinks, this.t('Scripts (programs)'));
+        add(sum(['style']), this.t('Style sheets of its own'));
+        add(sum(['form']), this.t('Forms (the writing inside them is kept)'));
+        add(sum(['input', 'button', 'select', 'textarea']), this.t('Input fields and buttons'));
+        add(sum(['iframe', 'object', 'embed']), this.t('Embedded pages'));
+        add(sum(['video', 'audio']), this.t('Video and sound'));
+        add(sum(['canvas', 'svg']), this.t('Drawings (canvas, svg)'));
+        add(sum(['link', 'meta', 'base']), this.t('Links to other files'));
+        const other = Object.keys(tags).filter((k) => !named.has(k)).sort();
+        if (other.length) {
+          out.push(this.t('Tags EditBase does not handle (the writing inside them is kept): {tags}',
+            { tags: other.join(', ') }));
+        }
+        return out;
+      },
       askAboutForeign(list) {
         const items = (list || []).filter((f) => /^https:\/\//i.test(f.url || ''));
         if (!items.length) { return; }
@@ -13443,9 +21248,14 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       pickerClick(x) {
         if (x.is_dir) { this.pickerLoad(x.path); return; }
+        if (this.picker.mode === 'markdown') {
+          if (x.is_markdown) { this.picker.selected = x; }
+          return;
+        }
         if (x.is_image) { this.picker.selected = x; }
       },
       async pickerConfirm(x) {
+        if (this.picker.mode === 'markdown') { await this.markdownConfirm(x); return; }
         const chosen = x && !x.is_dir ? x : this.picker.selected;
         if (!chosen || !chosen.is_image || this.picker.busy) { return; }
         this.picker.busy = true;
@@ -13492,6 +21302,10 @@ ${insideObjects('.eb-paper.boxed')} {
        * chosen, so where it was dropped is remembered while the picker is open and
        * used the moment there is something to place.
        */
+      /** A newly placed object stands as the settings say: 標準配置 or 自由配置. */
+      newPlacement(el) {
+        if (el && el.setAttribute && this.settings.placement === 'free') { el.setAttribute('data-wrap', 'through'); }
+      },
       placeAtPendingDrop(el) {
         const at = this.pendingDrop;
         this.pendingDrop = null;
@@ -13499,6 +21313,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const put = () => {
           if (!el.parentNode) { return; }
           setObjectFree(el, true);
+          this.newPlacement(el);
           el.style.left = '0mm';
           el.style.top = '0mm';
           this.moveFreeTo(el, at.x, at.y);
@@ -13547,8 +21362,13 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!c) { return; }
         const found = [];
         const sheets = sheetsOnScreen().map((s) => s.getBoundingClientRect());
+        // 縦書きでは紙が横に並ぶ（右から左）。重なりは紙の並ぶ向きで見る。上下で
+        // 見ていたので、どの物も全部の紙に重なり、紙の真ん中にある物まで「紙の端を
+        // またいで切れて印刷される」と言っていた（BUGS #230）。
+        const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+        const meets = (r, s) => (tate ? (r.left < s.right - 0.5 && r.right > s.left + 0.5) : (r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5));
         const pageOf = (r) => {
-          const at = sheets.findIndex((s) => r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5);
+          const at = sheets.findIndex((s) => meets(r, s));
           return at < 0 ? 0 : at + 1;
         };
         const named = (el) => this.kindName(objectKind(el));
@@ -13556,7 +21376,7 @@ ${insideObjects('.eb-paper.boxed')} {
         Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((el) => {
           const r = el.getBoundingClientRect();
           if (!r.width || !r.height) { return; }
-          const on = sheets.filter((s) => r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5);
+          const on = sheets.filter((s) => meets(r, s));
           if (on.length !== 1) {
             found.push({ what: this.t('{name} is drawn across the edge of the paper and would print cut in two.', { name: named(el) }), el, page: pageOf(r) });
           }
@@ -13586,11 +21406,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // A frame holding more than it can show.
         Array.from(c.querySelectorAll('.eb-textbox, div.eb-frame')).forEach((el) => {
           if (isCont(el)) { return; }
-          const want = lengthPx(el.hasAttribute('data-frame-height') ? el.getAttribute('data-frame-height') : el.style.minHeight);
+          const want = lengthPx(wantOf(el) || flowMin(el));
           if (!want) { return; }
           const chain = chainOf(chainLead(el));
           const last = chain[chain.length - 1];
-          const room = fillLimit(last, last.offsetHeight);
+          const room = fillLimit(last, sizeAlong(last, isTate(last)));
           if (writtenBottom(last) > room + 2) {
             found.push({ what: this.t('{name} holds more writing than it can show.', { name: named(el) }), el, page: pageOf(el.getBoundingClientRect()) });
           }
@@ -13603,12 +21423,16 @@ ${insideObjects('.eb-paper.boxed')} {
           }
         });
         // A page with nothing written on it.
+        // 写真・図・数式・整形済みの字・引用・用語の一覧だけのページも、何か書いてある
+        // ページ（「何も書かれていません」と言っていた：BUGS #230）。
         sheets.forEach((s, i) => {
           let ink = 0;
-          c.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, figcaption').forEach((b) => {
-            if (!String(b.textContent || '').trim()) { return; }
+          c.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, figcaption, pre, blockquote, dt, dd, img, svg, math, hr, div.eb-shape').forEach((b) => {
+            if (ink) { return; }
+            const shown = /^(IMG|svg|SVG|MATH|math|HR)$/.test(b.nodeName) || (b.classList && b.classList.contains('eb-shape'));
+            if (!shown && !String(b.textContent || '').trim()) { return; }
             const r = b.getBoundingClientRect();
-            if (r.top < s.bottom - 0.5 && r.bottom > s.top + 0.5) { ink += 1; }
+            if (r.width && r.height && meets(r, s)) { ink += 1; }
           });
           if (!ink) { found.push({ what: this.t('Page {n} has nothing written on it.', { n: i + 1 }), el: null, page: i + 1 }); }
         });
@@ -13643,22 +21467,48 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       async restoreVersion(number) {
         if (!window.confirm(this.t('Put version #{n} back? What is in the document now is kept as a version of its own.', { n: String(number).padStart(2, '0') }))) { return; }
+        const id = this.vers.id;
+        const doc = this.doc;
+        // "What is in the document now" is what is on the screen, and the version
+        // the server keeps is of what is in the file. Unsaved changes used to be
+        // thrown away here, the question having said they would be kept
+        // (review D6). They go into the file first; if they cannot, nothing is
+        // put back.
+        if (id === doc.id && !(await this.saveNow())) {
+          this.notify(this.t('Could not put it back: {msg}', { msg: this.saveError || this.t('Unsaved changes') }), 9000);
+          return;
+        }
         try {
-          const back = await api('documents/' + this.vers.id + '/versions/restore', { method: 'POST', body: { number: number } });
+          const back = await api('documents/' + id + '/versions/restore', { method: 'POST', body: { number: number } });
           await this.reloadVersions();
           await this.loadDocs();
-          if (this.vers.id === this.doc.id && back.content) {
+          if (id === this.doc.id && this.doc === doc && back.content) {
             // The document that is open becomes the version that was put back.
-            const parsed = parseHtml(back.content);
+            const scriptState = await docScriptState(back.content);
+            const parsed = parseHtml(back.content, null, { ownScript: scriptState.ours });
             canvas().innerHTML = parsed.body || '<p><br></p>';
             this.doc.paper = parsed.paper;
             this.doc.styles = parsed.styles;
             this.doc.css = parsed.css;
+            // Everything the version says about itself comes back with it, as when
+            // it is opened: its title, its language, its description and whether it
+            // runs its program. Left as they were, the next save wrote the newer
+            // ones over the version that had just been put back (BUGS E28).
+            if (parsed.title) { this.doc.title = parsed.title; }
+            if (parsed.lang) { this.doc.lang = parsed.lang; }
+            this.doc.head = parsed.head || normaliseHead({});
+            this.doc.useScript = !!scriptState.ours;
             this.doc.etag = back.etag || '';
             normaliseCanvas(this.t('Page break'), this.t('Caption'));
             this.applyDocStyles();
             history.reset();
+            // 開いた時と同じく、紙の設定の「一つ前」もこの版から数え直す。古いままだと、
+            // 戻した後に紙の設定を一つ変えて Ctrl+Z すると、紙の設定だけが戻す前の
+            // 物になり、そのまま保存された（BUGS #226）。
+            this.prevSettings = history.state();
             this.dirty = false;
+            this.saveError = '';
+            this.mine = new Set();
             this.recount();
             this.$nextTick(() => this.repaginate(() => { this.refreshLayers(); this.refreshPreview(); }));
           }
@@ -13755,6 +21605,292 @@ ${insideObjects('.eb-paper.boxed')} {
           }
         }
       },
+      /**
+       * A column letter or a row number pressed (BUGS #292): the column or the row
+       * is chosen, as in Calc -- or, while a formula is being written in the bar,
+       * its range goes into the formula.
+       */
+      headPick(kind, h) {
+        const table = frameEl && frameEl.nodeName === 'TABLE' ? frameEl : null;
+        if (!table) { return; }
+        const grid = wholeGrid(table);
+        if (!grid.length) { return; }
+        let a; let b; let r0; let c0; let r1; let c1;
+        if (kind === 'col') { r0 = 0; r1 = grid.length - 1; c0 = c1 = h.c; }
+        else { r0 = r1 = h.n - 1; c0 = 0; c1 = Math.max(...grid.map((row) => row.length)) - 1; }
+        if (this.fx.editing && String(this.fx.text || '').charAt(0) === '=') {
+          this.fxPut(cellName(r0, c0) + ':' + cellName(r1, c1));
+          return;
+        }
+        a = grid[r0] && grid[r0][c0];
+        b = grid[r1] && grid[r1][c1];
+        if (!a || !b) { return; }
+        const c = canvas();
+        if (c && document.activeElement !== c) { c.focus({ preventScroll: true }); }
+        try {
+          const rg = document.createRange();
+          rg.setStart(a, 0);
+          rg.setEnd(b, b.childNodes.length);
+          selectRange(rg);
+        } catch (e) { /* the table moved on */ }
+        this.refreshState();
+      },
+      /** Draw the tint over the chosen cells, in the paper's own coordinates. */
+      drawCellSel() {
+        const cells = cellSelCells();
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!cells.length || !wrap) { this.csel.rects = []; return; }
+        const z = this.frameZoom() || 1;
+        const b = wrap.getBoundingClientRect();
+        this.csel.rects = cells.map((cell) => { const r = cell.getBoundingClientRect(); return { x: (r.left - b.left) / z, y: (r.top - b.top) / z, w: r.width / z, h: r.height / z }; });
+      },
+      clearCellSel() {
+        if (!cellSel && !this.csel.rects.length) { return; }
+        cellSel = null;
+        this.csel.rects = [];
+      },
+      /**
+       * The mouse pressed in a cell and taken into another: from then on the cells
+       * between are chosen as a block, as in Calc and Writer (BUGS #293).
+       */
+      cellDragStart(e) {
+        this.clearCellSel();
+        if (e.button !== 0 || e.shiftKey) { return; }
+        const start = cellAt(e.target);
+        if (!start) { return; }
+        const table = tableOf(start);
+        const move = (ev) => {
+          const under = document.elementFromPoint(ev.clientX, ev.clientY);
+          const cell = under ? cellAt(under) : null;
+          if (!cell || tableOf(cell) !== table) { return; }
+          if (cell === start && !cellSel) { return; }
+          const grid = wholeGrid(table);
+          const a = gridPos(grid, start); const b = gridPos(grid, cell);
+          if (!a || !b) { return; }
+          const box = (x) => { const bx = cellBox(grid, x); return bx || { r0: 0, r1: 0, c0: 0, c1: 0 }; };
+          const ba = box(start); const bb = box(cell);
+          cellSel = { table, r0: Math.min(ba.r0, bb.r0), c0: Math.min(ba.c0, bb.c0), r1: Math.max(ba.r1, bb.r1), c1: Math.max(ba.c1, bb.c1) };
+          // The browser's own selection runs from the first cell to the last, so the
+          // table commands (colour, rules, alignment in the cell) take the block too.
+          try {
+            const rg = document.createRange();
+            const cells = cellSelCells();
+            rg.setStart(cells[0], 0);
+            const last = cells[cells.length - 1];
+            rg.setEnd(last, last.childNodes.length);
+            selectRange(rg);
+          } catch (err) { /* the table moved on */ }
+          this.drawCellSel();
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move, true);
+          window.removeEventListener('pointerup', up, true);
+          if (cellSel) { this.refreshState(); }
+        };
+        window.addEventListener('pointermove', move, true);
+        window.addEventListener('pointerup', up, true);
+      },
+      /** A command on words, done in each chosen cell in turn, as one step to undo. */
+      cellsRun(fn) {
+        const cells = cellSelCells();
+        if (!cells.length) { return false; }
+        const c = canvas();
+        if (c && document.activeElement !== c) { c.focus({ preventScroll: true }); }
+        history.push(true);
+        const keep = history.push;
+        history.push = () => {};
+        try {
+          cells.forEach((cell) => {
+            if (!cell.isConnected) { return; }
+            if (!String(cell.textContent || '').trim()) { return; }
+            try {
+              const rg = document.createRange();
+              rg.selectNodeContents(cell);
+              selectRange(rg);
+              fn();
+            } catch (err) { /* this cell would not take it */ }
+          });
+        } finally {
+          history.push = keep;
+        }
+        try {
+          const all = cellSelCells();
+          const rg = document.createRange();
+          rg.setStart(all[0], 0);
+          const last = all[all.length - 1];
+          rg.setEnd(last, last.childNodes.length);
+          selectRange(rg);
+        } catch (err) { /* moved on */ }
+        this.touch();
+        this.refreshState();
+        this.$nextTick(() => this.drawCellSel());
+        return true;
+      },
+      /** The formula bar follows the cell the caret is in, unless it is being written in. */
+      fxFollow() {
+        if (this.fx.editing) { return; }
+        const cell = cellAt();
+        if (!cell) { fxBarCell = null; this.fx.name = ''; this.fx.text = ''; return; }
+        fxBarCell = cell;
+        this.fx.name = cellNameOf(cell);
+        this.fx.text = cellFormula(cell) || cellRaw(cell) || String(cell.textContent || '').trim();
+      },
+      fxFocus() {
+        if (!fxBarCell || !fxBarCell.isConnected) { this.fxFollow(); }
+        this.fx.editing = !!fxBarCell;
+      },
+      fxBlur() {
+        // Clicking a cell to put its name in the formula takes the focus away for a
+        // moment; the click brings it back (fxPick). Leaving the bar otherwise
+        // keeps what was written, as Calc does.
+        setTimeout(() => {
+          if (fxPicking || document.activeElement === this.$refs.fxInput) { return; }
+          if (this.fx.editing) { this.fxCommit(); }
+        }, 0);
+      },
+      /** What was written in the bar goes into the cell: a formula, or a value. */
+      fxCommit() {
+        const cell = fxBarCell && fxBarCell.isConnected ? fxBarCell : null;
+        this.fx.editing = false;
+        this.menu = this.menu === 'fx' ? '' : this.menu;
+        if (!cell) { return; }
+        const text = String(this.fx.text || '').trim();
+        const was = cellFormula(cell) || cellRaw(cell) || String(cell.textContent || '').trim();
+        if (text !== was) {
+          history.push(true);
+          const formula = text.charAt(0) === '=' && text.length > 1;
+          const raw = !formula && cellNumFmt(cell) && typeof window.EditBaseCalc.literal(text) === 'number';
+          if (formula) { cell.setAttribute(FORMULA_ATTR, text); cell.removeAttribute(RAW_ATTR); }
+          else { cell.removeAttribute(FORMULA_ATTR); if (raw) { cell.setAttribute(RAW_ATTR, text); } else { cell.removeAttribute(RAW_ATTR); } }
+          if (cell === fxCell && (formula || raw)) { cell.setAttribute('data-eb-fxedit', 'on'); cell.textContent = text; }
+          else { cell.removeAttribute('data-eb-fxedit'); cell.textContent = text; }
+          if (!cell.classList.length) { cell.removeAttribute('class'); }
+          recalcTable(tableOf(cell), cell === fxCell ? cell : null);
+          this.touch();
+        }
+        // Back to the cell, as Enter in Calc's formula bar does.
+        const c = canvas();
+        if (c) { c.focus({ preventScroll: true }); }
+        try { const at = document.createRange(); at.selectNodeContents(cell); at.collapse(false); selectRange(at); } catch (e) { /* the cell moved on */ }
+        this.fxFollow();
+      },
+      fxCancel() {
+        this.fx.editing = false;
+        if (this.menu === 'fx') { this.menu = ''; }
+        const cell = fxBarCell && fxBarCell.isConnected ? fxBarCell : null;
+        const c = canvas();
+        if (c) { c.focus({ preventScroll: true }); }
+        if (cell) { try { const at = document.createRange(); at.selectNodeContents(cell); at.collapse(false); selectRange(at); } catch (e) { /* moved on */ } }
+        this.fxFollow();
+      },
+      /** Put text into the bar where its caret is (a function, a cell's name). */
+      fxPut(text, back) {
+        const input = this.$refs.fxInput;
+        if (!input) { return; }
+        if (!this.fx.editing) { input.focus(); this.fxFocus(); }
+        let v = String(this.fx.text || '');
+        if (v.charAt(0) !== '=') { v = '=' + v.replace(/^\s+/, ''); }
+        const at = input.selectionStart != null && document.activeElement === input ? input.selectionStart : v.length;
+        const end = input.selectionEnd != null && document.activeElement === input ? input.selectionEnd : at;
+        const from = Math.max(1, at);
+        this.fx.text = v.slice(0, from) + text + v.slice(Math.max(from, end));
+        this.$nextTick(() => {
+          input.focus();
+          const p = from + text.length - (back || 0);
+          try { input.setSelectionRange(p, p); } catch (e) { /* not a text box any more */ }
+        });
+      },
+      fxInsertFunction(name) {
+        this.menu = '';
+        this.fxPut(name + '()', 1);
+      },
+      /** Σ: the sum of the numbers above the cell, or to the left of it when there are none above. */
+      fxSum() {
+        const cell = fxBarCell && fxBarCell.isConnected ? fxBarCell : cellAt();
+        if (!cell) { return; }
+        const grid = wholeGrid(tableOf(cell));
+        let r0 = -1; let c0 = -1;
+        grid.forEach((row, r) => { const c = row.indexOf(cell); if (c >= 0 && r0 < 0) { r0 = r; c0 = c; } });
+        if (r0 < 0) { return; }
+        const isNum = (x) => x && x !== cell && (cellFormula(x) || typeof window.EditBaseCalc.literal(String(x.textContent || '')) === 'number');
+        let top = r0;
+        while (top > 0 && isNum(grid[top - 1][c0])) { top--; }
+        let ref = '';
+        if (top < r0) { ref = cellName(top, c0) + ':' + cellName(r0 - 1, c0); } else {
+          let left = c0;
+          while (left > 0 && isNum(grid[r0][left - 1])) { left--; }
+          if (left < c0) { ref = cellName(r0, left) + ':' + cellName(r0, c0 - 1); }
+        }
+        fxBarCell = cell;
+        this.fx.name = cellNameOf(cell);
+        this.fx.text = '=SUM(' + ref + ')';
+        this.fx.editing = true;
+        this.$nextTick(() => { const i = this.$refs.fxInput; if (i) { i.focus(); const p = ref ? this.fx.text.length : 5; i.setSelectionRange(p, p); } });
+      },
+      /**
+       * A cell pressed on while a formula is being written in the bar: its name goes
+       * into the formula, and a drag across cells puts in the range (Calc does the same).
+       */
+      fxPick(e) {
+        if (!this.fx.editing || !fxBarCell || String(this.fx.text || '').charAt(0) !== '=') { return false; }
+        const cell = cellAt(e.target);
+        if (!cell || tableOf(cell) !== tableOf(fxBarCell)) { return false; }
+        e.preventDefault();
+        fxPicking = true;
+        const first = cellNameOf(cell);
+        const input = this.$refs.fxInput;
+        const at = input && input.selectionStart != null ? input.selectionStart : String(this.fx.text).length;
+        const before = String(this.fx.text);
+        const put = (name) => {
+          this.fx.text = before.slice(0, at) + name + before.slice(at);
+          this.$nextTick(() => { if (input) { input.focus(); const p = at + name.length; try { input.setSelectionRange(p, p); } catch (err) { /* gone */ } } });
+        };
+        put(first);
+        const up = (ev) => {
+          window.removeEventListener('pointerup', up, true);
+          const under = document.elementFromPoint(ev.clientX, ev.clientY);
+          const last = under ? cellAt(under) : null;
+          if (last && last !== cell && tableOf(last) === tableOf(fxBarCell)) { put(first + ':' + cellNameOf(last)); }
+          setTimeout(() => { fxPicking = false; }, 0);
+        };
+        window.addEventListener('pointerup', up, true);
+        return true;
+      },
+      /**
+       * The caret moving between cells: the cell left is worked out (a "=…" in it
+       * becomes its formula), the formula cell entered shows its formula (BUGS #289).
+       */
+      followFormulaCell(r) {
+        const cell = r && inCanvas(r.startContainer) ? cellAt(r.startContainer) : null;
+        if (cell === fxCell) { return; }
+        const left = fxCell && fxCell.isConnected ? fxCell : null;
+        fxCell = cell;
+        let table = null;
+        if (left) {
+          const text = String(left.textContent || '').trim();
+          if (cellCalculated(left) || cellNumFmt(left) || (text.charAt(0) === '=' && text.length > 1)) { table = commitFormulaCell(left); }
+        }
+        const entering = cell ? tableOf(cell) : null;
+        if (table && tableHasFormulas(table)) { recalcTable(table, entering === table && cellCalculated(cell) ? cell : null); }
+        if (cell && openFormulaCell(cell)) {
+          try {
+            const at = document.createRange();
+            at.selectNodeContents(cell);
+            at.collapse(false);
+            selectRange(at);
+          } catch (e) { /* the cell moved on */ }
+        }
+      },
+      /** Words typed in a table with formulas: work it out again a moment later. */
+      calcSoon() {
+        const cell = cellAt();
+        const table = cell ? tableOf(cell) : null;
+        if (!table || !tableHasFormulas(table)) { return; }
+        clearTimeout(this._calcTimer);
+        this._calcTimer = setTimeout(() => {
+          if (table.isConnected && recalcTable(table, fxCell)) { this.touch(); }
+        }, 250);
+      },
       tableCmd(kind, arg) {
         const ops = {
           fill: () => setCellFill(arg),
@@ -13764,8 +21900,31 @@ ${insideObjects('.eb-paper.boxed')} {
           rowDel: () => deleteRow(), colDel: () => deleteColumn(),
           header: () => toggleHeaderRow(), variant: () => setTableVariant(arg),
           delete: () => deleteTable(),
+          fitRows: () => fitRowHeights(tableOf(cellAt())),
+          fitCols: () => fitColumnWidths(tableOf(cellAt())),
         };
-        if (ops[kind]) { this.run(ops[kind]); }
+        if (!ops[kind]) { return; }
+        // ページの境目で分かれた表は、操作の前に一つに戻す（あとでページ割りが
+        // また分ける）。戻さずにいたので、「表を削除」は押した側の一切れしか消さず、
+        // 列の追加・削除も一切れにしか効かなかった（2026-09-22 点検で発見）。
+        const c = canvas();
+        const cell = cellAt();
+        if (c && cell && tableOf(cell)) {
+          // 字数では戻せない（一つに戻すとき、各切れの頭に繰り返していた見出し行が
+          // 取り除かれて字数がずれる）。押していたセルと、その中の位置を覚えて戻す。
+          const r0 = getRange();
+          const keep = r0 ? { node: r0.startContainer, at: r0.startOffset } : null;
+          if (joinFlowCuts(c)) {
+            try {
+              const r = document.createRange();
+              if (keep && c.contains(keep.node)) { r.setStart(keep.node, keep.at); } else if (c.contains(cell)) { r.setStart(cell, 0); }
+              r.collapse(true);
+              selectRange(r);
+            } catch (e) { /* the cell is gone */ }
+          }
+        }
+        this.run(ops[kind]);
+        this.$nextTick(() => this.repaginate());
       },
 
       // ---- the bounding box round an object -------------------------------------
@@ -13774,6 +21933,9 @@ ${insideObjects('.eb-paper.boxed')} {
       /** Which object the box is round, and where to draw it. */
       syncFrame() {
         const c = canvas();
+        // 文字を書く枠そのものが選ばれている間は、文字のカーソルを消す。どちらが
+        // 選ばれているか（枠か、中の文字か）を画面で見分けられるように（BUGS #45）。
+        this.frame.taken = !!(frameTaken && frameEl && writtenFrame(frameEl));
         if (!c || !this.doc.id) { this.frame.on = false; frameEl = null; this.markLayerBar(); return; }
         if (frameEl && !c.contains(frameEl)) { frameEl = null; framePinned = false; }
         // A click holds on to the object it landed on, so it stays selected while
@@ -13872,7 +22034,13 @@ ${insideObjects('.eb-paper.boxed')} {
         // caret in the writing rather than pick the box up. Grabbing an eight
         // pixel border was the only way to move a formula, and on a formula four
         // millimetres tall that is not a way at all.
+        // 字を書く枠（文字枠・まとめ枠・囲み記事・注）は、空でも全体を膜で覆わない。
+        // 覆うと一度選んだ空の文字枠にはカーソルを入れられず、マウスもずっと移動の
+        // 形になった（オーナー 2026-09-22、BUGS #58）。動かすのは縁でつかむ。
+        // 表も同じ。入れたばかりの表は空なので膜で覆われ、セルに字を入れられなかった
+        // （オーナー 2026-09-28、BUGS #278）。
         this.frame.solid = objectFree(el)
+          && !(el.matches && el.matches('.eb-textbox, div.eb-frame, aside.eb-box, div.eb-note, table'))
           && (/^(HR|FIGURE|IMG)$/.test(el.nodeName)
             || this.frame.kind === 'MATH'
             || !String(el.textContent || '').trim());
@@ -13884,9 +22052,25 @@ ${insideObjects('.eb-paper.boxed')} {
         // a horizontal offset lands outside the table and means nothing. Rather
         // than guess at the mapping, the grips stay away and the widths are set
         // from the properties instead.
-        this.frame.grips = el.nodeName === 'TABLE' && !this.tategaki
-          ? columnEdges(el).map((e) => ({ index: e.index, x: (e.right - b.left) / z }))
-          : [];
+        // Measured from the table itself: the grips are drawn inside the table's own
+        // box. Measured from the paper they stood the page margin to the right of
+        // every line between two columns (BUGS #153, 20mm in the cell).
+        //
+        // And drawn only where the line is: a line that a merged cell covers is not
+        // there in that row, and a grip drawn the table's full height over it took
+        // the click meant for the middle of the merged cell (LibreOffice has no
+        // border there to take hold of either).
+        this.frame.grips = el.nodeName === 'TABLE' && !this.tategaki ? gripSegments(el).map((g) => ({
+          index: g.index, key: g.index + '-' + g.n,
+          x: (g.x - a.left) / z + this.frame.padX / 2,
+          y: (g.top - a.top) / z + this.frame.padY / 2,
+          h: (g.bottom - g.top) / z,
+        })) : [];
+        const heads = el.nodeName === 'TABLE' && !this.tategaki ? tableHeadings(el) : null;
+        this.frame.heads = heads ? {
+          cols: heads.cols.map((h) => ({ c: h.c, name: h.name, x: (h.left - a.left) / z + this.frame.padX / 2, w: (h.right - h.left) / z })),
+          rows: heads.rows.map((h) => ({ n: h.n, y: (h.top - a.top) / z + this.frame.padY / 2, h: (h.bottom - h.top) / z })),
+        } : null;
         if (this.coarse) { this.frame.bar = true; }
         this.syncText();
         this.markLayerBar();
@@ -13987,14 +22171,34 @@ ${insideObjects('.eb-paper.boxed')} {
       /** A click on an object picks it up, including the ones a caret cannot enter. */
       onCanvasDown(e) {
         if (frameDrag) { return; }
+        if (this.fxPick(e)) { return; }
+        this.cellDragStart(e);
+        canvasPressedAt = window.performance ? window.performance.now() : 0;
+        if (e.button === 0) { ctxTookFrame = null; }
+        ctxPicture = null;
         // The hand is armed with something to put down: this press draws it.
         if (this.placing) { e.preventDefault(); this.placeStart(e); return; }
+        // 改ページの印を押すと、改ページが選ばれる（Delete / Backspace で消える）。
+        const pb = e.target && e.target.closest ? e.target.closest('.eb-pagebreak') : null;
+        if (pb && canvas().contains(pb) && e.button === 0) {
+          e.preventDefault();
+          this.clearFrame();
+          const c = canvas();
+          if (document.activeElement !== c) { c.focus(); }
+          const r = document.createRange();
+          r.setStartBefore(pb);
+          r.collapse(true);
+          selectRange(r);
+          pickBreak(pb);
+          return;
+        }
+        if (pickedBreak) { pickBreak(null); }
         // What was pressed on, and what stands on the paper under the pointer. The
         // second wins when it is inside the first or drawn above it: pressing a
         // picture inside a frame takes the picture, not the frame it sits in.
         const up = objectAt(e.target);
         const hit = placedAt(e.clientX, e.clientY);
-        const at = (hit && (!up || up === hit || up.contains(hit) || stackRank(hit) > stackRank(up)))
+        let at = (hit && (!up || up === hit || up.contains(hit) || stackRank(hit) > stackRank(up)))
           ? hit : (up || thinObjectNear(e.clientX, e.clientY));
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
@@ -14006,6 +22210,7 @@ ${insideObjects('.eb-paper.boxed')} {
           return;
         }
         if (!e.shiftKey) { frameMore = []; }
+        const wasHeld = !!at && frameEl === at;
         frameEl = at;
         // A rule or a picture never holds the caret, so the caret cannot keep it
         // selected either: remember that this one was chosen by hand.
@@ -14013,10 +22218,37 @@ ${insideObjects('.eb-paper.boxed')} {
         if (at) { this.frame.bar = true; }
         // One click picks the object up; a second one goes inside it to write.
         frameTaken = takesClick(at, e.target, e.clientX, e.clientY) && e.detail <= 1;
+        // 文字を書く枠の中の字の無い所を押したときは、手を離したあとカーソルを枠の中の
+        // いちばん近い字へ置く（枠の外や枠そのものに残さない）。
+        if (at && !frameTaken && writtenFrame(at) && !onText(at, e.clientX, e.clientY) && e.button === 0) {
+          const x = e.clientX, y = e.clientY;
+          const up = () => { document.removeEventListener('mouseup', up, true);
+            setTimeout(() => { if (frameEl === at && !frameTaken) { caretIntoFrameAt(at, x, y); this.refreshState(); } }, 0); };
+          document.addEventListener('mouseup', up, true);
+        }
         this.$nextTick(() => this.syncFrame());
+        // A picture or a shape with no writing in it moves with the first drag, as
+        // in LibreOffice: pressing it took hold of it, and only a second drag moved
+        // it (BUGS #156, PS P13). Writing frames are left alone -- a press in one is
+        // also how the caret goes into it -- and so is a table: a new one is empty,
+        // read as "nothing written in it", and was grabbed, so no cell could be
+        // typed into (owner, 2026-09-28).
+        const solid = at && objectFree(at)
+          && !(at.matches && at.matches('.eb-textbox, div.eb-frame, aside.eb-box, div.eb-note, table'))
+          && (/^(HR|FIGURE|IMG)$/.test(at.nodeName) || !String(at.textContent || '').trim());
+        if (solid && !wasHeld && e.button === 0 && !e.shiftKey && e.detail <= 1) {
+          e.preventDefault();
+          // Stopping the press also stopped the canvas taking the keyboard, and
+          // the keys after it went nowhere: a shape moved and then Ctrl+Z stayed
+          // where it had been moved to (全体の後退確認 audit9, 2026-09-28).
+          const c = canvas();
+          if (c && document.activeElement !== c && !c.contains(document.activeElement)) { c.focus({ preventScroll: true }); }
+          this.frameGrab(e, 'move');
+        }
       },
       clearFrame() {
         frameTaken = false;
+        this.frame.taken = false;
         frameMore = [];
         frameEl = null;
         framePinned = false;
@@ -14040,6 +22272,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frame.dragging = true;
         const props = objectProps(frameEl) || {};
         history.push(true);
+        if (mode === 'move') { this.releaseStrays(frameEl); }
         frameDrag = {
           mode,
           math: objectKind(frameEl) === 'MATH',
@@ -14048,11 +22281,46 @@ ${insideObjects('.eb-paper.boxed')} {
           x0: e.clientX, y0: e.clientY,
           w0: this.frame.w, h0: this.frame.h,
           left: Number(props.x) || 0, top: Number(props.y) || 0,
+          // 掴んだ時点の「進む向き」「横切る向き」のずれ。横書きでは top と
+          // left そのものだが、縦書きでは right と top になる。
+          flow0: parseFloat(frameEl.style.getPropertyValue(freeProp(frameEl))) || 0,
+          cross0: parseFloat(frameEl.style.getPropertyValue(crossProp(frameEl))) || 0,
           free: objectFree(frameEl),
           flt: frameEl.style.cssFloat || frameEl.style.float || '',
+          // 引く前にいたページ（紙の上に置いた物ごと）。手を離したとき、その一つ先まで置ける。
+          page0: (() => {
+            const g = pageGeometry();
+            const m = new Map();
+            if (!g) { return m; }
+            frameAll().forEach((o) => {
+              if (!objectFree(o)) { return; }
+              const drawn = topOnPaper(o) - g.mt;
+              m.set(o, Math.max(0, Math.floor((drawn + 0.5) / (g.usable + g.extra))));
+            });
+            return m;
+          })(),
           mt: Number(props.mt) || 0, ml: Number(props.ml) || 0, mr: Number(props.mr) || 0,
           moved: false, ref: null, after: false,
+          chain: null, total0: 0, last0: 0,
         };
+        // ページをまたいだ枠は、どのページの取っ手を引いても「枠全体の長さ」が
+        // 引いた分だけ変わる（オーナー 2026-09-21「案B」）。先頭のページの部分の
+        // 長さから計算していたので、2ページ目で下の取っ手を上へ引くと、枠が
+        // 逆に 189mm から 235mm へ伸びていた。
+        // 紙の上に置いた枠でも同じ（置いた枠の続きも、長さの取っ手で変えられる）。
+        if (chainable(frameEl)) {
+          const chain = chainOf(chainLead(frameEl));
+          if (chain.length > 1) {
+            const tate = isTate(frameEl);
+            frameDrag.chain = chain;
+            frameDrag.tate = tate;
+            frameDrag.total0 = chain.reduce((n, f) => n + sizeAlong(f, tate), 0) * MM;
+            frameDrag.last0 = sizeAlong(chain[chain.length - 1], tate) * MM;
+            // 最後の部分はそのページの下端まで。ページをまたいで空きだけの枠を
+            // 作ることはしない。ページいっぱいの長さは、前の部分の長さで分かる。
+            frameDrag.lastMax = Math.max.apply(null, chain.slice(0, -1).map((f) => sizeAlong(f, tate))) * MM;
+          }
+        }
         const move = (ev) => this.frameDragMove(ev);
         const up = (ev) => {
           window.removeEventListener('pointermove', move);
@@ -14102,7 +22370,12 @@ ${insideObjects('.eb-paper.boxed')} {
         const w = Math.max(6, Math.min(room - 6, widths[i] + dx));
         widths[i] = w;
         widths[i + 1] = room - w;
-        setColumnWidths(frameEl, widths);
+        // Every piece of a table the page foot has cut: the widths belong to the
+        // table. Written on the piece taken hold of only, a piece past the first
+        // lost them when the pieces were joined -- the column snapped back when
+        // the mouse was let go (BUGS E15).
+        const pieces = frameEl.nodeName === 'TABLE' ? cutPieces(frameEl).filter((t) => t && t.nodeName === 'TABLE') : [];
+        (pieces.length ? pieces : [frameEl]).forEach((t) => setColumnWidths(t, widths));
         this.syncFrame();
       },
       frameDragEndGuides() { this.frame.gx = null; this.frame.gy = null; },
@@ -14115,8 +22388,14 @@ ${insideObjects('.eb-paper.boxed')} {
         const s = frameEl.style;
         if (d.mode === 'move') {
           if (d.free) {
-            s.left = round1(d.left + dx) + 'mm';
-            s.top = round1(d.top + dy) + 'mm';
+            // 動かす先は「進む向き」と「紙を横切る向き」。横書きでは left と top
+            // そのものだが、縦書きでは right と top になり、右へ動かすことは
+            // right を減らすことになる。left に書いていたので、縦書きでは横へ
+            // まったく動かなかった（右20mmと頼んでも0mm）。
+            const tate = isTate(frameEl);
+            tidyFreeSides(frameEl);
+            s.setProperty(freeProp(frameEl), round1(d.flow0 + (tate ? -dx : dy)) + 'mm');
+            s.setProperty(crossProp(frameEl), round1(d.cross0 + (tate ? dy : dx)) + 'mm');
             this.snapFree(frameEl, e.altKey);
             this.keepOnPaper(frameEl);
             this.syncFrame();
@@ -14132,18 +22411,42 @@ ${insideObjects('.eb-paper.boxed')} {
           }
           return;
         }
+        let mode = d.mode;
+        if (d.chain) {
+          // 進む向きの取っ手（横書きは上下、縦書きは左右）が掴むのは枠全体の長さ。
+          // 伸ばした分・縮めた分は最後のページの部分に出す。中身より短くは
+          // ならない ―― 長さは「少なくともこれだけ」で、中身が多ければ枠が伸びる。
+          const along = d.tate
+            ? (mode.indexOf('w') >= 0 ? -dx : (mode.indexOf('e') >= 0 ? dx : 0))
+            : (mode.indexOf('s') >= 0 ? dy : (mode.indexOf('n') >= 0 ? -dy : 0));
+          if (along) {
+            const last = d.chain[d.chain.length - 1];
+            let piece = Math.max(5, Math.min(d.lastMax || Infinity, d.last0 + along));
+            setFlowMin(last, round1(piece) + 'mm');
+            // 伸び縮みする端（横書きは下、縦書きは左）も余白線などへ吸い付ける（BUGS #46）。
+            const g = this.snapEdges(last, d.tate ? 'w' : 's', e.altKey);
+            const more = g ? (d.tate ? -g.dx : g.dy) : 0;
+            if (more) {
+              piece = Math.max(5, Math.min(d.lastMax || Infinity, piece + more));
+              setFlowMin(last, round1(piece) + 'mm');
+            }
+            rememberWant(d.chain[0], round1(Math.max(5, d.total0 - d.last0 + piece)) + 'mm');
+          }
+          mode = mode.replace(d.tate ? /[ew]/g : /[ns]/g, '');
+          if (!mode) { this.syncFrame(); return; }
+        }
         const w0 = d.w0 * MM;
         const h0 = d.h0 * MM;
         let w = w0; let h = h0; let left = d.left; let top = d.top;
-        if (d.mode.indexOf('e') >= 0) { w = w0 + dx; }
-        if (d.mode.indexOf('w') >= 0) { w = w0 - dx; if (d.free) { left = d.left + dx; } }
-        if (d.mode.indexOf('s') >= 0) { h = h0 + dy; }
-        if (d.mode.indexOf('n') >= 0) { h = h0 - dy; if (d.free) { top = d.top + dy; } }
+        if (mode.indexOf('e') >= 0) { w = w0 + dx; }
+        if (mode.indexOf('w') >= 0) { w = w0 - dx; if (d.free) { left = d.left + dx; } }
+        if (mode.indexOf('s') >= 0) { h = h0 + dy; }
+        if (mode.indexOf('n') >= 0) { h = h0 - dy; if (d.free) { top = d.top + dy; } }
         // A formula is resized by being set larger or smaller, the way a formula
         // in any word processor is: giving its box a width moves nothing, because
         // nothing inside it wraps.
         if (d.math) {
-          const k = d.mode === 'n' || d.mode === 's' ? (h / h0) : (w / w0);
+          const k = mode === 'n' || mode === 's' ? (h / h0) : (w / w0);
           const size = Math.min(200, Math.max(4, d.size0 * (k > 0 ? k : 1) * 0.75));
           s.fontSize = round1(size) + 'pt';
           s.removeProperty('width');
@@ -14157,15 +22460,87 @@ ${insideObjects('.eb-paper.boxed')} {
         h = Math.max(5, h);
         // Nothing is made wider than the paper it is printed on.
         w = Math.min(w, sheet(normalisePaper(this.doc.paper)).w);
-        if (d.mode !== 'n' && d.mode !== 's') { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
+        if (mode !== 'n' && mode !== 's') { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
         // A picture keeps its proportions: its height follows its width.
-        if (d.mode !== 'e' && d.mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
+        if (mode !== 'e' && mode !== 'w' && frameEl.nodeName !== 'FIGURE') {
           if (frameEl.nodeName === 'HR') { s.height = round1(h) + 'mm'; }
           else if (!strokeShape(frameEl)) { s.minHeight = round1(h) + 'mm'; }
           declareFrameHeight(frameEl);
         }
         if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; this.keepOnPaper(frameEl); }
+        // 大きさを変えるときも、動かすときと同じ線（余白線・段の中央・ページの上下の
+        // 余白線・ほかの物の縁）に、動かしている辺を吸い付ける。Alt を押している間は
+        // 吸い付かない（動かすときと同じ）。オーナー 2026-09-22、BUGS #46。
+        const g = this.snapEdges(frameEl, mode, e.altKey);
+        if (g) {
+          if (g.dx && mode.indexOf('e') >= 0) { w += g.dx; }
+          if (g.dx && mode.indexOf('w') >= 0) { w -= g.dx; if (d.free) { left += g.dx; } }
+          if (g.dy && mode.indexOf('s') >= 0) { h += g.dy; }
+          if (g.dy && mode.indexOf('n') >= 0) { h -= g.dy; if (d.free) { top += g.dy; } }
+          w = Math.min(Math.max(8, w), sheet(normalisePaper(this.doc.paper)).w);
+          h = Math.max(5, h);
+          if (g.dx) { s.width = round1(w) + 'mm'; s.maxWidth = 'none'; }
+          if (g.dy && frameEl.nodeName !== 'FIGURE' && frameEl.nodeName !== 'HR' && !strokeShape(frameEl)) {
+            s.minHeight = round1(h) + 'mm';
+            declareFrameHeight(frameEl);
+          }
+          if (d.free) { s.left = round1(left) + 'mm'; s.top = round1(top) + 'mm'; }
+        }
         this.syncFrame();
+      },
+      /**
+       * 取っ手で大きさを変えている辺が、近くの線から何 mm ずれているか。線は画面に
+       * 引いて見せる（動かすときの線と同じもの）。返すのは「その辺をあと何 mm 動かせば
+       * 線に乗るか」で、右・下へが正。
+       */
+      snapEdges(el, mode, off) {
+        this.frame.gx = null;
+        this.frame.gy = null;
+        const box = this.columnBox();
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        const c = canvas();
+        if (off || !box || !wrap || !c || !el || !el.getBoundingClientRect) { return null; }
+        const z = this.frameZoom() || 1;
+        const b = wrap.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        const toMm = (px) => px / z * MM;
+        // 方眼を出しているときは、辺を 5mm の目に乗せる。
+        if (this.grid) {
+          const cr = c.getBoundingClientRect();
+          const on5 = (px, from) => { const mm = toMm(px - from); return Math.round(mm / 5) * 5 - mm; };
+          return { dx: mode.indexOf('e') >= 0 ? on5(r.right, cr.left) : (mode.indexOf('w') >= 0 ? on5(r.left, cr.left) : 0),
+            dy: mode.indexOf('s') >= 0 ? on5(r.bottom, cr.top) : (mode.indexOf('n') >= 0 ? on5(r.top, cr.top) : 0) };
+        }
+        const near = 7 * z;
+        const xs = [box.left, (box.left + box.right) / 2, box.right];
+        const ys = [];
+        const m = (normalisePaper(this.doc.paper).margin) || {};
+        sheetsOnScreen().forEach((sh) => {
+          const q = sh.getBoundingClientRect();
+          const k = q.height / (sheet(normalisePaper(this.doc.paper)).h || 297);
+          ys.push(q.top + (Number(m.top) || 0) * k, q.bottom - (Number(m.bottom) || 0) * k);
+        });
+        if (!ys.length) { ys.push(box.top); }
+        Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((o) => {
+          if (o === el || el.contains(o) || o.contains(el) || !o.getBoundingClientRect) { return; }
+          const q = o.getBoundingClientRect();
+          if (!q.width && !q.height) { return; }
+          xs.push(q.left, q.right);
+          ys.push(q.top, q.bottom);
+        });
+        const best = (lines, edge) => {
+          let g = null;
+          lines.forEach((want) => { const gap = want - edge; if (Math.abs(gap) <= near && (g == null || Math.abs(gap) < Math.abs(g[0]))) { g = [gap, want]; } });
+          return g;
+        };
+        const ex = mode.indexOf('e') >= 0 ? r.right : (mode.indexOf('w') >= 0 ? r.left : null);
+        const ey = mode.indexOf('s') >= 0 ? r.bottom : (mode.indexOf('n') >= 0 ? r.top : null);
+        const gx = ex == null ? null : best(xs, ex);
+        const gy = ey == null ? null : best(ys, ey);
+        if (gx) { this.frame.gx = (gx[1] - b.left) / z; }
+        if (gy) { this.frame.gy = (gy[1] - b.top) / z; }
+        if (!gx && !gy) { return null; }
+        return { dx: gx ? toMm(gx[0]) : 0, dy: gy ? toMm(gy[0]) : 0 };
       },
       /** Dragging a frame that is in the flow moves it to another place in the text. */
       frameDropTarget(e) {
@@ -14204,7 +22579,16 @@ ${insideObjects('.eb-paper.boxed')} {
         this.frameDragEndGuides();
         if (!d || !frameEl) { return; }
         if (!d.moved) { return; }
-        if (d.free) { frameAll().forEach((o) => this.settlePlaced(o)); }
+        if (d.free) {
+          frameAll().forEach((o) => {
+            const was = d.page0 && d.page0.get(o);
+            if (was != null) { o.setAttribute('data-free-allow', String(was + 1)); }
+            this.settlePlaced(o);
+          });
+          // まとめ枠の上に落とした物は、そのまとめ枠のグループに入れる（オーナー
+          // 2026-09-22「文字枠をまとめ枠にドロップしたら、まとめ枠のグループにいれろ」）。
+          if (d.mode === 'move') { frameAll().forEach((o) => { this.joinFrameUnder(o); }); }
+        }
         if (d.mode === 'move' && !d.free && d.ref) {
           window.__eb_lastDrop = { refIndex: Array.prototype.indexOf.call(canvas().children, d.ref),
             ref: d.ref.nodeName, after: d.after, by: 'the box' };
@@ -14236,8 +22620,7 @@ ${insideObjects('.eb-paper.boxed')} {
       nudgeFree(el, dx) {
         if (!dx) { return; }
         const z = this.frameZoom() || 1;
-        const now = parseFloat(el.style.left) || 0;
-        el.style.left = round1(now + dx * MM / z) + 'mm';
+        nudgeFreePx(el, dx, 0, z);
       },
       /**
        * Several objects held at once are lined up with each other rather than with
@@ -14356,8 +22739,12 @@ ${insideObjects('.eb-paper.boxed')} {
         // already on the page. Laying a page out is mostly lining things up.
         const xs = [box.left, (box.left + box.right) / 2, box.right];
         const ys = [cr.top + (parseFloat(cs.paddingTop) || 0) * z];
+        // Not what is being carried: the things inside a まとめ枠 move with it, so
+        // they were always "in line" with it and the red line stood the whole way
+        // through the drag (owner, 2026-09-28, test2.html).
+        const carried = [el].concat(frameMore || []);
         Array.from(c.querySelectorAll('.eb-anchor > *')).forEach((o) => {
-          if (o === el || !o.getBoundingClientRect) { return; }
+          if (!o.getBoundingClientRect || carried.some((k) => k && (k === o || k.contains(o)))) { return; }
           const q = o.getBoundingClientRect();
           if (!q.width && !q.height) { return; }
           xs.push(q.left, (q.left + q.right) / 2, q.right);
@@ -14380,8 +22767,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const snap5 = (v) => Math.round(v / 5) * 5;
           const dx = snap5((now.left - cr.left) * MM / z) - (now.left - cr.left) * MM / z;
           const dy = snap5((now.top - cr.top) * MM / z) - (now.top - cr.top) * MM / z;
-          el.style.left = round1((parseFloat(el.style.left) || 0) + dx) + 'mm';
-          el.style.top = round1((parseFloat(el.style.top) || 0) + dy) + 'mm';
+          nudgeFreeMm(el, dx, dy);
           return;
         }
         const r = el.getBoundingClientRect();
@@ -14393,7 +22779,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const r2 = el.getBoundingClientRect();
         const by = pick(ys, [r2.top, (r2.top + r2.bottom) / 2, r2.bottom]);
         if (by) {
-          el.style.top = round1((parseFloat(el.style.top) || 0) + by[0] * MM / z) + 'mm';
+          nudgeFreePx(el, 0, by[0], z);
           this.frame.gy = (by[1] - b.top) / z;
         }
       },
@@ -14413,8 +22799,7 @@ ${insideObjects('.eb-paper.boxed')} {
           host.parentNode.insertBefore(copy, host.nextSibling);
           const made = objectFree(o) ? copy.firstElementChild : copy;
           if (made && objectFree(made)) {
-            made.style.left = round1((parseFloat(made.style.left) || 0) + 4) + 'mm';
-            made.style.top = round1((parseFloat(made.style.top) || 0) + 4) + 'mm';
+            nudgeFreeMm(made, 4, 4);
             this.keepOnPaper(made);
           }
           return made;
@@ -14431,8 +22816,7 @@ ${insideObjects('.eb-paper.boxed')} {
       nudgeFrameBy(el, dxMm, dyMm) {
         if (!el || !objectFree(el)) { return false; }
         history.push(true);
-        el.style.left = round1((parseFloat(el.style.left) || 0) + dxMm) + 'mm';
-        el.style.top = round1((parseFloat(el.style.top) || 0) + dyMm) + 'mm';
+        nudgeFreeMm(el, dxMm, dyMm);
         this.keepOnPaper(el);
         this.settlePlaced(el);
         this.settleFrame();
@@ -14453,8 +22837,18 @@ ${insideObjects('.eb-paper.boxed')} {
           this.nudgeFree(el, box.left - r2.left);
           return;
         }
-        if (r.left < box.paperLeft) { this.nudgeFree(el, box.paperLeft - r.left); }
-        else if (r.right > box.paperRight) { this.nudgeFree(el, box.paperRight - r.right); }
+        // 紙の中へ戻す向きは、横書きと縦書きで入れ替わる。
+        //
+        // 「文章の進む向き」は settleFree が決める ―― 引きずっている最中にここで
+        // 押し戻すと、そもそも動かせなくなる（実測済みで、そのための下の早期
+        // 戻りがある）。「紙を横切る向き」はいつ戻してもよい。横書きでは前者が
+        // 上下・後者が左右、縦書きでは逆になる。縦書きで上下を戻していなかった
+        // ので、下へ2000mm引きずった物が紙の下端297mmを越えて2105mmまで行った。
+        const tateKeep = isTate(el);
+        if (!tateKeep) {
+          if (r.left < box.paperLeft) { this.nudgeFree(el, box.paperLeft - r.left); }
+          else if (r.right > box.paperRight) { this.nudgeFree(el, box.paperRight - r.right); }
+        }
         // And it stays on the paper the other way too: dragged up hard, a shape
         // used to sit above the top edge of the first sheet, where it is drawn on
         // the desk rather than on the page and prints nowhere at all.
@@ -14475,7 +22869,6 @@ ${insideObjects('.eb-paper.boxed')} {
         // Where it ends up on the paper is settled once, at the end of the drag,
         // by settlePlaced. That is what the comment above settlePlaced says, and
         // this was the one place still guessing at it mid-drag.
-        if (this.frame && this.frame.dragging) { return; }
         const paper = c.getBoundingClientRect();
         const now = el.getBoundingClientRect();
         const z = this.frameZoom() || 1;
@@ -14489,7 +22882,10 @@ ${insideObjects('.eb-paper.boxed')} {
         const tall = now.height > (paper.bottom - paper.top);
         if (now.top < paper.top) { dy = paper.top - now.top; }
         else if (!tall && now.bottom > paper.bottom) { dy = Math.min(0, paper.bottom - now.bottom); }
-        if (dy) { el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm'; }
+        // 横書きでは、ここは進む向き ―― 引きずっている最中は触らない。
+        if (!tateKeep && this.frame && this.frame.dragging) { return; }
+        if (dy) { nudgeFreePx(el, 0, dy, z); }
+        // 縦書きでは、進む向き（左右）をここで触らない。settleFree が決める。
       },
       /**
        * A thing just put down by hand -- dropped, nudged, resized, set free. Where
@@ -14506,7 +22902,7 @@ ${insideObjects('.eb-paper.boxed')} {
         el.removeAttribute('data-free-top');
         placeFreeAsDrawn(el, geom);
         reanchor(el, geom);
-        settleFree(el, geom);
+        settleFree(el, geom, window.__ebFreeNote);
       },
       alignObject(el, cls) {
         if (!el || cls === 'eb-al-j') { return false; }
@@ -14577,7 +22973,7 @@ ${insideObjects('.eb-paper.boxed')} {
       reflowWrap() {
         const c = canvas();
         if (!c) { return; }
-        applyWrap(c, this.frameZoom());
+        applyWrap(c, this.frameZoom(), { both: !!this.doc.useScript });
       },
       queueWrap() {
         if (wrapTimer) { window.clearTimeout(wrapTimer); }
@@ -14644,23 +23040,31 @@ ${insideObjects('.eb-paper.boxed')} {
           // they meet this object, and nothing else: where the object stands is
           // the placement's business, not the wrap's.
           const mode = WRAP_MODES.indexOf(arg) >= 0 ? arg : 'none';
-          el.setAttribute('data-wrap', mode);
-          if (objectFree(el)) {
+          // Words on both sides of it can only be had round something standing over
+          // the text: in the run of the text it can only be floated, to one side.
+          // So it is stood on the page first, where it is.
+          let obj = el;
+          if (mode === 'both' && !objectFree(obj)) {
+            this.freeInPlace(obj);
+            obj = frameEl || obj;
+          }
+          obj.setAttribute('data-wrap', mode);
+          if (objectFree(obj)) {
             // Standing over the text: a float would not reach it, so the room is
             // taken out of the writing itself. See applyWrap.
-            el.style.removeProperty('float');
+            obj.style.removeProperty('float');
           } else {
             // Still in the run of the text: a float is the wrap, and it is the
             // better one -- the words reflow round it as they are written.
-            el.style.removeProperty('float');
-            el.style.removeProperty('margin-left');
-            el.style.removeProperty('margin-right');
+            obj.style.removeProperty('float');
+            obj.style.removeProperty('margin-left');
+            obj.style.removeProperty('margin-right');
             if (mode === 'right') {
-              el.style.cssFloat = 'left';
-              el.style.marginRight = wrapGap(el) + 'mm';
+              obj.style.cssFloat = 'left';
+              obj.style.marginRight = wrapGap(obj) + 'mm';
             } else if (mode === 'left') {
-              el.style.cssFloat = 'right';
-              el.style.marginLeft = wrapGap(el) + 'mm';
+              obj.style.cssFloat = 'right';
+              obj.style.marginLeft = wrapGap(obj) + 'mm';
             }
           }
         } else if (kind === 'plain') {
@@ -14716,6 +23120,14 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         keepCaret();
         this.settleFrame(el);
+        // Changing the wrap moves the words, and words that move in a frame chain
+        // can move the object itself (a picture tied into the frame it stands
+        // over). The first laying of the wrap is made before that settles, and two
+        // lines were left under the picture until the document was opened again
+        // (BUGS #157, PS P14). Laid once more when the page has settled.
+        if (kind === 'wrapMode') {
+          window.setTimeout(() => { if (canvas()) { this.reflowWrap(); this.recount(); } }, 350);
+        }
       },
       /**
        * A frame that still fills the whole column is not floating over anything and
@@ -14745,25 +23157,48 @@ ${insideObjects('.eb-paper.boxed')} {
         this.closeCtx();
         if (frameEl) {
           const props = objectProps(frameEl);
-          if (props) { this.fprops = Object.assign({}, this.fprops, props); }
+          if (props) {
+            // 読み込んだ値で枠線の連動が働かないように（書き手が変えたときだけ連動）。
+            this._fpLoading = true;
+            this.fprops = Object.assign({}, this.fprops, props);
+            this.$nextTick(() => { this._fpLoading = false; });
+          }
           this.fprops.wrapMode = wrapMode(frameEl);
           this.fprops.wrapGap = frameEl.getAttribute('data-wrap-gap') || '';
+          this.fpropsPhoto = !!(frameEl.matches && frameEl.matches('figure.eb-img'));
+          this.fprops.colPct = frameEl.nodeName === 'TABLE' ? columnPercents(frameEl) : [];
+          this.fprops.zoom = this.fpropsPhoto ? (frameEl.getAttribute('data-zoom') || '') : '';
+          if (this.fpropsPhoto) {
+            const cap = frameEl.querySelector(':scope > figcaption');
+            this.fprops.caption = cap ? String(cap.textContent || '').trim() : '';
+            this.fprops.captionPlace = captionPlace(frameEl) || 'below';
+          }
         } else {
           // Nothing is written on the text yet, so the dialogue starts empty; the
           // run of words only becomes a frame if the settings are applied.
           this.clearFrameProps();
           this.fpropsRange = textRange.cloneRange();
         }
+        this._fpOpened = JSON.stringify(this.fprops);
+        if (!this.fpropsTabs.some((tb) => tb.key === this.fpTab)) { this.fpTab = 'type'; }
         this.fpropsOpen = true;
+      },
+      /** 画面を開いたときの値に戻す（LibreOffice の「リセット」）。 */
+      resetFrameProps() {
+        if (!this._fpOpened) { return; }
+        this._fpLoading = true;
+        this.fprops = JSON.parse(this._fpOpened);
+        this.$nextTick(() => { this._fpLoading = false; });
       },
       clearFrameProps() {
         this.fprops = {
           place: '', inner: '', x: '', y: '', width: '', height: '', mt: '', mb: '', ml: '', mr: '', pad: '',
-          wrapMode: 'none', wrapGap: '', flow: '',
+          wrapMode: 'none', wrapGap: '', flow: '', zoom: '',
           bgImage: '', bgFit: 'cover',
           strokeWidth: '', strokeColour: '#000000',
           textShadow: false, shadowX: 1, shadowY: 1, shadowBlur: 1.5, shadowColour: '#808080',
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
+          colPct: [],
         };
       },
       applyFrameProps() {
@@ -14779,14 +23214,67 @@ ${insideObjects('.eb-paper.boxed')} {
         framePinned = true;
         frameTaken = true;
         history.push(true);
+        // 回り込みは上のアイコン（wrapMode）だけで決める。下段のプルダウンは廃止した
+        // ので、読み込んだ float の値（v.wrap）は使わない ―― 残すと、回り込ませた枠を
+        // 「自由に置く」に変えても動かなかった。
+        v.wrap = '';
         setObjectProps(frameEl, v);
+        // 表の列の幅（パーセント）。変えたときだけ。合計が100でなくても、比で分ける。
+        if (frameEl.nodeName === 'TABLE' && Array.isArray(v.colPct) && v.colPct.length) {
+          const was = JSON.parse(this._fpOpened || '{}').colPct || [];
+          if (JSON.stringify(was) !== JSON.stringify(v.colPct)) {
+            const nums = v.colPct.map((x) => Math.max(1, Number(x) || 0));
+            const sum = nums.reduce((a, b) => a + b, 0);
+            const pieces = cutPieces(frameEl).filter((t) => t && t.nodeName === 'TABLE');
+            (pieces.length ? pieces : [frameEl]).forEach((t) => applyColumnShares(t, nums.map((x) => x / sum)));
+          }
+        }
         if (v.wrapGap === '' || v.wrapGap == null) { frameEl.removeAttribute('data-wrap-gap'); }
         else { frameEl.setAttribute('data-wrap-gap', String(v.wrapGap)); }
+        // How the photograph is enlarged when the document's program runs. Only
+        // touched while the choice is on offer ("Use JavaScript" on): turning the
+        // setting off does not throw away what was chosen for each photograph.
+        if (this.fpropsPhoto) {
+          const place = CAPTION_PLACES.indexOf(v.captionPlace) >= 0 ? v.captionPlace : 'below';
+          if (place !== captionPlace(frameEl)) { setCaptionPlace(frameEl, place); }
+          let cap = frameEl.querySelector(':scope > figcaption');
+          const said = String(v.caption || '').trim();
+          if (cap && String(cap.textContent || '').trim() !== said) { cap.textContent = said; }
+          else if (!cap && said) { setCaptionPlace(frameEl, place); cap = frameEl.querySelector(':scope > figcaption'); if (cap) { cap.textContent = said; } }
+        }
+        if (this.fpropsPhoto && this.doc.useScript) {
+          const zoom = ['full', 'grow', 'loupe', 'lift', 'gallery'].indexOf(v.zoom) >= 0 ? v.zoom : '';
+          if (zoom) { frameEl.setAttribute('data-zoom', zoom); } else { frameEl.removeAttribute('data-zoom'); }
+          this.touch();
+          this.$nextTick(() => this.refreshZoomMarks());
+        }
         // Only if the writer actually changed it: the wrap and the placement are
         // set in the same dialogue, and the wrap must not undo what the placement
         // just did.
-        if ((v.wrapMode || 'none') !== wrapMode(frameEl)) { this.frameCmd('wrapMode', v.wrapMode || 'none'); }
+        const mode = v.wrapMode || 'none';
+        // 自由配置を選んだら、紙の上に置く（ツールバーと同じ：BUGS #296 の続き）。
+        if (mode === 'through' && !objectFree(frameEl)) { this.frameCmd('free'); }
+        // 文章の中にある枠の左右の回り込みは float で作るので、上で外れた分を付け直す。
+        if (mode !== wrapMode(frameEl) || (!objectFree(frameEl) && (mode === 'left' || mode === 'right'))) {
+          this.frameCmd('wrapMode', mode);
+        }
         this.settleFrame(frameEl);
+      },
+      /** 表のプロパティの「行の高さの最適化」「列の幅の最適化」：その場で効く（メニューと同じ）。 */
+      fitTableFromProps(what) {
+        if (!frameEl || frameEl.nodeName !== 'TABLE') { return; }
+        history.push(true);
+        const c = canvas();
+        if (c) { joinFlowCuts(c); }
+        const table = frameEl;
+        if (what === 'rows') { fitRowHeights(table); } else { fitColumnWidths(table); }
+        this.fprops.colPct = columnPercents(table);
+        const opened = JSON.parse(this._fpOpened || '{}');
+        opened.colPct = this.fprops.colPct.slice();
+        this._fpOpened = JSON.stringify(opened);
+        this.touch();
+        this.repaginate();
+        this.$nextTick(() => this.syncFrame());
       },
       /** The two overlap buttons in the dialogue act at once, like a menu item. */
       stackFromProps(where) {
@@ -14827,7 +23315,10 @@ ${insideObjects('.eb-paper.boxed')} {
         this.changes = countChanges();
       },
       openCrop() {
-        const fig = imageAt(getRange() ? getRange().startContainer : null);
+        // 選んだ画像（押した画像・右クリックした画像）が相手。カーソルの場所しか見て
+        // いなかったので、画像を押して「切り抜き…」を押しても開かなかった。
+        const fig = imageAt() || imageAt(getRange() ? getRange().startContainer : null);
+        cropFigure = fig;
         if (!fig) { this.notify(this.t('Put the cursor on a picture first.')); return; }
         const img = fig.querySelector('img');
         ctxRange = getRange() ? getRange().cloneRange() : null;
@@ -14856,14 +23347,122 @@ ${insideObjects('.eb-paper.boxed')} {
         this.cropOpen = false;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the picture moved on */ } }
         this.run(() => {
-          const fig = imageAt(getRange() ? getRange().startContainer : null);
+          const fig = (cropFigure && cropFigure.parentNode) ? cropFigure : imageAt(getRange() ? getRange().startContainer : null);
           if (fig) { setCrop(fig, v); }
         });
+        cropFigure = null;
       },
       openCellBorder() {
+        // 罫線は「セルのプロパティ」の罫線タブに一本化（オーナー 2026-09-29：Excel に近づける）。
+        this._fromBorder = true;
+        this.cellTab = 'border';
+        this.openCellProps();
+        return;
+        // eslint-disable-next-line no-unreachable
         ctxRange = getRange() ? getRange().cloneRange() : null;
+        this.cellBorder = readCellBorder(cellAt(ctxRange ? ctxRange.startContainer : null));
         this.cellBorderOpen = true;
       },
+      numSampleOf(code) {
+        const calc = window.EditBaseCalc;
+        const date = /[YMD]/.test(String(code).replace(/"[^"]*"/g, ''));
+        const v = date && !(this.numSample >= 20000 && this.numSample <= 80000) ? 46294 : this.numSample;
+        return calc ? calc.formatAs(v, code) : '';
+      },
+      edgeLabel(e) {
+        return this.t({ top: 'Top edge', bottom: 'Bottom edge', left: 'Left edge', right: 'Right edge', insideH: 'Lines between the rows', insideV: 'Lines between the columns' }[e]);
+      },
+      /** Excel's presets: none, the outline, the inside lines, every line. */
+      bordPreset(kind) {
+        const E = this.bord.edges;
+        const outer = ['top', 'bottom', 'left', 'right'];
+        const inner = ['insideH', 'insideV'];
+        if (kind === 'none') { outer.concat(inner).forEach((k) => { E[k] = 'off'; }); }
+        if (kind === 'outline') { outer.forEach((k) => { E[k] = 'on'; }); }
+        if (kind === 'inside') { inner.forEach((k) => { E[k] = 'on'; }); }
+        if (kind === 'all') { outer.concat(inner).forEach((k) => { E[k] = 'on'; }); }
+      },
+      /** An edge of the picture pressed: drawn with the chosen line, or taken off. */
+      bordToggle(e) {
+        const E = this.bord.edges;
+        E[e] = E[e] === 'on' ? 'off' : 'on';
+      },
+      /** The format code from the choices in the dialog (Calc's codes). */
+      numBuild() {
+        const u = this.numUi;
+        if (u.cat === 'custom') { return; }
+        const dec = Math.max(0, Math.min(10, Math.round(Number(u.dec) || 0)));
+        const tail = dec ? '.' + '0'.repeat(dec) : '';
+        const int = u.sep ? '#,##0' : '0';
+        this.cellProps.numFmt = {
+          '': '', number: int + tail, percent: '0' + tail + '%', currency: u.cur + int + tail,
+          date: u.date, sci: '0' + tail + 'E+00', text: '@',
+        }[u.cat] || '';
+      },
+      /** The choices in the dialog, read back off a format code. */
+      numRead(code) {
+        const u = { cat: '', dec: 0, sep: true, cur: '¥', date: 'YYYY/MM/DD' };
+        const c = String(code || '');
+        const dec = (c.match(/\.(0+)/) || ['', ''])[1].length;
+        const plain = /^(0|#,##0)(\.0+)?$|^0(\.0+)?%$|^[¥$€£](0|#,##0)(\.0+)?$|^0(\.0+)?E\+00$|^@$|^(YYYY\/MM\/DD|YYYY"年"M"月"D"日"|M"月"D"日"|YYYY-MM-DD)$/.test(c);
+        if (c && !plain) { u.cat = 'custom'; this.numUi = u; return; }
+        if (!c) { /* General */ } else if (c === '@') { u.cat = 'text'; } else if (/[YMD]/.test(c.replace(/"[^"]*"/g, ''))) { u.cat = 'date'; u.date = c; }
+        else if (/E\+/.test(c)) { u.cat = 'sci'; u.dec = dec; } else if (/%/.test(c)) { u.cat = 'percent'; u.dec = dec; }
+        else if (/^[¥$€£]/.test(c)) { u.cat = 'currency'; u.cur = c.charAt(0); u.dec = dec; u.sep = /,/.test(c); }
+        else { u.cat = 'number'; u.dec = dec; u.sep = /,/.test(c); }
+        this.numUi = u;
+      },
+      openCellProps() {
+        if (!this._cellTabKeep) { this.cellTab = this.cellTab === 'border' && this._fromBorder ? 'border' : 'number'; }
+        this._fromBorder = false;
+        ctxRange = getRange() ? getRange().cloneRange() : null;
+        const cell = cellAt(ctxRange ? ctxRange.startContainer : null);
+        this.cellProps = readCellProps(cell);
+        // セルの幅＝その列の幅（mm）（BUGS #288）。
+        const table = cell ? tableOf(cell) : null;
+        const box = table ? cellBox(tableGrid(table), cell) : null;
+        this.cellProps.width = box ? round1(columnWidthsMm(table)[box.c0] || 0) : '';
+        this.cellWidthWas = this.cellProps.width;
+        this.numRead(this.cellProps.numFmt);
+        Object.keys(this.bord.edges).forEach((k) => { this.bord.edges[k] = 'keep'; });
+        // 選んだ範囲の行と列の数：罫線の図と「内側」は、それに合わせて出す（Excel と同じ）。
+        const chosen = selectedCells();
+        const tbl = chosen.length ? tableOf(chosen[0]) : null;
+        if (tbl) {
+          const g = wholeGrid(tbl);
+          const at = chosen.map((c) => cellBox(g, c)).filter(Boolean);
+          const rows = at.length ? Math.max(...at.map((x) => x.r1)) - Math.min(...at.map((x) => x.r0)) + 1 : 1;
+          const cols = at.length ? Math.max(...at.map((x) => x.c1)) - Math.min(...at.map((x) => x.c0)) + 1 : 1;
+          this.cellSpan = { rows, cols };
+        } else { this.cellSpan = { rows: 1, cols: 1 }; }
+        const calc = window.EditBaseCalc;
+        const v = calc && cell ? calc.literal(cellRaw(cell) || (cellFormula(cell) ? '' : String(cell.textContent || ''))) : '';
+        this.numSample = typeof v === 'number' ? v : 1234.5;
+        this.cellPropsOpen = true;
+      },
+      applyCellProps() {
+        const v = JSON.parse(JSON.stringify(this.cellProps));
+        this.cellPropsOpen = false;
+        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the table moved on */ } }
+        const bord = JSON.parse(JSON.stringify(this.bord));
+        delete v.rule;
+        this.run(() => {
+          setCellProps(v);
+          if (Object.keys(bord.edges).some((k) => bord.edges[k] !== 'keep')) { applyBorderEdges(selectedCells(), bord); }
+          const w = Number(v.width);
+          if (v.width !== '' && isFinite(w) && w > 0 && Math.abs(w - Number(this.cellWidthWas)) >= 0.05) {
+            const cell = cellAt();
+            const table = cell ? tableOf(cell) : null;
+            const box = table ? cellBox(tableGrid(table), cell) : null;
+            if (box) {
+              const pieces = cutPieces(table).filter((t) => t && t.nodeName === 'TABLE');
+              (pieces.length ? pieces : [table]).forEach((t) => setColumnWidthMm(t, box.c0, w));
+            }
+          }
+        });
+      },
+      /** "Text frame properties…", "Table properties…": the item says what it is for (BUGS #286). */
+      propsLabel(kind) { return this.t('{name} properties…', { name: this.kindName(kind) }); },
       applyCellBorder() {
         const v = Object.assign({}, this.cellBorder);
         this.cellBorderOpen = false;
@@ -14877,8 +23476,40 @@ ${insideObjects('.eb-paper.boxed')} {
         this.stylesOpen = true;
       },
       closeStyles() { this.stylesOpen = false; },
+      /**
+       * A number typed into the paper dialog outside what the field takes is held
+       * at the nearest end of it, and a field left empty gets its value back, as
+       * LibreOffice's fields do. Both were saved as the default instead of the
+       * value the page had (40 pt became 10.5 pt, a 35 mm margin 20 mm, BUGS #243).
+       */
+      keepPaperNumbers() {
+        const p = this.doc.paper;
+        const was = this.paperWas || {};
+        const at = (o, path) => path.reduce((a, k) => (a && typeof a === 'object' ? a[k] : undefined), o);
+        PAPER_LIMITS.forEach(([path, lo, hi]) => {
+          const box = at(p, path.slice(0, -1));
+          if (!box || typeof box !== 'object') { return; }
+          const k = path[path.length - 1];
+          const v = box[k] === '' || box[k] === null ? NaN : Number(box[k]);
+          const back = Number(at(was, path));
+          if (!isFinite(v)) { if (isFinite(back)) { box[k] = back; } return; }
+          if (v < lo) { box[k] = lo; } else if (v > hi) { box[k] = hi; }
+        });
+        this.paperWas = JSON.parse(JSON.stringify(p));
+      },
+      designVars(accent) {
+        const a = /^#[0-9a-f]{6}$/i.test(accent || '') ? accent : '#2563eb';
+        return { '--eb-da': a, '--eb-ds': 'color-mix(in srgb, ' + a + ' 16%, #fff)' };
+      },
+      /** The colour of this heading's design, given to every heading (見出し 1〜6). */
+      accentToAllHeadings() {
+        const a = this.styleNow.accent || this.styleNow.colour || '#2563eb';
+        ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach((k) => { if (this.doc.styles[k]) { this.doc.styles[k].accent = a; } });
+        this.touchStyles();
+      },
       /** A change to the paper or the styles is an undoable step like any other. */
       touchSettings() {
+        this.keepPaperNumbers();
         history.pushPrev(this.prevSettings);
         this.prevSettings = history.state();
         this.touch();
@@ -14909,16 +23540,35 @@ ${insideObjects('.eb-paper.boxed')} {
        * empty goes away with it.
        */
       editBand(which) {
+        // The header button and the footer button are two buttons: with the bands
+        // open, the other one goes to its own band, and only the one in use closes
+        // them. Both closed the bands, so asking for the footer after the header
+        // put both away (BUGS #195). And only the band asked for is opened for
+        // writing -- with one that already says something: the header button put
+        // an empty footer under every page as well (PS 仕事5, BUGS #271).
+        if (this.runBandOn && this.runBandWhich !== which) {
+          this.runBandWhich = which;
+          this.$nextTick(() => this.focusBand(which, which === 'header' ? 'c' : 'r'));
+          return;
+        }
         if (this.runBandOn) {
           this.runBandOn = false;
           this.$nextTick(() => this.repaginate());
           return;
         }
         this.runBandOn = true;
+        this.runBandWhich = which;
         this.$nextTick(() => {
           this.fillBands();
           this.repaginate();
           this.$nextTick(() => this.focusBand(which, which === 'header' ? 'c' : 'r'));
+        });
+      },
+      refillBands() {
+        if (!this.runBandOn) { return; }
+        this.$nextTick(() => {
+          const live = document.activeElement && document.activeElement.closest && document.activeElement.closest('.run.live');
+          if (!live) { this.fillBands(); }
         });
       },
       /** The words as they were typed, put into the bands that are open. */
@@ -15066,6 +23716,171 @@ ${insideObjects('.eb-paper.boxed')} {
         window.addEventListener('pointerup', up);
         return true;
       },
+      /**
+       * 描いた範囲（画面の px）がすっぽり収まる枠の中にだけ、描いた物を結び付ける。
+       * 収まる枠が無ければ本文の段落へ、あればその枠の中の段落へカーソルを置き直す。
+       */
+      anchorDrawnOutside(at, rect) {
+        const c = canvas();
+        const HOLD = 'div.eb-frame, aside.eb-box, div.eb-note, p.eb-textbox';
+        let n = at.startContainer.nodeType === 3 ? at.startContainer.parentNode : at.startContainer;
+        let holder = n && n.closest ? n.closest(HOLD) : null;
+        if (!holder || !c.contains(holder)) { return; }
+        const fits = (el) => { const r = el.getBoundingClientRect();
+          return rect.left >= r.left - 4 && rect.right <= r.right + 4 && rect.top >= r.top - 4 && rect.bottom <= r.bottom + 4; };
+        const first = holder;
+        while (holder && !fits(holder)) {
+          const up = holder.parentNode && holder.parentNode.closest ? holder.parentNode.closest(HOLD) : null;
+          holder = up && c.contains(up) ? up : null;
+        }
+        if (holder === first) { return; }
+        // 置き直す先：収まる枠の直下の段落、無ければ本文の段落。どちらも、今の行を
+        // 含む物（枠や、その置き場）のすぐ隣にある段落を選び、無ければ空の段落を作る。
+        const scope = holder || c;
+        let host = first;
+        while (host.parentNode && host.parentNode !== scope) { host = host.parentNode; }
+        if (!host.parentNode) { return; }
+        let spot = null;
+        for (let k = host.previousElementSibling; k && !spot; k = k.previousElementSibling) {
+          if (/^(P|H[1-6])$/.test(k.nodeName) && !k.classList.contains('eb-textbox')) { spot = k; }
+        }
+        for (let k = host.nextElementSibling; k && !spot; k = k.nextElementSibling) {
+          if (/^(P|H[1-6])$/.test(k.nodeName) && !k.classList.contains('eb-textbox')) { spot = k; }
+        }
+        if (!spot) {
+          spot = document.createElement('p');
+          spot.appendChild(document.createElement('br'));
+          host.parentNode.insertBefore(spot, host.nextSibling);
+        }
+        const r = document.createRange();
+        r.selectNodeContents(spot);
+        r.collapse(false);
+        selectRange(r);
+      },
+      /**
+       * 枠の中に結び付いているのに、枠からはみ出して置かれた物を、枠の外（本文）へ
+       * 結び付け直す。場所は変えない。枠を動かし始めるときに呼び、枠と一緒に動くのは
+       * 枠の中にすっぽり入っている物だけにする。以前に描いた文字枠が、はみ出している
+       * のに枠の物として保存されていて、まとめ枠を動かすと付いて来た（オーナー
+       * 2026-09-22 test2.html、BUGS #47）。
+       */
+      releaseStrays(box) {
+        const c = canvas();
+        if (!c || !box || !box.matches || !box.matches('div.eb-frame, aside.eb-box, div.eb-note')) { return; }
+        const lead = chainLead(box);
+        const chain = chainable(lead) ? chainOf(lead) : [box];
+        const host = chainHost(chain[chain.length - 1]);
+        if (!host || host.parentNode !== c) { return; }
+        const z = this.frameZoom() || 1;
+        const tol = 1 / MM * z;   // 1mm
+        const strays = [];
+        chain.forEach((f) => {
+          const fr = f.getBoundingClientRect();
+          Array.from(f.querySelectorAll(':scope > .eb-anchor > *, :scope > * > .eb-anchor > *')).forEach((o) => {
+            if (!objectFree(o) || o.closest('div.eb-frame, aside.eb-box, div.eb-note') !== f) { return; }
+            const r = o.getBoundingClientRect();
+            const inside = r.left >= fr.left - tol && r.right <= fr.right + tol && r.top >= fr.top - tol && r.bottom <= fr.bottom + tol;
+            if (!inside) { strays.push({ o, r }); }
+          });
+        });
+        if (!strays.length) { return; }
+        // 結び付け先の段落：枠のすぐ後ろの本文の段落。無ければ空の段落を作る。
+        let spot = host.nextElementSibling;
+        while (spot && !(/^(P|H[1-6])$/.test(spot.nodeName) && !spot.classList.contains('eb-textbox'))) { spot = spot.nextElementSibling; }
+        if (!spot) {
+          spot = document.createElement('p');
+          spot.appendChild(document.createElement('br'));
+          c.insertBefore(spot, host.nextSibling);
+        }
+        strays.forEach(({ o, r }) => {
+          const anchor = o.parentNode;
+          c.insertBefore(anchor, spot);
+          const now = o.getBoundingClientRect();
+          nudgeFreePx(o, r.left - now.left, r.top - now.top, z);
+          o.removeAttribute('data-free-page');
+          this.settlePlaced(o);
+        });
+        nameBlocks(c);
+      },
+      /**
+       * 紙の上に置いた物が、まとめ枠（囲み記事・注も）の中にすっぽり収まる所に落とされ
+       * たら、その枠のグループに入れる：結び付け先を枠の中の段落に移し、画面の位置は
+       * 変えず、枠の中で一番手前に重ねる。枠そのものは入れない（枠の入れ子は作らない）。
+       */
+      joinFrameUnder(el) {
+        const c = canvas();
+        if (!c || !el || !objectFree(el) || (el.matches && el.matches(LAYER_HOLDERS))) { return false; }
+        const r = el.getBoundingClientRect();
+        if (!r.width && !r.height) { return false; }
+        const z = this.frameZoom() || 1;
+        const tol = 1 / MM * z;
+        let best = null; let area = Infinity;
+        Array.from(c.querySelectorAll(LAYER_HOLDERS)).forEach((f) => {
+          if (f === el || el.contains(f)) { return; }
+          const q = f.getBoundingClientRect();
+          if (r.left >= q.left - tol && r.right <= q.right + tol && r.top >= q.top - tol && r.bottom <= q.bottom + tol) {
+            const a = q.width * q.height;
+            if (a < area) { area = a; best = f; }
+          }
+        });
+        if (!best) { return false; }
+        return this.putInFrame(el, best);
+      },
+      /** 物を枠のグループに入れる（画面の位置は変えない・枠の中で一番手前）。 */
+      putInFrame(el, best) {
+        const c = canvas();
+        const z = this.frameZoom() || 1;
+        const r = el.getBoundingClientRect();
+        const lead = chainable(best) ? chainLead(best) : best;
+        if (holderOf(el) === lead) { return false; }
+        // 結び付け先：落とした所の高さにある、枠の中の段落（無ければ最後の段落の後ろ）。
+        const blocks = Array.from(best.children).filter((k) => k.nodeType === 1 && !k.classList.contains('eb-anchor')
+          && !k.classList.contains('eb-flow') && !k.classList.contains('eb-gap'));
+        const spot = blocks.find((k) => k.getBoundingClientRect().bottom > r.top) || null;
+        const anchor = el.parentNode;
+        if (!anchor || !anchor.classList || !anchor.classList.contains('eb-anchor')) { return false; }
+        history.push(true);
+        if (spot) { best.insertBefore(anchor, spot); } else { best.appendChild(anchor); }
+        el.removeAttribute('data-eb-layer');
+        el.removeAttribute('data-free-page');
+        const now = el.getBoundingClientRect();
+        nudgeFreePx(el, r.left - now.left, r.top - now.top, z);
+        // 枠の中で一番手前へ
+        const list = placedIn(lead).filter((o) => o !== el);
+        list.push(el);
+        restackIn(list);
+        this.settlePlaced(el);
+        nameBlocks(c);
+        this.touch();
+        return true;
+      },
+      /** 枠の中にカーソルがあれば、その枠（続きの部分も）の字を全部選ぶ。選べたら true。 */
+      selectFrameText() {
+        const r = getRange();
+        const c = canvas();
+        if (!r || !c || !c.contains(r.startContainer)) { return false; }
+        const n = r.startContainer.nodeType === 3 ? r.startContainer.parentNode : r.startContainer;
+        const box = n.closest ? n.closest('div.eb-frame, aside.eb-box, div.eb-note, p.eb-textbox') : null;
+        if (!box || !c.contains(box)) { return false; }
+        const chain = chainable(chainLead(box)) ? chainOf(chainLead(box)) : [box];
+        const first = chain[0]; const last = chain[chain.length - 1];
+        const texts = (f) => caretStops(f).filter((t) => {
+          const up = t.parentNode.closest('.eb-anchor');
+          return !(up && f.contains(up));
+        });
+        const a = texts(first)[0];
+        const zs = texts(last); const z = zs[zs.length - 1];
+        if (!a || !z) { return false; }
+        const all = document.createRange();
+        all.setStart(a, 0);
+        all.setEnd(z, z.data.length);
+        // もう全部選んでいるなら、ふつうの Ctrl+A（文書全体）に任せる。
+        if (!r.collapsed && r.compareBoundaryPoints(Range.START_TO_START, all) <= 0
+          && r.compareBoundaryPoints(Range.END_TO_END, all) >= 0) { return false; }
+        selectRange(all);
+        this.refreshState();
+        return true;
+      },
       /** Put the chosen thing down in the rectangle that was just drawn. */
       placeHere(kind, box) {
         const c = canvas();
@@ -15080,6 +23895,17 @@ ${insideObjects('.eb-paper.boxed')} {
           wrap.getBoundingClientRect().left + (box.x + 2) * z,
           wrap.getBoundingClientRect().top + (box.y + 2) * z);
         if (at) { selectRange(at); }
+        // 描いた物をどこに結び付けるか。描き始めの点に近い行がまとめ枠などの中でも、
+        // 描いた範囲がその枠からはみ出しているなら枠の物にはしない。枠の中の物は枠と
+        // 一緒に動くので、はみ出して描いた文字枠が、まとめ枠を動かすと一緒に付いて
+        // 来た（オーナー 2026-09-22 test2.html、BUGS #47）。
+        if (at && wrap) {
+          const wb = wrap.getBoundingClientRect();
+          this.anchorDrawnOutside(at, {
+            left: wb.left + box.x * z, top: wb.top + box.y * z,
+            right: wb.left + (box.x + Math.max(box.w, 12 / MM)) * z,
+            bottom: wb.top + (box.y + Math.max(box.h, 8 / MM)) * z });
+        }
         if (kind === 'image') {
           this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
             y: wrap.getBoundingClientRect().top + box.y * z };
@@ -15087,8 +23913,10 @@ ${insideObjects('.eb-paper.boxed')} {
           return;
         }
         if (kind === 'table') {
+          // The box drawn is the table: where it stands and how big it is (owner,
+          // 2026-09-28: 「表は必ず、バウンディングボックスと同じ大きさだ」).
           this.pendingDrop = { x: wrap.getBoundingClientRect().left + box.x * z,
-            y: wrap.getBoundingClientRect().top + box.y * z };
+            y: wrap.getBoundingClientRect().top + box.y * z, w: mmW, h: mmH };
           this.tableOpen = true;
           return;
         }
@@ -15105,6 +23933,7 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         if (!made) { return; }
         setObjectFree(made, true);
+        this.newPlacement(made);
         made.style.width = mmW + 'mm';
         if (made.style.height) { made.style.height = mmH + 'mm'; } else { made.style.minHeight = mmH + 'mm'; }
         this.$nextTick(() => {
@@ -15117,7 +23946,13 @@ ${insideObjects('.eb-paper.boxed')} {
           framePinned = true;
           frameTaken = true;
           this.frame.bar = true;
+          // 文字枠・まとめ枠は、置いたらすぐ中に書けるように。紙の上へ移すときに
+          // カーソルが外れ、組み直しは外れた位置を覚えて戻すので、打った字が枠の外
+          // （本文の最後）へ出ていた（2026-09-22 点検で発見）。組み直しの前に置く。
+          const into = (kind === 'frame' || kind === 'textbox') ? (made.matches('p') ? made : made.querySelector('p')) : null;
+          if (into) { placeCaretIn(into); }
           this.settleFrame();
+          if (into) { this.repaginate(() => { if (into.parentNode) { placeCaretIn(into); } }); }
         });
       },
       shapeGrab(e, kind) {
@@ -15196,8 +24031,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!el || !el.getBoundingClientRect) { return; }
         const z = this.frameZoom() || 1;
         const r = el.getBoundingClientRect();
-        el.style.left = round1((parseFloat(el.style.left) || 0) + (x - r.left) * MM / z) + 'mm';
-        el.style.top = round1((parseFloat(el.style.top) || 0) + (y - r.top) * MM / z) + 'mm';
+        nudgeFreePx(el, x - r.left, y - r.top, z);
       },
       // ---- the context menu ----------------------------------------------------
       /**
@@ -15236,7 +24070,9 @@ ${insideObjects('.eb-paper.boxed')} {
         window.setInterval(check, 5 * 60 * 1000);
       },
       async reloadForNewBuild() {
-        if (this.dirty && this.doc.id) { try { await this.save(); } catch (e) { /* reload anyway */ } }
+        // A save still on the wire is waited for; if it cannot be saved, the
+        // browser's own "leave this page?" is what asks.
+        try { await this.saveNow(); } catch (e) { /* reload anyway */ }
         window.location.reload();
       },
       /**
@@ -15247,43 +24083,61 @@ ${insideObjects('.eb-paper.boxed')} {
       refreshLayers() {
         const c = canvas();
         if (!c || !this.layersOpen) { this.layers = []; return; }
-        // Everything that stands on the page, in the order it stands in.
-        //
-        // Writing is an object here, so a paragraph counts as much as a picture:
-        // the bar lists every block at the top of the document, every object
-        // wherever it is nested, and everything pinned to an anchor. It used to
-        // list only what was placed freely, so a document with five things in it
-        // showed three, and the line with a "1" in it was nowhere at all.
-        //
+        // 一覧に出す物：本文の直下の段落や表などと、本文に結び付けて紙の上に置いた物。
+        // 枠の中の段落や、枠の中に置いた物は、その枠の行の下に木の枝として並べる。
         // An anchor is a peg and a page spacer is a fold; the header and the
         // footer are regions rather than objects. None of those can be picked up.
-        const placed = Array.from(c.querySelectorAll(':scope > *, ' + OBJECT_SEL + ', .eb-anchor > *'))
-          .filter((el) => el.nodeType === 1
-            && !el.classList.contains('eb-anchor')        // a peg, not a thing
-            && !el.classList.contains('eb-pagespacer')    // the fold, not a thing
-            && !el.classList.contains('eb-header')        // a region, not an object
-            && !el.classList.contains('eb-footer')
-            && !el.classList.contains('eb-cont'));        // the same frame, carried on
+        const skip = (el) => el.nodeType !== 1
+          || el.classList.contains('eb-anchor') || el.classList.contains('eb-pagespacer')
+          || el.classList.contains('eb-header') || el.classList.contains('eb-footer')
+          || el.classList.contains('eb-cont') || el.classList.contains('eb-flow')
+          || el.classList.contains('eb-gap') || el.nodeName === 'BR';
+        const top = Array.from(c.children).filter((el) => !skip(el))
+          .concat(Array.from(c.querySelectorAll('.eb-anchor > *')).filter((el) => !holderOf(el) && !skip(el)));
+        const els = [];
+        const row = (el, depth) => {
+          const id = els.length;
+          els.push(el);
+          const kind = objectKind(el);
+          const holds = el.matches && el.matches(LAYER_HOLDERS);
+          const key = el.getAttribute('data-eb-id') || ('k' + id);
+          return {
+            id, depth, key, kind: this.nameOfKind(kind),
+            name: this.layerName(el, kind),
+            named: el.hasAttribute('data-eb-name'),
+            // Only a thing standing on the paper has a place in the pile. Writing
+            // in the flow is listed -- it is on the page -- but there is nothing
+            // above or below it to swap with, so it is not dragged or raised.
+            movable: !!el.closest('.eb-anchor') || liftable(el),
+            text: (el.textContent || '').trim().slice(0, 40),
+            chosen: el === frameEl,
+            hide: el.hasAttribute('data-eb-hide'),
+            holds: !!holds,
+            open: !!holds && !this.layerShut[key],
+          };
+        };
+        // 枠の中身：手前に置いた物から順に、そのあと中の段落などを書いた順に。
+        const kids = (holder, depth, out) => {
+          const pieces = chainable(holder) ? chainOf(holder) : [holder];
+          placedIn(holder).slice().reverse().forEach((o) => { branch(o, depth, out); });
+          pieces.forEach((f) => {
+            Array.from(f.children).filter((k) => !skip(k)).forEach((k) => { branch(k, depth, out); });
+          });
+        };
+        const branch = (el, depth, out) => {
+          const it = row(el, depth);
+          out.push(it);
+          if (it.holds && it.open) { kids(el, depth + 1, out); }
+        };
         const groups = new Map();
         const pile = this.pileLevels();
         // A layer made but not yet used stands in the bar with nothing in it, so
         // there is somewhere to drop the first thing.
         this.extraLayers.forEach((n) => { if (!groups.has(n)) { groups.set(n, []); } });
-        placed.forEach((el, i) => {
+        top.forEach((el) => {
           const level = pile.has(el) ? pile.get(el) : 0;
           if (!groups.has(level)) { groups.set(level, []); }
-          const kind = objectKind(el);
-          groups.get(level).push({
-            id: i,
-            // Only a thing standing on the paper has a place in the pile. Writing
-            // in the flow is listed -- it is on the page -- but there is nothing
-            // above or below it to swap with, so it is not dragged or raised.
-            movable: !!el.closest('.eb-anchor') || liftable(el),
-            name: this.nameOfKind(kind),
-            icon: this.iconOfKind(kind),
-            text: (el.textContent || '').trim().slice(0, 24),
-            chosen: el === frameEl,
-          });
+          groups.get(level).push(el);
         });
         // The numbers shown are counted from the bottom of the pile, starting at
         // nought, with the writing counted among them: put something behind the
@@ -15291,21 +24145,221 @@ ${insideObjects('.eb-paper.boxed')} {
         // are only what is shown -- rewriting the levels in the document itself
         // just to look at it would change where things stand in the pile, and
         // with them which of two overlapping things the writing flows around.
-        const levels = Array.from(groups.keys()).sort((a, b) => b - a);
+        const levels = Array.from(groups.keys()).sort((x, y) => y - x);
         const shown = new Map();
         levels.slice().reverse().forEach((level, i) => { shown.set(level, i); });
-        this.layers = levels.map((level) => ({
-          level: level, n: shown.get(level), items: groups.get(level),
-          writing: level === 0,
-        }));
-        layerEls = placed;
+        this.layers = levels.map((level) => {
+          // 層の中は手前の物が上。本文の層の段落は書いた順。
+          const members = level === 0 ? groups.get(level)
+            : groups.get(level).map((el, i) => ({ el, i })).sort((x, y) => (zOf(y.el) - zOf(x.el)) || (y.i - x.i)).map((x) => x.el);
+          const items = [];
+          members.forEach((el) => { branch(el, 0, items); });
+          const info = (normalisePaper(this.doc.paper).layers || {})[String(level)] || {};
+          return { level: level, n: shown.get(level), items: items, writing: level === 0,
+            name: info.name || '', hide: !!info.hide };
+        });
+        layerEls = els;
+      },
+      /**
+       * 一覧に出す名前。書き手が付けた名前（data-eb-name）があればそれ。無ければ
+       * 中身から作る：字のある物はその書き出し、写真は説明文か代替テキスト、表は
+       * 最初のセルか「行×列」、字の無い図形は形の名前。
+       */
+      layerName(el, kind) {
+        const own = el.getAttribute('data-eb-name');
+        if (own) { return own; }
+        const words = (node) => {
+          const copy = node.cloneNode(true);
+          copy.querySelectorAll('.eb-anchor, rt, rp, .eb-flow, .eb-gap, figcaption:empty').forEach((x) => x.remove());
+          return (copy.textContent || '').replace(/\s+/g, ' ').trim();
+        };
+        const cut = (t) => (t.length > 16 ? t.slice(0, 16) + '…' : t);
+        if (kind === 'FIGURE') {
+          const cap = el.querySelector('figcaption');
+          const alt = (el.querySelector('img') || {}).alt || '';
+          return cut((cap && words(cap)) || alt || this.t('Picture'));
+        }
+        if (kind === 'TABLE') {
+          const cell = el.querySelector('td, th');
+          const first = cell ? words(cell) : '';
+          const rows = el.querySelectorAll('tr').length;
+          const cols = el.querySelector('tr') ? el.querySelector('tr').children.length : 0;
+          return cut(first || this.t('{r} × {c}', { r: rows, c: cols }));
+        }
+        if (kind === 'HR') { return this.t('Rule'); }
+        const t = words(el);
+        if (t) { return cut(t); }
+        if (kind === 'SHAPE') {
+          const shape = { rect: 'Rectangle', round: 'Rounded rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow' };
+          const k = Object.keys(shape).find((n) => el.classList.contains('eb-sh-' + n));
+          return this.t(k ? shape[k] : 'Shape');
+        }
+        return this.t('(empty)');
+      },
+      /** 行の名前を付け直す（空にすれば中身から作る名前に戻る）。 */
+      renameLayer(id, text) {
+        const el = layerEls[id];
+        this.renaming = -1;
+        if (!el || !el.parentNode) { return; }
+        const v = String(text || '').trim();
+        const was = el.getAttribute('data-eb-name') || '';
+        if (v === was) { return; }
+        history.push(true);
+        if (v) { el.setAttribute('data-eb-name', v); } else { el.removeAttribute('data-eb-name'); }
+        this.touch();
+        this.refreshLayers();
+      },
+      startRename(id) {
+        this.renaming = id;
+        renameAt = Date.now();
+        // ダブルクリックの一回目で物が選ばれ、カーソルが紙へ戻る。その後で欄に入れる。
+        const focus = () => {
+          const box = this.$el.querySelector('.eb-layers input.rename');
+          if (box && document.activeElement !== box) { box.focus(); box.select(); }
+        };
+        this.$nextTick(focus);
+        window.setTimeout(focus, 120);
+        window.setTimeout(focus, 400);
+      },
+      /** 欄から離れたら確定。ただし開いた直後に紙へ取られたのは、欄へ戻す。 */
+      renameBlur(id, e) {
+        if (this.renaming !== id) { return; }
+        if (Date.now() - renameAt < 600) { window.setTimeout(() => { if (e.target && e.target.isConnected) { e.target.focus(); } }, 0); return; }
+        this.renameLayer(id, e.target.value);
+      },
+      /** レイヤーの目（hide）・鍵（lock）を切り替える。文書の設定として保存する。 */
+      setLayerFlag(level, key, value) {
+        if (!level) { return; }
+        const L = Object.assign({}, (this.doc.paper && this.doc.paper.layers) || {});
+        const one = Object.assign({}, L[String(level)] || {});
+        if (value) { one[key] = true; } else { delete one[key]; }
+        if (Object.keys(one).length) { L[String(level)] = one; } else { delete L[String(level)]; }
+        this.doc.paper = Object.assign({}, this.doc.paper, { layers: L });
+        // 固定したレイヤーの物は選べない：選んでいたら外す。
+        this.touchSettings();
+        this.applyLayerRules();
+        this.after();
+      },
+      startRenameLayer(level) {
+        this.renamingLayer = level;
+        this.$nextTick(() => { const box = this.$el.querySelector('.eb-layers .glabel input.rename'); if (box) { box.focus(); box.select(); } });
+      },
+      renameLayerGroup(level, text) {
+        if (this.renamingLayer !== level) { return; }
+        this.renamingLayer = null;
+        const L = Object.assign({}, (this.doc.paper && this.doc.paper.layers) || {});
+        const one = Object.assign({}, L[String(level)] || {});
+        const v = String(text || '').trim();
+        if (v) { one.name = v; } else { delete one.name; }
+        if (Object.keys(one).length) { L[String(level)] = one; } else { delete L[String(level)]; }
+        this.doc.paper = Object.assign({}, this.doc.paper, { layers: L });
+        this.touchSettings();
+        this.refreshLayers();
+      },
+      /** 物ひとつの目・鍵。 */
+      toggleObjFlag(id, key) {
+        const el = layerEls[id];
+        if (!el || !el.parentNode) { return; }
+        history.push(true);
+        const attr = 'data-eb-hide';
+        if (el.hasAttribute(attr)) { el.removeAttribute(attr); } else { el.setAttribute(attr, ''); }
+        this.touch();
+        this.after();
+      },
+      /** レイヤーの見出しを押した：そのレイヤーの物を全部選ぶ（固定・隠した物は除く）。 */
+      selectLayer(level) {
+        const lv = this.pileLevels();
+        const L = (normalisePaper(this.doc.paper).layers || {})[String(level)] || {};
+        if (L.hide) { return; }
+        const all = [];
+        lv.forEach((v, el) => { if (v === level && !el.hasAttribute('data-eb-hide')) { all.push(el); } });
+        if (!all.length) { return; }
+        frameEl = all[0];
+        frameMore = all.slice(1);
+        framePinned = true;
+        frameTaken = true;
+        this.frame.bar = true;
+        this.$nextTick(() => { this.syncFrame(); this.refreshLayers(); });
+      },
+      /** レイヤーバーで選んだ物（行）を消す。置いた物は物ごと、段落は段落ごと。 */
+      deleteLayerItem(el) {
+        const c = canvas();
+        if (!c || !el || !el.parentNode || !c.contains(el)) { return false; }
+        const placed = el.parentNode.classList && el.parentNode.classList.contains('eb-anchor');
+        if (!placed && isLastParagraph(el)) {
+          this.notify(this.t('The last paragraph of the writing cannot be deleted: there must always be somewhere to write, and something for the objects to be tied to.'));
+          return false;
+        }
+        history.push(true);
+        if (placed || (el.matches && el.matches(OBJECT_SEL))) {
+          deleteObject(el);
+        } else {
+          // ページの境目で分かれた段落は、分かれる前の一つの段落として消す。
+          let first = el;
+          for (let k = first.previousElementSibling; k; k = k.previousElementSibling) {
+            if (k.classList && k.classList.contains('eb-pagespacer')) { continue; }
+            if (k.hasAttribute && k.hasAttribute(FLOWCUT) && k.nodeName === first.nodeName) { first = k; continue; }
+            break;
+          }
+          joinFlowCuts(first.parentNode);
+          const near = first.nextElementSibling || first.previousElementSibling;
+          first.remove();
+          if (near && near.isConnected) { placeCaretIn(near); }
+        }
+        this.clearFrame();
+        this.touch();
+        this.after();
+        this.$nextTick(() => this.repaginate());
+        return true;
+      },
+      /** レイヤーの見出しの右クリック。 */
+      layerBandCtx(e, level) {
+        const lv = this.pileLevels();
+        let n = 0;
+        lv.forEach((v) => { if (v === level) { n += 1; } });
+        this.ctx.page = 0;
+        this.ctx.doc = null;
+        this.ctx.cat = null;
+        this.ctx.pagebreak = false;
+        this.ctx.fromLayers = true;
+        this.ctx.layerBand = level;
+        this.ctx.layerBandCount = n;
+        this.placeCtx(e.clientX, e.clientY);
+      },
+      /** レイヤーを中の物ごと消す。確かめてから。Ctrl+Z で戻せる。 */
+      deleteLayerBand(level) {
+        const lv = this.pileLevels();
+        const all = [];
+        lv.forEach((v, el) => { if (v === level) { all.push(el); } });
+        if (!all.length) { return; }
+        if (!window.confirm(this.t('Delete the {n} things on this layer? You can bring them back with Ctrl+Z.', { n: all.length }))) { return; }
+        history.push(true);
+        all.forEach((el) => { if (el.isConnected) { deleteObject(el); } });
+        const L = Object.assign({}, (this.doc.paper && this.doc.paper.layers) || {});
+        if (L[String(level)]) { delete L[String(level)]; this.doc.paper = Object.assign({}, this.doc.paper, { layers: L }); this.touchSettings(); }
+        this.clearFrame();
+        this.tidyLayers();
+        this.touch();
+        this.after();
+      },
+      /** レイヤーバーで行を選んでいるときの Delete／Backspace。 */
+      layerKey(e) {
+        if (e.key !== 'Delete' && e.key !== 'Backspace') { return; }
+        if (e.target && (e.target.nodeName === 'INPUT' || e.target.isContentEditable)) { return; }
+        if (!frameEl || layerEls.indexOf(frameEl) < 0) { return; }
+        e.preventDefault();
+        this.deleteLayerItem(frameEl);
+      },
+      toggleLayerOpen(key) {
+        this.layerShut = Object.assign({}, this.layerShut, { [key]: !this.layerShut[key] });
+        this.refreshLayers();
       },
       nameOfKind(kind) {
         const names = {
           FIGURE: this.t('Picture'), TABLE: this.t('Table'), ASIDE: this.t('Box'),
           NAV: this.t('Contents'), HR: this.t('Rule'), MATH: this.t('Formula'),
           NOTE: this.t('Note'), FRAME: this.t('Block frame'), TEXT: this.t('Phrase'),
-          TEXTBOX: this.t('Text frame'), SHAPE: this.t('Shape'), EMBED: this.t('An embedded page'),
+          TEXTBOX: this.t('Text frame'), SHAPE: this.t('Drawn shape'), EMBED: this.t('An embedded page'),
           PARA: this.t('Paragraph'), HEADING: this.t('Heading'), LIST: this.t('List'),
         };
         return names[kind] || this.t('Block frame');
@@ -15409,6 +24463,11 @@ ${insideObjects('.eb-paper.boxed')} {
         const row = at.closest('.eb-layers li[data-layer-row]');
         if (!row) { return; }
         const on = Number(row.getAttribute('data-layer-row'));
+        // 行の上半分に落とせばその物の手前、下半分なら奥（一覧は手前の物が上）。
+        const rr = row.getBoundingClientRect();
+        this.dropHalf = y < rr.top + rr.height / 2 ? 'above' : 'below';
+        // まとめ枠の行の真ん中に落とせば、そのグループの中へ。
+        if (row.hasAttribute('data-holds') && y > rr.top + rr.height * 0.25 && y < rr.bottom - rr.height * 0.25) { this.dropHalf = 'into'; }
         if (on !== this.dragLayer) { this.dropLayer = on; }
       },
       /**
@@ -15461,7 +24520,7 @@ ${insideObjects('.eb-paper.boxed')} {
           window.removeEventListener('pointerup', up, true);
           window.removeEventListener('pointercancel', up, true);
           if (layerGhost) { layerGhost.remove(); layerGhost = null; }
-          if (!moved) { return; }
+          if (!moved) { this.selectLayer(Number(level)); return; }
           this.bandAim(ev.clientX, ev.clientY);
           layerDropped = Date.now();
           const gap = this.dropGap;
@@ -15608,6 +24667,20 @@ ${insideObjects('.eb-paper.boxed')} {
        */
       layerPick(id) {
         if (Date.now() - layerDropped < 400) { return; }
+        const el0 = layerEls[id];
+        if (el0 && el0.hasAttribute('data-eb-hide')) { return; }
+        // 固定・隠したレイヤーの中の物も選べない（Illustrator と同じ）。
+        if (el0) {
+          const top = (() => { let t = el0; while (holderOf(t)) { t = holderOf(t); } return t; })();
+          const info = (normalisePaper(this.doc.paper).layers || {})[String(this.pileLevels().get(top) || 0)] || {};
+          if (info.hide) { return; }
+        }
+        // 同じ行を続けて二度押したら、名前の書き換え。一度目で物を選ぶと一覧が描き直さ
+        // れ、ブラウザのダブルクリックは届かないことがあるので、自分で数える。
+        const now = Date.now();
+        if (lastPick.id === id && now - lastPick.at < 500) { lastPick.at = 0; this.startRename(id); return; }
+        lastPick.id = id;
+        lastPick.at = now;
         this.chooseLayer(id);
       },
       /**
@@ -15632,16 +24705,20 @@ ${insideObjects('.eb-paper.boxed')} {
        */
       pileLevels() {
         const c = canvas();
-        const pile = c ? Array.from(c.querySelectorAll('.eb-anchor > *')) : [];
-        const zOf = (n) => Number(n.style.zIndex) || 0;
-        const bare = pile.filter((n) => zOf(n) === 0);
-        const lift = bare.length;
+        // 本文の直下に置いた物だけ。枠の中に置いた物は、その枠の中で重ねる。
+        const pile = c ? Array.from(c.querySelectorAll('.eb-anchor > *')).filter((n) => !holderOf(n)) : [];
         const map = new Map();
+        // レイヤーを書き込んだ物は、その番号の層にいる（同じ層の中の前後は z-index）。
+        const told = pile.filter((n) => n.hasAttribute('data-eb-layer'));
+        told.forEach((n) => { map.set(n, Number(n.getAttribute('data-eb-layer')) || 0); });
+        const rest = pile.filter((n) => !n.hasAttribute('data-eb-layer'));
+        const bare = rest.filter((n) => zOf(n) === 0);
+        const lift = bare.length;
         // Below the writing, the writing itself, then the things drawn on the
         // page in the order they were written, then the ones with a level of
         // their own -- which is the order a browser paints them in.
         bare.forEach((n, i) => { map.set(n, i + 1); });
-        pile.forEach((n) => {
+        rest.forEach((n) => {
           const z = zOf(n);
           if (z > 0) { map.set(n, z + lift); } else if (z < 0) { map.set(n, z); }
         });
@@ -15662,6 +24739,10 @@ ${insideObjects('.eb-paper.boxed')} {
         });
         this.extraLayers.forEach((n) => { if (!by.has(n)) { by.set(n, []); } });
         if (!by.has(0)) { by.set(0, []); }
+        // 同じ層の中は、奥から手前へ（z-index の小さい順、同じなら書いた順）。
+        by.forEach((els, level) => {
+          by.set(level, els.map((el, i) => ({ el, i })).sort((a, b) => (zOf(a.el) - zOf(b.el)) || (a.i - b.i)).map((x) => x.el));
+        });
         return Array.from(by.keys()).sort((a, b) => a - b)
           .map((level) => ({ level: level, els: by.get(level) }));
       },
@@ -15675,9 +24756,29 @@ ${insideObjects('.eb-paper.boxed')} {
         const rest = list.filter((s) => s.els.length || s.level === 0 || s.made);
         const flow = rest.findIndex((s) => s.level === 0 && !s.els.length);
         const kept = [];
+        // 層の番号は data-eb-layer に書き、同じ層の中の前後も含めた重なりの順は
+        // z-index に一つずつ違う数で書く（奥から手前へ）。z-index だけで層を表して
+        // いたので、同じ層の中の前後を決められなかった（オーナー 2026-09-22）。
+        const below = rest.slice(0, flow < 0 ? 0 : flow).reduce((n, sl) => n + sl.els.length, 0);
+        // レイヤーの名前・目・鍵は番号で覚えているので、番号が付け直されたら付け替える。
+        const oldL = (this.doc.paper && this.doc.paper.layers) || {};
+        const newL = {};
+        rest.forEach((sl, i) => {
+          const level = i - (flow < 0 ? 0 : flow);
+          if (level && sl.level != null && oldL[String(sl.level)]) { newL[String(level)] = oldL[String(sl.level)]; }
+        });
+        if (JSON.stringify(newL) !== JSON.stringify(oldL)) {
+          this.doc.paper = Object.assign({}, this.doc.paper, { layers: newL });
+          this.touchSettings();
+          this.$nextTick(() => this.applyLayerRules());
+        }
+        let zDown = -below;
+        let zUp = 0;
         rest.forEach((s, i) => {
           const level = i - (flow < 0 ? 0 : flow);
-          s.els.forEach((el) => { this.putInLayer(el, level); });
+          s.els.forEach((el) => {
+            if (level < 0) { this.putInLayer(el, level, zDown); zDown += 1; } else if (level > 0) { zUp += 1; this.putInLayer(el, level, zUp); } else { this.putInLayer(el, 0, 0); }
+          });
           if (!s.els.length && level !== 0) { kept.push(level); }
         });
         this.extraLayers = kept;
@@ -15735,18 +24836,80 @@ ${insideObjects('.eb-paper.boxed')} {
         this.seat(list);
       },
       /** Put a thing standing on the page into a layer of a given level. */
-      putInLayer(el, level) {
+      putInLayer(el, level, z) {
         if (!el) { return; }
-        if (level) { el.style.zIndex = String(level); } else { el.style.removeProperty('z-index'); }
+        const at = z === undefined ? level : z;
+        if (at) { el.style.zIndex = String(at); } else { el.style.removeProperty('z-index'); }
+        if (level) { el.setAttribute('data-eb-layer', String(level)); } else { el.removeAttribute('data-eb-layer'); }
         if (!el.getAttribute('style')) { el.removeAttribute('style'); }
       },
-      layerDragEnd() { this.dragLayer = -1; this.dropLayer = -1; this.dropLevel = null; this.dropGap = null; this.dragBand = null; },
+      /**
+       * 同じ層の中（枠の中に置いた物なら、その枠の中）で、一番手前・一つ前・一つ
+       * 後ろ・一番奥へ。層をまたいで動かすのは、レイヤーバーで行を引きずる。
+       */
+      orderWithin(el, where) {
+        if (!el) { return; }
+        const holder = holderOf(el);
+        const shift = (list) => {
+          const at = list.indexOf(el);
+          if (at < 0) { return false; }
+          list.splice(at, 1);
+          let to = at;
+          if (where === 'front') { to = list.length; } else if (where === 'back') { to = 0; } else { to = Math.max(0, Math.min(list.length, at + (Number(where) > 0 ? 1 : -1))); }
+          list.splice(to, 0, el);
+          return to !== at;
+        };
+        history.push(true);
+        if (holder) {
+          const list = placedIn(holder);
+          if (shift(list)) { restackIn(list); }
+        } else {
+          const list = this.slots();
+          const seat = list.find((sl) => sl.els.indexOf(el) >= 0);
+          if (!seat) { return; }
+          shift(seat.els);
+          this.seat(list);
+        }
+        this.touch();
+        this.after();
+      },
+      layerDragEnd() { this.dragLayer = -1; this.dropLayer = -1; this.dropHalf = ''; this.dropLevel = null; this.dropGap = null; this.dragBand = null; },
       layerDrop(id) {
         const from = layerEls[this.dragLayer];
         const onto = layerEls[id];
+        const half = this.dropHalf;
         this.dragLayer = -1;
         this.dropLayer = -1;
         if (!from || !onto || from === onto) { return; }
+        // 紙の上に置いた物そのもの（置き場 .eb-anchor の直下）。置いた枠の中の段落は含めない。
+        const standing0 = (el) => !!(el && el.parentNode && el.parentNode.classList && el.parentNode.classList.contains('eb-anchor'));
+        // 物の行を、まとめ枠の行の真ん中に落とした：そのグループに入れる。枠の外に置いて
+        // あった物は、枠の左上に寄せてから入れる（入れた物は枠の中に見える所にある）。
+        if (half === 'into' && onto.matches && onto.matches(LAYER_HOLDERS) && standing0(from)
+          && !(from.matches && from.matches(LAYER_HOLDERS)) && !from.contains(onto)) {
+          const q = onto.getBoundingClientRect();
+          const r = from.getBoundingClientRect();
+          const z = this.frameZoom() || 1;
+          const pad = 3 / MM * z;
+          if (!(r.left >= q.left && r.right <= q.right && r.top >= q.top && r.bottom <= q.bottom)) {
+            nudgeFreePx(from, q.left + pad - r.left, q.top + pad - r.top, z);
+          }
+          if (this.putInFrame(from, onto)) { this.after(); }
+          return;
+        }
+        // 同じ枠の中に置いた物どうし：その枠の中で前後を入れ替える。
+        if (standing0(from) && standing0(onto) && holderOf(from) && holderOf(from) === holderOf(onto)) {
+          history.push(true);
+          const list = placedIn(holderOf(from)).filter((o) => o !== from);
+          const at = list.indexOf(onto);
+          list.splice(half === 'above' ? at + 1 : at, 0, from);
+          restackIn(list);
+          this.touch();
+          this.after();
+          return;
+        }
+        // 枠の中の物と、枠の外の物とは入れ替えない（枠から出し入れするのは紙の上で）。
+        if ((standing0(from) && holderOf(from)) || (standing0(onto) && holderOf(onto))) { return; }
         // Two things that stand on the paper change places in the pile. Anything
         // else -- a paragraph, a table, a frame in the run of the text -- has no
         // place in a pile to change, so dragging its row moves the thing itself
@@ -15758,7 +24921,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // the text where it stands, and the two are at one level from then on.
         // Without this, dropping a row on a row could only shuffle the writing
         // about -- the one gesture a writer reaches for first, doing nothing.
-        const standing = (el) => !!(el && el.closest && el.closest('.eb-anchor'));
+        const standing = standing0;
         if (!standing(from) && standing(onto) && liftable(from)) {
           history.push(true);
           this.freeInPlace(from);
@@ -15767,14 +24930,15 @@ ${insideObjects('.eb-paper.boxed')} {
           const room = lifted.find((sl) => sl.els.indexOf(onto) >= 0);
           if (room) {
             this.liftFrom(lifted, from);
-            room.els.push(from);
+            const at = room.els.indexOf(onto);
+            room.els.splice(half === 'above' ? at + 1 : at, 0, from);
             this.seat(lifted);
           }
           this.touch();
           this.after();
           return;
         }
-        const pile = layerEls.filter((el) => el && el.closest('.eb-anchor'));
+        const pile = layerEls.filter((el) => standing0(el));
         if (pile.indexOf(from) < 0 || pile.indexOf(onto) < 0) {
           const fromHost = objectFree(from) ? from.parentNode : from;
           const ontoHost = objectFree(onto) ? onto.parentNode : onto;
@@ -15783,10 +24947,23 @@ ${insideObjects('.eb-paper.boxed')} {
           // what dragging a row a little way down the list means.
           if (!fromHost.parentNode || fromHost.parentNode !== ontoHost.parentNode) { return; }
           if (fromHost === ontoHost || fromHost.contains(ontoHost)) { return; }
+          // 次のページへ続くまとめ枠は、本体と続きの部分（それぞれの置き場）を一緒に
+          // 動かす。本体だけを動かすと続きの部分が取り残され、本体より前に並んで重なり、
+          // 枠が動かなくなった（2026-09-22 test.html、BUGS #59）。落とす先も、続きの
+          // 部分の間ではなく、その枠のまとまりの前か後ろにする。
+          const hostsOf = (el, host) => {
+            if (!chainable(el)) { return [host]; }
+            const chain = chainOf(chainLead(el));
+            return chain.map((f) => chainHost(f)).filter((h, i, a) => h && a.indexOf(h) === i);
+          };
+          const moving = hostsOf(from, fromHost);
+          const target = hostsOf(onto, ontoHost);
+          if (target.some((h) => moving.indexOf(h) >= 0)) { return; }
           history.push(true);
           const kids = Array.from(fromHost.parentNode.children);
-          const down = kids.indexOf(fromHost) < kids.indexOf(ontoHost);
-          ontoHost.parentNode.insertBefore(fromHost, down ? ontoHost.nextSibling : ontoHost);
+          const down = kids.indexOf(moving[0]) < kids.indexOf(target[0]);
+          const ref = down ? target[target.length - 1].nextSibling : target[0];
+          moving.forEach((h) => { ontoHost.parentNode.insertBefore(h, ref); });
           this.touch();
           this.settleFrame();
           return;
@@ -15799,7 +24976,9 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!seat) { return; }
         history.push(true);
         this.liftFrom(list, from);
-        seat.els.push(from);
+        // 落とした行の手前（上半分）か奥（下半分）へ。同じ層の中の前後もこれで決まる。
+        const at = seat.els.indexOf(onto);
+        seat.els.splice(half === 'above' ? at + 1 : at, 0, from);
         this.seat(list);
         this.touch();
         this.after();
@@ -15811,23 +24990,20 @@ ${insideObjects('.eb-paper.boxed')} {
        */
       blocksOfPage(n) {
         const c = canvas();
-        const sheet = sheetsOnScreen()[0];
-        if (!c || !sheet) { return []; }
-        const z = this.frameZoom() || 1;
-        const pageH = sheet.getBoundingClientRect().height / z;
-        const top0 = sheet.getBoundingClientRect().top;
+        if (!c) { return []; }
+        const ruler = pageRuler(c, this.frameZoom() || 1);
+        if (!ruler.span) { return []; }
         return Array.from(c.children).filter((el) => {
           if (el.classList && (el.classList.contains('eb-pagespacer')
             || el.classList.contains('eb-header') || el.classList.contains('eb-footer'))) { return false; }
-          const r = el.getBoundingClientRect();
+          let r = el.getBoundingClientRect();
           if (!r.height && !r.width) {
-            // an anchor is a line of no height: judge it by what hangs off it
+            // an anchor is a peg of no size: judge it by what hangs off it
             const kid = el.firstElementChild;
             if (!kid) { return false; }
-            const kr = kid.getBoundingClientRect();
-            return Math.floor(((kr.top - top0) / z) / pageH) + 1 === n;
+            r = kid.getBoundingClientRect();
           }
-          return Math.floor(((r.top - top0) / z) / pageH) + 1 === n;
+          return ruler.pageOf(r) === n;
         });
       },
       pageDragStart(n, e) {
@@ -15915,9 +25091,34 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!cells.length || !sheets.length) { return; }
         const first = sheets[0].getBoundingClientRect();
         if (!first.width) { return; }
-        const step = sheets.length > 1
-          ? sheets[1].getBoundingClientRect().top - first.top
-          : first.height + 16 * (this.frameZoom() || 1);
+        const wrapBox = wrap.getBoundingClientRect();
+        const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+        const gap = 16 * (this.frameZoom() || 1);
+        /**
+         * Where a sheet stands inside the copy, so the little page can be moved
+         * to show it.
+         *
+         * Read off the sheet itself, not as "one page further down than the one
+         * before". In 縦書き the sheets stand side by side, so "further down" is
+         * no distance at all: every little page was moved by nothing, showed the
+         * same corner of the paper -- the empty margin at the left-hand end --
+         * and the whole bar came out blank. Measured on 見本4_まとめ枠: four
+         * little pages, every one of them white. The sum below is the same one
+         * whichever way the sheets are laid out.
+         */
+        const offsetOf = (i) => {
+          const s = sheets[i];
+          if (s) {
+            const box = s.getBoundingClientRect();
+            return { x: box.left - wrapBox.left, y: box.top - wrapBox.top };
+          }
+          // Past the last sheet drawn -- carry on at the spacing of the others.
+          const last = sheets[sheets.length - 1].getBoundingClientRect();
+          const n = i - (sheets.length - 1);
+          return tate
+            ? { x: (last.left - wrapBox.left) - n * (first.width + gap), y: last.top - wrapBox.top }
+            : { x: last.left - wrapBox.left, y: (last.top - wrapBox.top) + n * (first.height + gap) };
+        };
         // Only the little pages the writer can actually see. A copy of the whole
         // document goes into each one, so painting all of them would be one copy
         // per page -- a hundred pages would mean a hundred copies of a hundred
@@ -15946,13 +25147,79 @@ ${insideObjects('.eb-paper.boxed')} {
           Array.from(copy.querySelectorAll('[contenteditable]')).forEach((n) => n.setAttribute('contenteditable', 'false'));
           copy.style.margin = '0';
           copy.style.transformOrigin = '0 0';
-          copy.style.transform = 'scale(' + scale + ') translateY(' + (-i * step) + 'px)';
+          const off = offsetOf(i);
+          copy.style.transform = 'scale(' + scale + ') translate('
+            + round1(-off.x) + 'px, ' + round1(-off.y) + 'px)';
           cell.textContent = '';
           cell.appendChild(copy);
         });
         this.preview.mini = true;
       },
+      /** Open the document's settings -- opening the document first if it is not the one open. */
+      async openDocSettings(d) {
+        this.closeCtx();
+        if (!d) { return; }
+        if (this.doc.id !== d.id) {
+          await this.openDoc(d.id);
+          // Refused (a file with tags it does not handle, and the writer said no).
+          if (this.doc.id !== d.id) { return; }
+        }
+        this.docSet = {
+          open: true, useScript: !!this.doc.useScript,
+          title: this.doc.title || '', lang: this.doc.lang || 'ja',
+          head: normaliseHead(this.doc.head),
+        };
+      },
+      /** OK in the document's settings: what changed is applied, and saved with the document. */
+      applyDocSettings() {
+        const want = !!this.docSet.useScript;
+        this.docSet.open = false;
+        const head = normaliseHead(this.docSet.head);
+        const title = String(this.docSet.title || '').trim();
+        const lang = String(this.docSet.lang || '').trim() || 'ja';
+        const same = JSON.stringify(head) === JSON.stringify(normaliseHead(this.doc.head))
+          && title === (this.doc.title || '') && lang === (this.doc.lang || 'ja');
+        if (!same) {
+          this.doc.head = head;
+          this.doc.lang = lang;
+          if (title && title !== this.doc.title) { this.doc.title = title; this.applyTitle(); }
+          this.touch();
+        }
+        if (want !== !!this.doc.useScript) { this.setDocScript(want); }
+      },
+      /** Turn the document's program on or off. It is written in, or taken out, when the document is next saved. */
+      setDocScript(on) {
+        this.doc.useScript = !!on;
+        // 一覧の「JS」印もすぐに合わせる。一覧はサーバーがファイルを読んで付けた
+        // 印なので、保存して一覧を読み直すまで前のままだった（オーナー 2026-09-21）。
+        (this.docs || []).forEach((d) => { if (d.id === this.doc.id) { d.script = !!on; } });
+        this.touch();
+        // Both sides only exists with the program: turned off, the photographs
+        // that asked for it go back to one side, and the gaps come out.
+        // 回り込みが変わると文章の長さも変わるので、まとめ枠のページ割りまで組み直す
+        // （回り込みだけ直していたので、1ページ目の枠から文章があふれた）。
+        this.$nextTick(() => { this.repaginate(); this.refreshZoomMarks(); });
+      },
+      /** Where the enlargement marks go: the bottom right corner of each photograph. */
+      refreshZoomMarks() {
+        const c = canvas();
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!c || !wrap || !this.doc.useScript) { if (this.zoomMarks.length) { this.zoomMarks = []; } return; }
+        const z = this.frameZoom() || 1;
+        const b = wrap.getBoundingClientRect();
+        const names = { full: this.t('Whole screen'), grow: this.t('Grow where it stands'), loupe: this.t('Magnifying glass'), gallery: this.t('All the photographs in turn') };
+        const marks = [];
+        c.querySelectorAll('figure.eb-img[data-zoom] img').forEach((img) => {
+          const kind = img.closest('figure').getAttribute('data-zoom');
+          if (!names[kind]) { return; }
+          const r = img.getBoundingClientRect();
+          if (!r.width || !r.height) { return; }
+          marks.push({ x: (r.right - b.left) / z - 32, y: (r.bottom - b.top) / z - 32, label: this.t('Enlargement') + ': ' + names[kind] });
+        });
+        this.zoomMarks = marks;
+      },
       refreshPreview() {
+        this.refreshZoomMarks();
         const c = canvas();
         if (!c || !this.previewOpen) { this.preview = []; return; }
         const sheet = sheetsOnScreen()[0];
@@ -16065,22 +25332,30 @@ ${insideObjects('.eb-paper.boxed')} {
         const z = this.frameZoom() || 1;
         const dx = (x - dragGrabX) - r.left;
         const dy = (y - dragGrabY) - r.top;
-        el.style.left = round1((parseFloat(el.style.left) || 0) + dx * MM / z) + 'mm';
-        el.style.top = round1((parseFloat(el.style.top) || 0) + dy * MM / z) + 'mm';
+        nudgeFreePx(el, dx, dy, z);
         this.keepOnPaper(el);
         this.settlePlaced(el);
       },
       freeInPlace(el) {
         if (!el || objectFree(el)) { return; }
         const was = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+        // 写真は、それまでの見た目の幅を「幅（mm）」として書き込んでから紙の上に置く。
+        // 幅の指定の無い写真は、縦書きでは結び付け先の幅（0）に合わせて縮み、見えなく
+        // なった（2026-09-22 点検で発見）。書いておけば、横書きでも縦書きでも同じ大きさ。
+        if (was && was.width && el.matches && el.matches('figure.eb-img') && !el.style.width) {
+          const z0 = this.frameZoom() || 1;
+          el.style.width = round1(was.width / z0 * MM) + 'mm';
+          el.style.maxWidth = 'none';
+        }
         setObjectFree(el, true);
-        el.style.left = '0mm';
-        el.style.top = '0mm';
+        el.style.setProperty(freeProp(el), '0mm');
+        el.style.setProperty(crossProp(el), '0mm');
         if (!was || !was.width) { return; }
         const now = el.getBoundingClientRect();
         const z = this.frameZoom() || 1;
-        el.style.left = round1((was.left - now.left) * MM / z) + 'mm';
-        el.style.top = round1((was.top - now.top) * MM / z) + 'mm';
+        // 描かれている場所を動かさずに流れから外す。縦書きでは進む向きのずれを
+        // right で持つので、右へずれた分だけ right を増やす（向きが逆になる）。
+        nudgeFreePx(el, was.left - now.left, was.top - now.top, z);
         this.keepOnPaper(el);
         this.settlePlaced(el);
       },
@@ -16099,6 +25374,22 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.page = 0;
         this.ctx.doc = null;
         this.ctx.cat = null;
+        this.ctx.pagebreak = false;
+        this.ctx.fromLayers = false;
+        this.ctx.layerBand = null;
+        this.ctx.lastPara = false;
+        // 改ページの印を右クリック: 改ページを選び、「改ページを削除」だけを出す。
+        // 以前は隣の段落が選ばれ、その段落のメニュー（枠を削除など）が出ていた。
+        const pb = e.target && e.target.closest ? e.target.closest('.eb-pagebreak') : null;
+        if (pb && c.contains(pb)) {
+          this.clearFrame();
+          pickBreak(pb);
+          this.ctx.pagebreak = true;
+          this.ctx.image = false; this.ctx.table = false; this.ctx.frame = false; this.ctx.text = false;
+          this.ctx.link = false; this.ctx.selection = false; this.ctx.textless = true; this.ctx.writingRow = false;
+          this.placeCtx(e.clientX, e.clientY);
+          return;
+        }
         const point = caretFromPoint(e.clientX, e.clientY);
         const sel = getRange();
         let inside = false;
@@ -16109,12 +25400,18 @@ ${insideObjects('.eb-paper.boxed')} {
         const at = point && !inside ? point.startContainer : e.target;
         const range = getRange();
         this.ctx.table = !!cellAt(at);
-        this.ctx.image = !!imageAt(at);
-        this.ctx.captionPlace = this.ctx.image ? captionPlace(imageAt(at)) : '';
+        // 押した物そのものが画像なら、画像の項目を出す。紙の上に置いた画像では、
+        // カーソルの場所（近くの文章）しか見ていなかったので、大きさ・説明文・
+        // 代替テキスト・削除が右クリックに出なかった（2026-09-22）。
+        ctxPicture = null;
+        const pic = imageAt(e.target) || imageAt(at);
+        ctxPicture = pic || null;
+        this.ctx.image = !!pic;
+        this.ctx.captionPlace = pic ? captionPlace(pic) : '';
         // The right button acts on what it is over, so it also picks the frame up.
         // Writing counts: a paragraph is an object like any other, and the menu is
         // where its wrap, its arrangement and its size are set.
-        const obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
+        let obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
           || textBlockAt(e.target) || textBlockAt(at);
         // The right button on an object shows that object's settings, whatever the
         // object is -- not only on the thin band of its border. Inside something
@@ -16123,15 +25420,23 @@ ${insideObjects('.eb-paper.boxed')} {
         // wrap, the arrangement, the size -- which is where a writer who knows a
         // word processor looks for them. The properties dialogue is one item in it,
         // not the whole answer to a right click.
-        if (obj && takesClick(obj, e.target, e.clientX, e.clientY)) {
+        // 文字を書く枠の中の字の上で右クリックしたときも、枠のメニューを出すために枠を
+        // 掴む。ただしそれは右クリックのためだけで、そのあと BS / Delete を押しても枠は
+        // 消さない（字が消える。BUGS #45）。
+        const forMenu = !!(obj && writtenFrame(obj) && !onEdge(obj, e.clientX, e.clientY, 6));
+        ctxTookFrame = forMenu ? obj : null;
+        if (obj && (forMenu || takesClick(obj, e.target, e.clientX, e.clientY))) {
           frameEl = obj;
           framePinned = true;
           frameTaken = true;
           this.frame.bar = true;
         } else if (obj) { frameEl = obj; framePinned = true; } else { frameEl = null; framePinned = false; }
         this.ctx.frame = !!obj;
+        this.ctx.kind = obj ? objectKind(obj) : '';
         // Whether there is any writing in it: what can be cleared depends on it.
         this.ctx.frameWords = !!(obj && String(obj.textContent || '').trim());
+        // 文字を持たない物（画像・線・文字の無い図形）には、文字の項目は意味が無い。
+        this.ctx.textless = !!(obj && (this.ctx.image || !this.ctx.frameWords));
         this.syncFrame();
         this.ctx.text = !obj && !!textRange;
         this.ctx.link = !!linkAt(at);
@@ -16146,6 +25451,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.flip = x > window.innerWidth - 500;
         this.ctx.x = Math.max(6, Math.min(x, window.innerWidth - 250));
         this.ctx.y = Math.max(6, Math.min(y, window.innerHeight - 430));
+        this.ctx.tall = 0;
         ctxAt = window.performance ? window.performance.now() : 0;
         this.ctx.open = true;
         this.refreshState();
@@ -16155,7 +25461,13 @@ ${insideObjects('.eb-paper.boxed')} {
           if (!el) { return; }
           const r = el.getBoundingClientRect();
           if (r.right > window.innerWidth - 6) { this.ctx.x = Math.max(6, window.innerWidth - r.width - 6); }
-          if (r.bottom > window.innerHeight - 6) { this.ctx.y = Math.max(6, window.innerHeight - r.height - 6); }
+          // Taller than the window (a laptop's 657 px): it scrolls inside the window
+          // instead of running off the bottom, where the last items could not be
+          // reached (BUGS #246).
+          if (r.height > window.innerHeight - 12 && window.innerWidth > 620) {
+            this.ctx.y = 6;
+            this.ctx.tall = window.innerHeight - 12;
+          } else if (r.bottom > window.innerHeight - 6) { this.ctx.y = Math.max(6, window.innerHeight - r.height - 6); }
         });
       },
       /**
@@ -16194,6 +25506,10 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ctx.list = false;
         this.ctx.selection = false;
         this.ctx.writingRow = !placed;
+        this.ctx.pagebreak = false;
+        this.ctx.fromLayers = true;
+        this.ctx.layerBand = null;
+        this.ctx.lastPara = !placed && isLastParagraph(el);
         this.placeCtx(e.clientX, e.clientY);
       },
       /**
@@ -16261,14 +25577,40 @@ ${insideObjects('.eb-paper.boxed')} {
         const sheet = sheets[n - 1];
         if (!c || !sheet || !sheet.getBoundingClientRect) { return []; }
         const sr = sheet.getBoundingClientRect();
+        const ruler = pageRuler(c, this.frameZoom() || 1);
         return Array.from(c.querySelectorAll('.eb-anchor')).filter((el) => {
           return Array.from(el.children).some((kid) => {
             if (!kid.getBoundingClientRect) { return false; }
             const r = kid.getBoundingClientRect();
             if (!r.height && !r.width) { return false; }
-            return r.top >= sr.top - 2 && r.top <= sr.bottom + 2;
+            return ruler.onSheet(r, sr);
           });
         });
+      },
+      /**
+       * A peg among the things a page command is about to take away, looked at
+       * for what it holds. A peg is where a thing is tied into the writing, not
+       * where the thing is drawn: a thing tied into page one can stand on page
+       * three (the owner's test.html). Taking the peg away took that thing with
+       * it -- the two page commands emptied or removed page one, and the ellipse
+       * on page three was gone (review D11). What is drawn on this page goes;
+       * the peg goes only when it holds nothing drawn anywhere else. Measured
+       * before anything is taken away.
+       * Answers null for a peg that goes whole, else the things of it that go.
+       */
+      pegPart(peg, n, ruler) {
+        if (!peg || !peg.classList || !peg.classList.contains('eb-anchor')) { return null; }
+        const kids = Array.from(peg.children);
+        // Read against the sheet itself, as objectsOnPage reads it.
+        const sheet = ruler.sheets[n - 1];
+        const sr = sheet && sheet.getBoundingClientRect ? sheet.getBoundingClientRect() : null;
+        const here = kids.filter((k) => {
+          const r = k.getBoundingClientRect ? k.getBoundingClientRect() : null;
+          // Drawn nowhere at all: it goes with its peg, as it always did.
+          if (!r || (!r.width && !r.height)) { return true; }
+          return sr ? ruler.onSheet(r, sr) : ruler.pageOf(r) === n;
+        });
+        return here.length === kids.length ? null : here;
       },
       deletePage(n) {
         let blocks = this.blocksOfPage(n);
@@ -16280,8 +25622,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // on a four-page document, emptying page two left two pages, because
         // blocksOfPage(2) came back as [the writing, fold, fold] and both folds
         // belonged to the pages that follow.
-        blocks = blocks.filter((el) => !(el.classList
-          && (el.classList.contains('eb-pagebreak') || el.classList.contains('eb-blankpage'))));
+        // 改ページは「このページの上に立っているもの」ではなく、ページとページの
+        // 境目そのもの。取り去ると、その先のページまで連れて行く。
+        // 白紙のページは違う ―― それ自体が一枚の紙なので、選ばれたら取り除く。
+        // これを外していたので、足した白紙のページはどうやっても消せなかった。
+        blocks = blocks.filter((el) => !(el.classList && el.classList.contains('eb-pagebreak')));
         if (!blocks.length) { return; }
         this.closeCtx();
         const c = canvas();
@@ -16298,18 +25643,27 @@ ${insideObjects('.eb-paper.boxed')} {
         // the part that was on this page goes. One that cannot be cut there --
         // a picture, a thing with nothing to cut between -- is left alone: doing
         // nothing is a great deal better than taking away what was not asked for.
-        const sheet0 = sheetsOnScreen()[0];
         const z = this.frameZoom() || 1;
-        const pageH = sheet0 ? sheet0.getBoundingClientRect().height / z : 0;
-        const top0 = sheet0 ? sheet0.getBoundingClientRect().top : 0;
-        const foot = top0 + (n * pageH * z);
+        const ruler = pageRuler(c, z);
         const kept = [];
+        const parts = new Map();
+        blocks.forEach((el) => { const part = this.pegPart(el, n, ruler); if (part) { parts.set(el, part); } });
         blocks.forEach((el) => {
           if (!el.parentNode) { return; }
+          if (parts.has(el)) { parts.get(el).forEach((k) => k.remove()); return; }
           const r = el.getBoundingClientRect();
-          if (!pageH || r.bottom <= foot + 1) { el.parentNode.removeChild(el); return; }
-          const tail = carveAt(el, (foot - r.top) / z);
-          if (tail) { el.parentNode.removeChild(el); return; }
+          // How far the block reaches, against where this page ends -- both read
+          // along the writing's own direction, so the sum is the same in 縦書き.
+          if (!ruler.span || ruler.endOf(r) <= ruler.footAt(n) + 1 / z) { el.parentNode.removeChild(el); return; }
+          const tail = carveAt(el, ruler.footAt(n) - ruler.startOf(r));
+          // 切り分けた先（次のページに乗っていた分）は文書に戻す。戻さずに元の塊を
+          // 消していたので、「このページの内容を消す」が、次のページにあった続きまで
+          // 消していた ―― 注記が言っていることと逆のことをしていた。
+          if (tail) {
+            el.parentNode.insertBefore(tail, el.nextSibling);
+            el.parentNode.removeChild(el);
+            return;
+          }
           kept.push(el);
         });
         if (kept.length) {
@@ -16326,6 +25680,166 @@ ${insideObjects('.eb-paper.boxed')} {
         framePinned = false;
         this.touch();
         this.settleFrame();
+      },
+      /**
+       * The page itself, taken away -- the sheet and whatever is drawn on it.
+       *
+       * "Delete everything on this page" empties a page but leaves the sheet
+       * wherever the writing still reaches it; a page the writer added by hand
+       * could not be got rid of at all. This is the other half: what lies on the
+       * page goes, INCLUDING the part of a block that flowed in from the page
+       * before, so nothing is left to hold the sheet open and it closes up.
+       *
+       * A block that reaches past the foot is cut there and its remainder put
+       * back: only what was on this page goes. One that cannot be cut -- a
+       * picture, a row taller than the page -- is left alone and said so.
+       */
+      removePage(n) {
+        const c = canvas();
+        if (!c) { return; }
+        const z = this.frameZoom() || 1;
+        const ruler = pageRuler(c, z);
+        if (!ruler.span) { return; }
+        // The sheets and the gaps between them (see pageRuler): counted in sheets
+        // alone, the page taken away slipped by a gap a page.
+        const head = ruler.headAt(n);
+        const foot = ruler.footAt(n);
+        const slack = 1 / z;
+        this.closeCtx();
+        history.push(true);
+        const kept = [];
+        // どれがこのページに乗っているかは、**一つも消さないうちに**全部測る。
+        // 消しながら測ると、一つ消すたびに版が詰まって次の塊が上がってきて、
+        // それも「このページのもの」と見えてしまう。実測：4枚の文書の2枚目を
+        // 消したら、3枚目と4枚目まで巻き込んで 1 枚になった。
+        const marks = Array.from(c.children).map((el) => {
+          if (el.classList && (el.classList.contains('eb-pagespacer')
+            || el.classList.contains('eb-header') || el.classList.contains('eb-footer'))) { return null; }
+          const r = el.getBoundingClientRect();
+          return { el: el, from: ruler.startOf(r), to: ruler.endOf(r) };
+        }).filter((x) => x && x.to > head + slack && x.from < foot - slack);
+        // このページの杭に結び付いて別のページに描かれた物は残す（review D11）。
+        // 杭も残る。杭はこのページの頭へ上がる ―― 動くのはこのページでの深さ（depth）
+        // だけで、1ページ分ではない。その物は、下のページに描かれていれば残りの分だけ
+        // 引き上げ、上のページなら上がった分だけ戻して、描かれていた紙の同じ所に置く。
+        const parts = new Map();
+        const stay = new Map();
+        const geom0 = pageGeometry();
+        const sheetN = ruler.sheets[n - 1] && ruler.sheets[n - 1].getBoundingClientRect ? ruler.sheets[n - 1].getBoundingClientRect() : null;
+        marks.forEach((mark) => {
+          const part = this.pegPart(mark.el, n, ruler);
+          if (!part) { return; }
+          parts.set(mark.el, part);
+          if (!geom0 || !sheetN) { return; }
+          const depth = Math.min(geom0.usable, Math.max(0, mark.from - ruler.startOf(sheetN) - geom0.mt));
+          Array.from(mark.el.children).forEach((k) => {
+            if (part.indexOf(k) >= 0) { return; }
+            const below = ruler.startOf(k.getBoundingClientRect()) > ruler.endOf(sheetN);
+            stay.set(k, below ? geom0.usable - depth : -depth);
+          });
+        });
+        // 置かれた物は、版面が詰まっても自分では動かない。消したページより後ろに
+        // 立っている物を、1ページ分だけ引き上げる ―― そうしないと、その物が開けて
+        // いる紙が残り、「消したのに紙が減らない」ことになる。
+        //
+        // 実測（オーナーの test.html・横書き・4枚）: 3ページ目は完全な空白で、
+        // 4ページ目の楕円だけが紙を開けていた。3ページ目を消しても 4枚のまま、
+        // 文字数も変わらず、何も起きなかった。空白ページを消せばちょうど1枚減る
+        // ―― 正本（LibreOffice）で測ったとおりの動きに合わせる。
+        //
+        // 杭（錨）が消す場所より後ろにある物は、版面と一緒に自分で上がる。
+        // それにも引き上げを足すと二重に動く ―― ページを足すときに一度踏んだ。
+        // Things drawn on this page whose peg stands on another one: a page made of
+        // nothing but placed things (a copy of one, say) has no writing on it, so
+        // nothing above found it, and "delete this page" did nothing at all
+        // (PS 仕事5, 2026-09-28: page three duplicated, the copy's page four would
+        // not go). They are taken away with the page; their peg goes too when
+        // everything on it was here.
+        const drawnHere = sheetN ? Array.from(c.children).filter((a) => a.classList
+          && a.classList.contains('eb-anchor') && !marks.some((m) => m.el === a))
+          .map((a) => ({ peg: a, kids: Array.from(a.children).filter((k) => {
+            const r = k.getBoundingClientRect ? k.getBoundingClientRect() : null;
+            return !!r && !!(r.width || r.height) && ruler.onSheet(r, sheetN);
+          }) }))
+          .filter((x) => x.kids.length) : [];
+        const cuts = marks.filter((m) => !parts.has(m.el));
+        const lastCut = cuts.length ? cuts[cuts.length - 1].el : null;
+        const movesItself = (peg) => {
+          if (!lastCut || !peg || !peg.compareDocumentPosition) { return false; }
+          return !!(peg.compareDocumentPosition(lastCut) & Node.DOCUMENT_POSITION_PRECEDING);
+        };
+        const boxes = Array.from(c.querySelectorAll('div.eb-frame, aside.eb-box'))
+          .map((f) => f.getBoundingClientRect());
+        const inABox = (r) => boxes.some((f) => r.top >= f.top - 1 && r.bottom <= f.bottom + 1
+          && r.left >= f.left - 1 && r.right <= f.right + 1);
+        const movers = Array.from(c.querySelectorAll('.eb-anchor > *')).filter((el) => {
+          if (!el.style || !freeOff(el)) { return false; }
+          const r = el.getBoundingClientRect();
+          if (!r.width && !r.height) { return false; }
+          if (inABox(r)) { return false; }
+          if (stay.has(el) || parts.has(el.parentNode)) { return false; }
+          if (movesItself(el.parentNode)) { return false; }
+          return ruler.pageOf(r) > n;
+        });
+        marks.forEach((mark) => {
+          const el = mark.el;
+          const from = mark.from;
+          const to = mark.to;
+          if (!el.parentNode) { return; }
+          if (parts.has(el)) { parts.get(el).forEach((k) => k.remove()); return; }
+          if (from >= head - slack) {
+            if (to <= foot + slack) { el.parentNode.removeChild(el); return; }
+            const tail = carveAt(el, foot - from);
+            if (!tail) { kept.push(el); return; }
+            el.parentNode.insertBefore(tail, el.nextSibling);
+            el.parentNode.removeChild(el);
+            return;
+          }
+          // 前のページから流れ込んでいるもの: このページに乗っている分だけ取り除く。
+          const onto = carveAt(el, head - from);
+          if (!onto) { kept.push(el); return; }
+          el.parentNode.insertBefore(onto, el.nextSibling);
+          const rest = carveAt(onto, ruler.span);
+          if (rest) { onto.parentNode.insertBefore(rest, onto.nextSibling); }
+          onto.parentNode.removeChild(onto);
+        });
+        drawnHere.forEach((x) => {
+          if (x.kids.length === x.peg.children.length) { x.peg.remove(); } else { x.kids.forEach((k) => k.remove()); }
+        });
+        if (kept.length) {
+          this.notify(this.t('{n} of them run on past this page, so they were left as they are',
+            { n: kept.length }));
+        }
+        // A document with nothing in it cannot be written in: leave a line.
+        if (!c.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre')) {
+          const p = document.createElement('p');
+          p.appendChild(document.createElement('br'));
+          c.appendChild(p);
+        }
+        frameEl = null;
+        framePinned = false;
+        this.touch();
+        this.settleFrame();
+        if (movers.length || stay.size) {
+          this.$nextTick(() => {
+            const g = pageGeometry();
+            if (!g) { return; }
+            let moved = false;
+            movers.forEach((el) => {
+              if (!el.parentNode || !freeOff(el)) { return; }
+              setFreeOff(el, round1((lengthPx(freeOff(el)) - g.usable) * MM) + 'mm');
+              el.removeAttribute('data-free-top');
+              moved = true;
+            });
+            stay.forEach((by, el) => {
+              if (!el.parentNode || !freeOff(el) || !by) { return; }
+              setFreeOff(el, round1((lengthPx(freeOff(el)) - by) * MM) + 'mm');
+              el.removeAttribute('data-free-top');
+              moved = true;
+            });
+            if (moved) { this.touch(); this.settleFrame(); }
+          });
+        }
       },
       /** The same page again, put after it. */
       duplicatePage(n) {
@@ -16351,6 +25865,15 @@ ${insideObjects('.eb-paper.boxed')} {
         // the owner, 2026-09-08, on marks appearing from a page command he did
         // not ask for one with: 「ページを挿入しただけなのに、なぜ、改ページになる？」
         // The copies are moved down a sheet below; the paper follows them.
+        // 写しは新しい紙から始まる。途中のページなら、写しの後ろに元の次のページが
+        // 続くので、写しはそのページの字が紙を満たした所から始まる。最後のページは
+        // 紙の途中で終わっていることが多く、写しはそのすぐ後ろ、同じ紙に続いて
+        // しまった（#265：2枚目＝最後を複製すると、写しの頭が2枚目の残りに入った）。
+        // 最後のページの写しには「この段落の前で改ページ」（段落の書式の
+        // break-before: page。改ページの印は足さない）を付ける。
+        let tail = last.nextElementSibling;
+        while (tail && tail.classList && (tail.classList.contains('eb-pagespacer') || tail.classList.contains('eb-anchor'))) { tail = tail.nextElementSibling; }
+        const lastPage = !tail;
         const copies = [];
         blocks.forEach((el) => {
           const copy = el.cloneNode(true);
@@ -16358,6 +25881,12 @@ ${insideObjects('.eb-paper.boxed')} {
           after = copy;
           copies.push(copy);
         });
+        if (lastPage && !standing) {
+          const lead = copies.find((el) => el.nodeType === 1 && el.classList && !el.classList.contains('eb-anchor') && !el.classList.contains('eb-pagespacer'));
+          if (lead && lead.style && !lead.classList.contains('eb-blankpage') && !lead.classList.contains('eb-pagebreak') && !breaksBefore(lead)) {
+            lead.style.setProperty('break-before', 'page');
+          }
+        }
         if (standing) {
           const g = pageGeometry();
           // Only a thing that already carries an offset of its own is moved by
@@ -16369,8 +25898,8 @@ ${insideObjects('.eb-paper.boxed')} {
             // sitting exactly on top of the things they were copied from.
             copies.forEach((an) => {
               Array.from(an.children).forEach((kid) => {
-                if (!kid.style || !kid.style.top) { return; }
-                kid.style.top = round1((lengthPx(kid.style.top) + g.usable) * MM) + 'mm';
+                if (!kid.style || !freeOff(kid)) { return; }
+                setFreeOff(kid, round1((lengthPx(freeOff(kid)) + g.usable) * MM) + 'mm');
                 kid.removeAttribute('data-free-top');
                 kid.removeAttribute('data-free-peg');
               });
@@ -16414,18 +25943,31 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!flow.length) { return; }
         const sheet = sheetsOnScreen()[0];
         const z = this.frameZoom() || 1;
-        const pageH = sheet ? sheet.getBoundingClientRect().height / z : 0;
-        const top0 = sheet ? sheet.getBoundingClientRect().top : 0;
+        // Which page a block stands on. In 縦書き the pages run right to left, so
+        // how far along the writing a block stands is how far in from the right
+        // edge of the first sheet -- the same sum on the other axis. Asked as
+        // "how far down", every block in a vertical document answered "page one",
+        // and a page asked for above page two was put at the end of the document
+        // instead of in front of it. Measured on 見本4_まとめ枠.
+        const tate = !!(c.classList && c.classList.contains('eb-tategaki'));
+        const sBox = sheet ? sheet.getBoundingClientRect() : null;
+        const pageSpan = sBox ? (tate ? sBox.width : sBox.height) / z : 0;
+        const edge0 = sBox ? (tate ? sBox.right : sBox.top) : 0;
         const pageOf = (el) => {
-          if (!pageH) { return 1; }
+          if (!pageSpan) { return 1; }
           let r = el.getBoundingClientRect();
           if (!r.height && !r.width) {
             const kid = el.firstElementChild;
             if (!kid) { return 1; }
             r = kid.getBoundingClientRect();
           }
-          return Math.floor(((r.top - top0) / z) / pageH) + 1;
+          const along = tate ? (edge0 - r.right) : (r.top - edge0);
+          return Math.floor((along / z) / pageSpan) + 1;
         };
+        // 2026-09-20: ここを「頼まれた場所に落とす」に変えてみたが、まとめ枠が
+        // 白紙のページで 1ページ目と3ページ目に分断された。オーナーの判断は「致命的」。
+        // LibreOffice でも、枠の鎖は錨ごと一緒に動き、あいだにページは割り込まない。
+        // 元の規則が正しい。戻した。
         // A frame carried on to the next page is ONE frame in two pieces. A fold
         // dropped between them tears it apart: measured on test.html, the summary
         // frame came out as frame / blank page / continuation, with the writing
@@ -16452,7 +25994,13 @@ ${insideObjects('.eb-paper.boxed')} {
           ref = last ? outside(last, true).nextSibling : flow[0];
         } else {
           const first = flow.find((el) => pageOf(el) >= n) || null;
-          ref = first ? outside(first, false) : null;
+          // 文書のいちばん前に入れるときは、鎖の外へ回す必要がない ―― 鎖はまだ
+          // 始まってすらいない。回すと、先頭の杭（置いた物をぶら下げる錨）を飛び
+          // 越して枠の前に入り、杭だけが元のページに取り残される。縦書きでは枠が
+          // 1ページを丸ごと占めるので、杭が枠の中にあると見なされてこれが起きた。
+          // 実測（縦書き・test.html）: 紙 3→5、置いた物が2ページ分落ちた。
+          // 横書きでは 白紙→錨→枠 と正しく入り、紙 3→4 だった。
+          ref = first ? ((n <= 1 && first === flow[0]) ? first : outside(first, false)) : null;
         }
         this.closeCtx();
         history.push(true);
@@ -16498,9 +26046,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // Measured on test.html, both ways.
         const pageOfNow = (r) => {
           let pg = 0;
-          sheetsOnScreen().forEach((sh, i) => {
+          sheetsOnScreen().forEach((sh, k) => {
             const sr = sh.getBoundingClientRect();
-            if (r.top >= sr.top - 2 && r.top <= sr.bottom + 2) { pg = i + 1; }
+            const on = tate ? (r.right <= sr.right + 2 && r.right >= sr.left - 2)
+              : (r.top >= sr.top - 2 && r.top <= sr.bottom + 2);
+            if (on) { pg = k + 1; }
           });
           return pg;
         };
@@ -16530,7 +26080,7 @@ ${insideObjects('.eb-paper.boxed')} {
           return !!(peg.compareDocumentPosition(ref) & 2);
         };
         const movers = !below ? [] : Array.from(c.querySelectorAll('.eb-anchor > *')).filter((el) => {
-          if (!el.style || !el.style.top) { return false; }
+          if (!el.style || !freeOff(el)) { return false; }
           const r = el.getBoundingClientRect();
           if (inABox(r)) { return false; }
           if (movesItself(el.parentNode)) { return false; }
@@ -16543,14 +26093,46 @@ ${insideObjects('.eb-paper.boxed')} {
           let shifted = false;
           if (g) {
             movers.forEach((el) => {
-              if (!el.parentNode || !el.style.top) { return; }
-              el.style.top = round1((lengthPx(el.style.top) + g.usable) * MM) + 'mm';
+              if (!el.parentNode || !freeOff(el)) { return; }
+              setFreeOff(el, round1((lengthPx(freeOff(el)) + g.usable) * MM) + 'mm');
               el.removeAttribute('data-free-top');
               shifted = true;
             });
           }
           if (shifted) { this.touch(); this.settleFrame(); }
-          this.$nextTick(() => this.goToPage(target));
+          // 足した紙が、頼まれた場所より手前に落ちることがある。
+          //
+          // 最後のほうの紙が「置いた物」で開いているとき、版面（文章）はそこまで
+          // 届いていない ―― 版面の末尾に置いた白紙は、文章の続きとして手前の紙へ
+          // 落ちる。実測（横書き・4枚の文書。3・4ページ目は 762mm の位置にある図形が
+          // 開けている紙）: 「4ページ目の下に追加」で白紙は3ページ目に落ち、紙は
+          // 4枚のままだった。縦書きでも同じ。
+          //
+          // 改ページは入れない ―― オーナーの「ページを挿入しただけなのに、なぜ、
+          // 改ページになる？」がある。進む向きの余白で、頼まれた紙まで押し出す。
+          this.$nextTick(() => {
+            // 先に版を組ませてから測る。組み上がる前に測ると、白紙を紙の頭へ
+            // 送る詰め物がまだ入っておらず、1ページ手前の数が返る ―― 実測で、
+            // 頼んだ紙が3・4・5のいずれでも、きっちり1ページ行き過ぎていた。
+            paginate();
+            const g2 = pageGeometry();
+            if (g2 && blank.parentNode === c) {
+              const ruler = pageRuler(c, this.frameZoom() || 1);
+              const at = ruler.span ? ruler.pageOf(blank.getBoundingClientRect()) : 0;
+              // 白紙が落ちるべき紙は、「下に足す」なら次の紙、「1ページ目の上に
+              // 足す」なら1ページ目そのもの ―― 操作のあとで見せる紙（target）とは
+              // 別物。ここを取り違えて、先頭に足した白紙まで1枚ぶん押し出していた。
+              // 実測（2ページの文書・1ページ目の上に1回）: 画面 2→4、印刷は3ページ。
+              const home = below ? n + 1 : n;
+              if (at > 0 && at < home) {
+                blank.style.setProperty('margin-block-start',
+                  round1((home - at) * g2.usable * MM) + 'mm');
+                this.touch();
+                this.settleFrame();
+              }
+            }
+            this.$nextTick(() => this.goToPage(target));
+          });
         });
       },
       /** A fold put in front of the page, so it starts on a sheet of its own. */
@@ -16614,7 +26196,15 @@ ${insideObjects('.eb-paper.boxed')} {
         const was = row.classList.contains('open');
         const menu = row.closest('.eb-ctxmenu');
         if (menu) { Array.from(menu.querySelectorAll('.has-sub.open')).forEach((n) => n.classList.remove('open')); }
-        if (!was) { row.classList.add('open'); }
+        if (!was) {
+          row.classList.add('open');
+          // On a phone the submenu opens under its row, inside a menu that scrolls:
+          // near the foot of the menu its items were out of sight (BUGS #245).
+          const fly = row.querySelector('.fly');
+          if (fly && window.innerWidth <= 620 && fly.scrollIntoView) {
+            this.$nextTick(() => fly.scrollIntoView({ block: 'nearest' }));
+          }
+        }
       },
       /**
        * A submenu opens beside its row, which near the foot of the window would
@@ -16628,6 +26218,26 @@ ${insideObjects('.eb-paper.boxed')} {
         fly.style.top = '-6px';
         fly.style.bottom = 'auto';
         fly.style.maxHeight = '';
+        fly.style.left = '';
+        fly.style.right = '';
+        const menu = e.currentTarget.closest('.eb-ctxmenu');
+        if (menu && menu.classList.contains('tall')) {
+          // A menu that scrolls would cut off a submenu hung beside it, so the
+          // submenu is placed on the window by the row it belongs to.
+          const row = e.currentTarget.getBoundingClientRect();
+          const fit = () => {
+            const w = fly.getBoundingClientRect().width || 224;
+            const flip = menu.classList.contains('flip') || row.right + w > window.innerWidth - 6;
+            fly.style.left = Math.max(6, flip ? row.left - w : row.right) + 'px';
+            fly.style.right = 'auto';
+            const h = Math.min(fly.scrollHeight || 0, window.innerHeight - 16);
+            fly.style.maxHeight = (window.innerHeight - 16) + 'px';
+            fly.style.top = Math.max(8, Math.min(row.top - 6, window.innerHeight - 8 - h)) + 'px';
+          };
+          fit();
+          window.requestAnimationFrame(fit);
+          return;
+        }
         const measure = () => {
           const r = fly.getBoundingClientRect();
           if (!r.height) { return; }
@@ -16647,6 +26257,11 @@ ${insideObjects('.eb-paper.boxed')} {
       ctxDo(kind, arg) {
         this.closeCtx();
         const acts = {
+          breakDel: () => {
+            const pb = pickedBreak && pickedBreak.parentNode ? pickedBreak : null;
+            pickBreak(null);
+            if (pb) { this.run(() => { pb.remove(); }); this.$nextTick(() => this.repaginate()); }
+          },
           block: () => this.setBlock(arg),
           inline: () => this.inline(arg),
           align: () => this.align(arg),
@@ -16675,6 +26290,15 @@ ${insideObjects('.eb-paper.boxed')} {
           alt: () => this.openAlt(),
           imageDel: () => this.imageCmd('delete'),
           frameProps: () => this.openFrameProps(),
+          // 自由に配置＝紙の上に置いて重ねてよい（重ね合わせ）。HTML のルール＝よける（上下が既定）。
+          placeMode: () => {
+            if (!this.frame.free) { acts.frameToPage && acts.frameToPage(); }
+            this.$nextTick(() => {
+              if (arg === 'free') { this.frameCmd('wrapMode', 'through'); }
+              else if (this.frame.wrap === 'through' || !this.frame.wrap) { this.frameCmd('wrapMode', 'none'); }
+            });
+          },
+          cellProps: () => this.openCellProps(),
           frameFree: () => (frameEl ? this.frameCmd('free') : this.textCmd('free')),
           frameWrap: () => (frameEl ? this.frameCmd('wrap', arg) : this.textCmd('wrap', arg)),
           wrapMode: () => (frameEl ? this.frameCmd('wrapMode', arg) : this.textCmd('wrapMode', arg)),
@@ -16686,6 +26310,9 @@ ${insideObjects('.eb-paper.boxed')} {
           frameInFlow: () => { if (frameEl && objectFree(frameEl)) { this.frameCmd('free'); } },
           frameToPage: () => { if (frameEl && !objectFree(frameEl)) { this.frameCmd('free'); } },
           frameFront: () => (frameEl ? this.frameCmd('stack', 'front') : this.textCmd('stack', 'front')),
+          layerOrder: () => this.orderWithin(frameEl, arg),
+          layerDelete: () => this.deleteLayerItem(frameEl),
+          layerRename: () => { const i = layerEls.indexOf(frameEl); if (i >= 0) { this.startRename(i); } },
           frameBack: () => (frameEl ? this.frameCmd('stack', 'back') : this.textCmd('stack', 'back')),
           frameDel: () => this.frameCmd('delete'),
           guides: () => { this.guides = !this.guides; },
@@ -16705,10 +26332,24 @@ ${insideObjects('.eb-paper.boxed')} {
           this.rubyText = rt ? rt.textContent : '';
           ctxRange = r.cloneRange();
         } else {
-          if (!r || r.collapsed) { this.notify(this.t('Choose the word first.')); return; }
-          this.rubyWord = r.toString();
+          // Nothing chosen: the word the caret stands in, as LibreOffice's phonetic
+          // guide takes it. Pressing the command with no selection used to do
+          // nothing anyone could see (BUGS #149).
+          const word = r && r.collapsed ? segmentWordAt(r) : null;
+          if (word) { selectRange(word); }
+          const use = word || r;
+          if (!use || use.collapsed || !use.toString().trim()) { this.notify(this.t('Choose the word first.'), 6000); return; }
+          // A reading is over words in one line of one paragraph. Across two, the
+          // paragraphs themselves were put inside the reading -- <p> in <ruby> in
+          // <p>, which no browser can show and the file cannot keep (BUGS E18).
+          const blockAtEnd = (n) => { let b = n && (n.nodeType === 1 ? n : n.parentNode); while (b && b !== canvas() && !isBlock(b)) { b = b.parentNode; } return b; };
+          if (blockAtEnd(use.startContainer) !== blockAtEnd(use.endContainer)) { this.notify(this.t('Choose words within one paragraph.'), 6000); return; }
+          this.rubyWord = use.toString();
+          ctxRange = use.cloneRange();
           this.rubyText = '';
-          ctxRange = r.cloneRange();
+          this.rubyOpen = true;
+          this.$nextTick(() => { if (this.$refs.rubyInput) { this.$refs.rubyInput.focus(); } });
+          return;
         }
         this.rubyOpen = true;
         this.$nextTick(() => { if (this.$refs.rubyInput) { this.$refs.rubyInput.focus(); } });
@@ -16718,7 +26359,16 @@ ${insideObjects('.eb-paper.boxed')} {
         this.rubyOpen = false;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
         this.run(() => {
-          if (rubyAt(getRange() ? getRange().startContainer : null)) { removeRuby(); }
+          // A word that has a reading already is given the new reading in place.
+          // Taking the reading off and putting one on again needed the word chosen,
+          // and with the caret merely in the word the second step found nothing to
+          // put it on: the reading was lost (BUGS E17).
+          const old = rubyAt(getRange() ? getRange().startContainer : null);
+          if (old) {
+            const rt = old.querySelector('rt');
+            if (String(reading || '').trim() && rt) { rt.textContent = reading; } else { removeRuby(); }
+            return;
+          }
           applyRuby(reading);
         });
       },
@@ -16746,10 +26396,21 @@ ${insideObjects('.eb-paper.boxed')} {
         ctxRange = getRange() ? getRange().cloneRange() : null;
         const now = columnsAt();
         this.cols.count = now || 2;
+        // The gap the columns have now: the dialog showed 8 whatever they had, and
+        // OK alone changed a 12 mm gap to 8 (BUGS #239).
+        const host = columnsBoxAt();
+        const g = host ? parseFloat(getComputedStyle(host).columnGap) : NaN;
+        this.cols.gap = isFinite(g) ? Math.round(g * 25.4 / 96 * 10) / 10 : 8;
+        this.colsGapWas = this.cols.gap;
         this.colsOpen = true;
       },
       applyCols() {
-        const v = { count: Number(this.cols.count) || 1, gap: Number(this.cols.gap) || 0 };
+        // 0 is a gap like any other, and the gap stays inside what the field allows:
+        // 300 mm set each column one character wide (BUGS #239). A field left empty
+        // keeps the gap it had.
+        const typed = this.cols.gap === '' || this.cols.gap === null ? NaN : Number(this.cols.gap);
+        const gap = isFinite(typed) ? Math.min(40, Math.max(0, typed)) : (this.colsGapWas != null ? this.colsGapWas : 8);
+        const v = { count: Number(this.cols.count) || 1, gap };
         this.colsOpen = false;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
         this.blockRun(() => setColumns(v.count, v.gap));
@@ -16850,7 +26511,14 @@ ${insideObjects('.eb-paper.boxed')} {
           ml: p.margin.left, mr: p.margin.right,
           left: this.ind.left, right: this.ind.right, first: this.ind.first,
         };
-        const block = selectedBlocks(true)[0];
+        // A paragraph cut at a page foot is set as one paragraph: its indents are
+        // the head piece's, and the side indents go on every piece so the part on
+        // the next page moves with the rest of it (the first-line indent is the
+        // head's alone). Set on the piece the caret was in, they were thrown away
+        // at the next turn of the layout, which makes the pieces again from the
+        // head (D9).
+        const block = cutHead(selectedBlocks(true)[0]);
+        const pieces = block ? cutPieces(block) : [];
         if (what !== 'ml' && what !== 'mr' && !block) { return; }
         if (what === 'ml' || what === 'mr') { history.push(true); } else { history.push(true); }
         const z = this.frameZoom() || 1;
@@ -16863,10 +26531,10 @@ ${insideObjects('.eb-paper.boxed')} {
             this.doc.paper.margin.right = Math.max(0, Math.min(100, start.mr - d));
           } else if (what === 'left') {
             this.ind.left = Math.max(-50, Math.min(150, start.left + d));
-            styleOrClear(block, 'margin-left', this.ind.left ? this.ind.left + 'mm' : '');
+            pieces.forEach((b) => styleOrClear(b, 'margin-left', this.ind.left ? this.ind.left + 'mm' : ''));
           } else if (what === 'right') {
             this.ind.right = Math.max(-50, Math.min(150, start.right - d));
-            styleOrClear(block, 'margin-right', this.ind.right ? this.ind.right + 'mm' : '');
+            pieces.forEach((b) => styleOrClear(b, 'margin-right', this.ind.right ? this.ind.right + 'mm' : ''));
           } else if (what === 'first') {
             this.ind.first = Math.max(-50, Math.min(150, start.first + d));
             styleOrClear(block, 'text-indent', this.ind.first ? this.ind.first + 'mm' : '');
@@ -16876,7 +26544,7 @@ ${insideObjects('.eb-paper.boxed')} {
           window.removeEventListener('pointermove', move);
           window.removeEventListener('pointerup', up);
           window.removeEventListener('pointercancel', up);
-          if (block && !block.getAttribute('style')) { block.removeAttribute('style'); }
+          pieces.forEach((b) => { if (!b.getAttribute('style')) { b.removeAttribute('style'); } });
           this.touch();
           this.repaginate();
         };
@@ -16903,13 +26571,41 @@ ${insideObjects('.eb-paper.boxed')} {
         const now = paragraphProps();
         ctxRange = getRange() ? getRange().cloneRange() : null;
         if (now) { this.para = Object.assign({}, now); }
+        // What the boxes said when the dialogue opened: OK writes only what was changed.
+        paraOpened = JSON.stringify(this.para);
         this.paraOpen = true;
       },
       applyPara() {
         const v = Object.assign({}, this.para);
         this.paraOpen = false;
+        let changed = null;
+        // Each number is held inside what its field takes, and an indent inside the
+        // line it indents: −40 pt above laid one paragraph over the last, a line
+        // height of 0 folded the lines into one, and 9999 mm put the text off the
+        // paper (BUGS #244). A field left empty still means "as the style says";
+        // what is not a number at all keeps the value the paragraph had.
+        const opened = paraOpened ? JSON.parse(paraOpened) : {};
+        const paper = normalisePaper(this.doc.paper);
+        const size = PAPERS[paper.size] || PAPERS.A4;
+        const across = (paper.vertical ? (paper.orientation === 'landscape' ? size.w : size.h) - paper.margin.top - paper.margin.bottom
+          : (paper.orientation === 'landscape' ? size.h : size.w) - paper.margin.left - paper.margin.right);
+        const room = Math.max(10, Math.floor(across - 10));
+        [['lineHeight', 1, 4], ['before', 0, 200], ['after', 0, 200], ['left', -100, room], ['right', -100, room],
+          ['firstLine', -100, room], ['pad', 0, 40], ['borderWidth', 0.25, 20]].forEach(([k, lo, hi]) => {
+          if (v[k] === '' || v[k] == null) { return; }
+          const n = Number(String(v[k]).replace(/[０-９．－]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
+          if (!isFinite(n)) { v[k] = opened[k] != null ? opened[k] : ''; return; }
+          v[k] = Math.min(hi, Math.max(lo, n));
+        });
+        if (v.left !== '' && v.firstLine !== '' && Number(v.left) + Number(v.firstLine) > room) { v.firstLine = room - Number(v.left); }
+        if (v.left !== '' && v.right !== '' && Number(v.left) + Number(v.right) > room) { v.right = room - Number(v.left); }
+        if (paraOpened) {
+          const was = opened;
+          changed = new Set(Object.keys(v).filter((k) => JSON.stringify(v[k]) !== JSON.stringify(was[k])));
+        }
+        paraOpened = null;
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
-        this.blockRun(() => setParagraphProps(v));
+        this.blockRun(() => setParagraphProps(v, changed));
         this.repaginate();
       },
       clearPara() {
@@ -17130,7 +26826,8 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         const data = e.dataTransfer;
         let ok = false;
-        this.run(() => { ok = dropAt(point, data); });
+        const tracked = !!this.review;
+        this.run(() => { ok = dropAt(point, data, tracked); });
         dragRange = null;
         dragObject = null;
         if (!ok) { this.notify(this.t('There is nowhere to drop that.')); }
@@ -17141,7 +26838,12 @@ ${insideObjects('.eb-paper.boxed')} {
       // ---- clipboard -----------------------------------------------------------
       clipboard(kind) {
         let ok = false;
+        // Cutting is a step of its own: the browser's cut does not announce itself
+        // (no beforeinput), and Ctrl+Z took back the command before it as well
+        // (BUGS E30).
+        if (kind === 'cut') { history.push(true); }
         try { ok = document.execCommand(kind); } catch (e) { ok = false; }
+        if (kind === 'cut') { history.lastPush = 0; }
         if (!ok) {
           this.notify(this.t('The browser only allows this from the keyboard: {keys}', { keys: kind === 'cut' ? 'Ctrl+X' : 'Ctrl+C' }));
           return;
@@ -17176,7 +26878,11 @@ ${insideObjects('.eb-paper.boxed')} {
         // is the same escape hatch Shift gives on the keyboard.
         const asObject = this.pasteObject && !plainOnly && !pasteWouldNest();
         let out = {};
-        this.run(() => { out = html ? pasteHtmlAt(html, '', asObject) : { made: pasteTextAt(text, asObject), foreign: [] }; });
+        const tracked = !!(this.review && this.doc.id) && !asObject;
+        this.run(() => {
+          if (tracked) { strikeSelection(); }
+          out = html ? pasteHtmlAt(html, '', asObject, tracked) : { made: pasteTextAt(text, asObject, tracked), foreign: [] };
+        });
         if (out.made) {
           frameEl = out.made;
           frameMore = [];
@@ -17191,6 +26897,20 @@ ${insideObjects('.eb-paper.boxed')} {
 
       // ---- links ---------------------------------------------------------------
       openLink() {
+        // 写真を選んでいれば、写真にリンクを付ける。前は写真の前の段落のカーソルの
+        // 所に URL の字が入った（BUGS #228）。
+        const r0 = getRange();
+        const pic = (!r0 || r0.collapsed || !canvas().contains(r0.commonAncestorContainer)) ? takenPicture() : null;
+        linkPic = pic;
+        if (pic) {
+          const own = pic.parentNode && pic.parentNode.nodeName === 'A' ? pic.parentNode : null;
+          ctxRange = null;
+          this.link.editing = !!own;
+          this.link.url = own ? (own.getAttribute('href') || '') : '';
+          this.link.text = '';
+          this.linkOpen = true;
+          return;
+        }
         const a = linkAt();
         const r = getRange();
         ctxRange = r ? r.cloneRange() : null;
@@ -17203,14 +26923,40 @@ ${insideObjects('.eb-paper.boxed')} {
         const url = this.link.url;
         const text = this.link.text;
         this.linkOpen = false;
+        const pic = linkPic;
+        linkPic = null;
+        if (pic && canvas().contains(pic)) {
+          let done = false;
+          this.run(() => { done = linkPicture(pic, url); });
+          if (!done) { this.notify(this.t('That address cannot be linked to.')); }
+          return;
+        }
         if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
         let ok = false;
         this.run(() => { ok = applyLink(url, text); });
         if (!ok) { this.notify(this.t('That address cannot be linked to.')); }
       },
-      openLinkTarget() {
-        const a = linkAt();
-        if (a) { window.open(a.getAttribute('href'), '_blank', 'noopener'); }
+      openLinkTarget(link) {
+        const a = (link && link.nodeType === 1) ? link : linkAt();
+        if (!a) { return; }
+        const href = String(a.getAttribute('href') || '');
+        // 文書の中への飛び先（目次の項目・注の番号・#見出し）は、この文書のその場所へ
+        // 飛ぶ。新しいタブで開くと、編集画面がもう一つ開くだけだった（BUGS #223）。
+        if (href.charAt(0) === '#') {
+          let id = href.slice(1);
+          try { id = decodeURIComponent(id); } catch (e) { /* 名前のまま */ }
+          const c = canvas();
+          const to = c ? Array.from(c.querySelectorAll('[id]')).find((x) => x.getAttribute('id') === id || x.getAttribute('id') === href.slice(1)) : null;
+          if (!to) { return; }
+          // 注の本文（li の中の段落）は、段落の頭へ。
+          let at = to;
+          while (at.firstElementChild && /^(P|DIV)$/.test(at.firstElementChild.nodeName)) { at = at.firstElementChild; }
+          placeCaretIn(at);
+          if (to.scrollIntoView) { to.scrollIntoView({ block: 'center' }); }
+          this.refreshState();
+          return;
+        }
+        window.open(href, '_blank', 'noopener');
       },
 
       // ---- pictures and cells --------------------------------------------------
@@ -17246,9 +26992,11 @@ ${insideObjects('.eb-paper.boxed')} {
           await api('settings', { method: 'POST', body: {
             folder: this.settings.folder, theme: this.settings.theme, language: this.settings.language,
             versionKeep: this.settings.versionKeep, versionWhen: this.settings.versionWhen,
+            placement: this.settings.placement,
           } });
           this.applyTheme(this.settings.theme);
           await this.applyLanguage(this.settings.language);
+          this.$nextTick(() => this.refreshZoomMarks());
           await this.loadDocs();
           this.settingsOpen = false;
           this.notify(this.t('Settings saved'));
@@ -17296,11 +27044,133 @@ ${insideObjects('.eb-paper.boxed')} {
        * a wrong guess would put their words on somebody else's page.
        */
       onKey(e) {
+        // セルを範囲で選んでいる時（BUGS #293）：Delete / Backspace は選んだセルの中身を
+        // 空にする（Calc・Writer と同じ）。ほかのキーは範囲を解いて、最初のセルで続ける。
+        if (cellSel && !e.isComposing && !/^(Shift|Control|Alt|Meta)$/.test(e.key) && !((e.ctrlKey || e.metaKey) && /^[bBiIuUcC]$/.test(e.key))) {
+          const cells = cellSelCells();
+          if ((e.key === 'Delete' || e.key === 'Backspace') && cells.length) {
+            e.preventDefault();
+            history.push(true);
+            cells.forEach((cell) => { cell.innerHTML = '<br>'; cell.removeAttribute(FORMULA_ATTR); cell.removeAttribute(RAW_ATTR); });
+            this.clearCellSel();
+            try { const at = document.createRange(); at.setStart(cells[0], 0); at.collapse(true); selectRange(at); } catch (err) { /* moved on */ }
+            const table = tableOf(cells[0]);
+            if (table && tableHasFormulas(table)) { recalcTable(table, null); }
+            this.touch();
+            return;
+          }
+          this.clearCellSel();
+          if (cells.length && !(e.ctrlKey || e.metaKey)) {
+            try { const at = document.createRange(); at.setStart(cells[0], 0); at.collapse(true); selectRange(at); } catch (err) { /* moved on */ }
+          }
+        }
         const meta = e.ctrlKey || e.metaKey;
         // A paste event carries no keys of its own -- it is not a keyboard event --
         // so the one that started it is remembered here. Shift is what says "into
         // the writing, as plain text", as it does everywhere else.
         if (meta && (e.key === 'v' || e.key === 'V')) { pastePlain = !!e.shiftKey; }
+        if (!e.altKey && (meta ? /^[vx]$/i.test(e.key) : (e.key.length === 1 || /^(Backspace|Delete|Enter|Process)$/.test(e.key)))) {
+          joinCutsUnderSelection();
+        }
+        if (!meta && !e.altKey && /^(Arrow(Left|Right|Up|Down)|Home|End)$/.test(e.key)) {
+          const tate = !!(canvas() && (canvas().classList.contains('eb-tategaki') || canvas().closest('.eb-tategaki')));
+          const back = e.key === 'End' ? true
+            : e.key === 'Home' ? false
+              : tate ? (e.key === 'ArrowUp' || e.key === 'ArrowRight') : (e.key === 'ArrowLeft' || e.key === 'ArrowUp');
+          const extend = !!e.shiftKey;
+          const charBack = tate ? e.key === 'ArrowUp' : e.key === 'ArrowLeft';
+          // ページの境目で切った段落の継ぎ目は、字と字の間として越える（#257）。
+          const charFwd = tate ? e.key === 'ArrowDown' : e.key === 'ArrowRight';
+          if ((charBack || charFwd) && !e.isComposing && !(frameTaken && frameEl && objectFree(frameEl))
+            && keyAtCutSeam('arrow', charFwd, extend)) {
+            e.preventDefault();
+            return undefined;
+          }
+          if (charBack && !extend) {
+            const r = getRange();
+            const block = onlyBandsBefore(r);
+            const c = canvas();
+            if (block && c && c.contains(block) && block.querySelector('.eb-flow, .eb-gap')) {
+              if (jumpToPrevBlockEnd(block)) { e.preventDefault(); return undefined; }
+            }
+          }
+          // 矢印キーで、紙の上に置いた物（図形・文字枠・画像）の中へは入らない（LibreOffice
+          // と同じ）。移った先が、元はいなかった置いた物の中なら、同じ向きのまま飛び越える。
+          const r0 = getRange();
+          const inAnchor = (r) => { const n = r && r.startContainer; const el = n && (n.nodeType === 3 ? n.parentNode : n); return el && el.closest ? el.closest('.eb-anchor') : null; };
+          const was = inAnchor(r0);
+          window.setTimeout(() => {
+            const now = getRange();
+            const hit = inAnchor(now);
+            if (!was && hit && !extend && /^Arrow/.test(e.key)) {
+              if (back) { if (jumpToPrevBlockEnd(hit)) { return; } } else if (jumpToNextBlockStart(hit)) { stepPastBands('forward', false); return; }
+            }
+            stepPastBands(back ? 'backward' : 'forward', extend);
+          }, 0);
+        }
+        // 字を打つ前に、カーソルがふりがなの読みの中や語の終わりにあれば外へ出す。
+        // （beforeinput で動かしても、ブラウザは元の場所に入れることがある）
+        if (!meta && !e.altKey && !e.isComposing && e.key.length === 1) {
+          if (caretOutOfRuby(e.key)) { e.preventDefault(); this.touch(); return undefined; }
+        } else if (!meta && !e.altKey && (e.key === 'Enter' || e.key === 'Process')) { caretOutOfRuby(); }
+        // 文字枠（一つの段落でできた枠）の中で Enter：段落を増やせる枠に変えてから
+        // 改行させる。そのまま改行させると段落が二つに分かれ、文字枠の印も写されて、
+        // Enter のたびに文字枠が一つずつ増えた（2026-09-22 点検で発見）。LibreOffice
+        // でも、テキストボックスの中の Enter は、その中の新しい段落になる。
+        if (e.key === 'Enter' && !e.shiftKey && !meta && !e.altKey && !e.isComposing) {
+          const r = getRange();
+          const box = r && r.collapsed ? textboxAt(r.startContainer) : null;
+          if (box) {
+            const keep = { node: r.startContainer, at: r.startOffset };
+            history.push(true);
+            const frame = frameForBlocks(box);
+            if (frame) {
+              if (keep.node === box) {
+                const inner = frame.firstElementChild;
+                keep.node = inner;
+              }
+              try {
+                const at = document.createRange();
+                at.setStart(keep.node, Math.min(keep.at, keep.node.nodeType === 3 ? keep.node.data.length : keep.node.childNodes.length));
+                at.collapse(true);
+                selectRange(at);
+              } catch (err) { placeCaretIn(frame.firstElementChild); }
+              if (frameEl === box) { frameEl = frame; }
+            }
+          }
+        }
+        if (e.key === 'Enter' && !e.shiftKey && !meta && !e.altKey && !e.isComposing) {
+          let done = false;
+          const r = getRange();
+          const inItem = r && r.collapsed && closestMatching(r.startContainer, { tag: 'LI' });
+          if (inItem) {
+            this.run(() => { done = leaveEmptyItem(); });
+            if (done) { e.preventDefault(); return undefined; }
+          }
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && !meta && !e.altKey) {
+          const pb = (pickedBreak && pickedBreak.parentNode) ? pickedBreak : breakBeside(e.key === 'Backspace');
+          if (pb) {
+            e.preventDefault();
+            pickBreak(null);
+            this.run(() => { pb.remove(); });
+            this.$nextTick(() => this.repaginate());
+            return undefined;
+          }
+        }
+        if (pickedBreak && !/^(Shift|Control|Alt|Meta)$/.test(e.key)) {
+          // 印を選んだまま文字を打つと、段落の外（改ページの前）に文字が出てしまう。
+          // 打つ前に、カーソルを次の段落の頭へ移す。
+          let next = pickedBreak.nextElementSibling;
+          while (next && next.classList && (next.classList.contains('eb-pagespacer') || next.classList.contains('eb-anchor'))) { next = next.nextElementSibling; }
+          if (e.key.length === 1 && !meta && next) {
+            const r = document.createRange();
+            r.setStart(next, 0);
+            r.collapse(true);
+            selectRange(r);
+          }
+          pickBreak(null);
+        }
         if (e.key === 'Escape' && this.placing) { this.placing = ''; this.placeBox = null; return undefined; }
         if (e.key === 'Escape' && this.frame.on) { this.clearFrame(); return undefined; }
         // Arrow keys walk a parked frame about the page: a millimetre a press, five
@@ -17315,8 +27185,7 @@ ${insideObjects('.eb-paper.boxed')} {
             e.preventDefault();
             history.push(true);
             each.forEach((o) => {
-              o.style.left = round1((parseFloat(o.style.left) || 0) + dx) + 'mm';
-              o.style.top = round1((parseFloat(o.style.top) || 0) + dy) + 'mm';
+              nudgeFreeMm(o, dx, dy);
               this.keepOnPaper(o);
               this.settlePlaced(o);
             });
@@ -17342,6 +27211,13 @@ ${insideObjects('.eb-paper.boxed')} {
         // A picture with its box up goes when Delete is pressed, the way it does
         // in every word processor. Text being written inside a frame does not:
         // there the key deletes a character, as it always has.
+        // 右クリックのメニューのために掴んだ枠は、キーでは消さない。字の編集に戻す。
+        if ((e.key === 'Delete' || e.key === 'Backspace') && frameTaken && frameEl && ctxTookFrame === frameEl && !this.ctx.open) {
+          frameTaken = false;
+          ctxTookFrame = null;
+          this.frame.taken = false;
+          return undefined;
+        }
         if ((e.key === 'Delete' || e.key === 'Backspace') && frameTaken && frameEl) {
           e.preventDefault();
           if (frameMore.length) {
@@ -17354,6 +27230,11 @@ ${insideObjects('.eb-paper.boxed')} {
           this.frameCmd('delete');
           return undefined;
         }
+        // ページの境目で切った段落の継ぎ目で Backspace・Delete：向こうの切れ端の字を
+        // 選んで、ブラウザに消させる（#255 #256）。
+        if ((e.key === 'Delete' || e.key === 'Backspace') && !meta && !e.altKey && !e.shiftKey && !e.isComposing) {
+          keyAtCutSeam('delete', e.key === 'Delete', false);
+        }
         if (meta && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
           e.preventDefault();
           this.run(() => moveBlock(e.key === 'ArrowUp' ? -1 : 1));
@@ -17361,6 +27242,9 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         if (meta && !e.altKey) {
           const k = e.key.toLowerCase();
+          // 枠の中で Ctrl+A を押すと、その枠の字だけを全部選ぶ（次のページへ続く部分も
+          // 含む）。LibreOffice の文字枠と同じ。もう一度押すと文書全体を選ぶ。
+          if (k === 'a' && !e.shiftKey && this.selectFrameText()) { e.preventDefault(); return undefined; }
           if (k === 'b') { e.preventDefault(); return this.inline('bold'); }
           if (k === 'i') { e.preventDefault(); return this.inline('italic'); }
           if (k === 'u') { e.preventDefault(); return this.inline('underline'); }
@@ -17369,6 +27253,15 @@ ${insideObjects('.eb-paper.boxed')} {
           if (k === 'f') { e.preventDefault(); return this.openFind(); }
           if (k === 'k') { e.preventDefault(); return this.openLink(); }
           if (k === 'h') { e.preventDefault(); return this.openFind(); }
+          // LibreOffice's keys for alignment and for the paragraph styles. Without
+          // them the browser's own took over: Ctrl+R reloaded the page and anything
+          // not yet saved went with it, Ctrl+J opened the downloads (review Q6).
+          if (!e.shiftKey) {
+            const aligns = { e: 'center', l: 'left', r: 'right', j: 'justify' };
+            if (aligns[k]) { e.preventDefault(); return this.align(aligns[k]); }
+            const styles = { 1: 'H1', 2: 'H2', 3: 'H3', 0: 'P' };
+            if (styles[k]) { e.preventDefault(); return this.setBlock(styles[k]); }
+          }
           if (k === 'z' && !e.shiftKey) { e.preventDefault(); return this.undo(); }
           if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); return this.redo(); }
         }
@@ -17399,6 +27292,7 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.languages = s.languages || [];
           this.settings.versionKeep = s.versionKeep == null ? 10 : s.versionKeep;
           this.settings.versionWhen = s.versionWhen || 'manual';
+          this.settings.placement = s.placement === 'free' ? 'free' : 'standard';
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
           if (s.folderColours) { try { this.catColours = JSON.parse(s.folderColours) || {}; } catch (e) { this.catColours = {}; } }
           this.build = s.build || '';
@@ -17413,18 +27307,47 @@ ${insideObjects('.eb-paper.boxed')} {
         if (drawer && this.docGroups.some((g) => g.key === drawer)) { this.openCat = drawer; }
         const wanted = Number((root && root.dataset.fileid) || 0);
         const last = Number(window.localStorage.getItem('eb-last-doc') || 0);
-        const target = wanted || (this.docs.some((d) => d.id === last) ? last : (this.docs[0] && this.docs[0].id));
+        // Chosen for the writer, not by them: a file EditBase does not handle is
+        // passed over, or the first thing they saw on opening the app was a question
+        // about removing tags from something they had not asked to open. One they
+        // asked for from Files (wanted) is opened -- and asked about -- as usual.
+        const usable = (id) => this.docs.some((d) => d.id === id && !d.unsupported);
+        const firstUsable = this.docs.find((d) => !d.unsupported);
+        const target = wanted || (usable(last) ? last : (firstUsable && firstUsable.id));
         if (target) { await this.openDoc(target); }
       },
     },
     watch: {
+      paperOpen(on) { if (on) { this.paperWas = JSON.parse(JSON.stringify(this.doc.paper || {})); } },
+      // 枠線の種類と太さを連動させる（オーナー 2026-09-21）。線を選んで太さが空なら
+      // 細線（0.75pt、LibreOffice の既定と同じ）を入れる。太さを空か 0 にしたら「なし」。
+      'fprops.border'(v) {
+        if (this._fpLoading) { return; }
+        if (v && v !== 'none' && !(Number(this.fprops.borderWidth) > 0)) { this.fprops.borderWidth = 0.75; }
+      },
+      'fprops.borderWidth'(v) {
+        if (this._fpLoading) { return; }
+        const n = Number(v);
+        if ((v === '' || v == null || !(n > 0)) && this.fprops.border && this.fprops.border !== 'none') { this.fprops.border = 'none'; }
+        else if (n > 0 && (!this.fprops.border || this.fprops.border === 'none')) { this.fprops.border = 'solid'; }
+      },
       'doc.id'(id) {
         if (id) { window.localStorage.setItem('eb-last-doc', String(id)); }
+        // What was found belongs to the document it was found in (BUGS E2).
+        this.find.hits = [];
+        this.find.index = 0;
+        this._findChunks = [];
         // Open the drawer the document is in, so the writer can see where it lives.
         const mine = this.docs.find((d) => d.id === id);
         if (mine) { this.openCat = mine.shared ? '~shared' : (mine.folder || ''); }
         this.$nextTick(() => this.fitRail());
       },
+      // The bands being written in on the first sheet show what the paper says.
+      // Changed from the header-and-footer dialogue, the first sheet's band stayed
+      // as it was opened -- empty, while every other page showed its number (BUGS
+      // #197). Not while the caret is in the band: its words are the writer's own.
+      'doc.paper.header': { deep: true, handler() { this.refillBands(); } },
+      'doc.paper.footer': { deep: true, handler() { this.refillBands(); } },
       'doc.paper.fonts': { deep: true, handler() { this.applyDocFonts(); } },
       'doc.paper.font'() { this.applyDocFonts(); },
       'doc.paper.fontSize'() { this.touch(); this.$nextTick(() => this.repaginate()); },
@@ -17435,7 +27358,7 @@ ${insideObjects('.eb-paper.boxed')} {
       fontPageItems() { this.loadPreviewFonts(); },
       zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); this.$nextTick(() => this.syncFrame()); },
       flow() { this.$nextTick(() => this.syncFrame()); },
-      'doc.paper': { deep: true, handler() { if (this.doc.id && !this.opening) { this.dirty = true; this.scheduleAutosave(); } } },
+      'doc.paper': { deep: true, handler() { if (this.doc.id && !this.opening) { this.markDirty(); this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
@@ -17451,11 +27374,19 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       pasteObject(v) { window.localStorage.setItem('eb-paste-object', v ? '1' : '0'); },
       ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
-      review(v) { window.localStorage.setItem('eb-review', v ? '1' : '0'); },
+      review(v) {
+        // 文書に書く（ブラウザには覚えない）。入り切りも文書の変更として保存する。
+        if (this.doc && this.doc.id && !!this.doc.review !== !!v) { this.doc.review = !!v; this.touch(); }
+      },
       menu(v) { if (v) { this.$nextTick(() => this.fitMenu()); } },
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
+      // Enter at the end of a heading makes a paragraph, not a <div>. Chrome's own
+      // separator is a div, which is not a paragraph here: no spacing below it, no
+      // body style, and never cut at a page fold (BUGS E9). LibreOffice follows a
+      // heading with a body paragraph.
+      try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* not in this browser */ }
       history.readState = () => JSON.stringify({ paper: this.doc.paper, styles: this.doc.styles, css: this.doc.css });
       history.applyState = (raw) => {
         let v = null;
@@ -17492,8 +27423,7 @@ ${insideObjects('.eb-paper.boxed')} {
       if (pv != null) { this.previewOpen = pv === '1'; }
       const rl = window.localStorage.getItem('eb-ruler');
       if (rl != null) { this.ruler = rl === '1'; }
-      const rv = window.localStorage.getItem('eb-review');
-      if (rv != null) { this.review = rv === '1'; }
+      window.localStorage.removeItem('eb-review');   // 「変更を記録」は文書に持つ（BUGS #225）
       const z = Number(window.localStorage.getItem('eb-zoom') || 0);
       if (z >= 50 && z <= 200) { this.zoom = z; }
       document.addEventListener('click', (e) => {
@@ -17504,33 +27434,138 @@ ${insideObjects('.eb-paper.boxed')} {
         if (e.key !== 'Escape') { return; }
         if (this.ctx.open) { this.closeCtx(); e.preventDefault(); return; }
         if (this.menu) { this.menu = ''; e.preventDefault(); return; }
-        const modals = ['charsOpen', 'tocOpen', 'paraOpen', 'linkOpen', 'altOpen', 'fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
+        // Every window closes on Escape, the way its Cancel (or Done) closes it:
+        // seventeen of them stayed open (BUGS #249). The questions asked before a
+        // file opens take Escape as their "no".
+        if (this.stripAsk.open) { this.stripAnswer(false); e.preventDefault(); return; }
+        if (this.embedAsk.open) { this.embedAsk = { open: false, items: [] }; e.preventDefault(); return; }
+        const inner = [['share', 'open'], ['vers', 'open'], ['props', 'open'], ['docSet', 'open']];
+        for (const [o, k] of inner) {
+          if (this[o] && this[o][k]) { this[o][k] = false; e.preventDefault(); return; }
+        }
+        const modals = ['cropOpen', 'fpropsOpen', 'cellBorderOpen', 'cellPropsOpen', 'colsOpen', 'noteOpen', 'rubyOpen', 'emojiOpen', 'htmlOpen', 'webOpen', 'wordsOpen',
+          'checkOpen', 'runOpen', 'stylesOpen',
+          'charsOpen', 'tocOpen', 'paraOpen', 'linkOpen', 'altOpen', 'fontsOpen', 'pickerOpen', 'mergeOpen', 'sourceOpen', 'mathOpen',
           'tableOpen', 'paperOpen', 'settingsOpen', 'menuOpen'];
         for (const key of modals) {
           if (!this[key]) { continue; }
-          if (key === 'fontsOpen') { this.closeFonts(); } else { this[key] = false; }
+          if (key === 'fontsOpen') { this.closeFonts(); } else if (key === 'stylesOpen') { this.closeStyles(); } else { this[key] = false; }
           e.preventDefault();
           return;
         }
-        if (this.find.open) { this.closeFind(); e.preventDefault(); }
+        if (this.find.open) { this.closeFind(); e.preventDefault(); return; }
+        // The list of documents, where it lies over the page as a drawer (narrow).
+        if (this.narrow && this.sideOpen) { this.sideOpen = false; e.preventDefault(); }
       });
+      // A window that opens takes the keyboard: the focus stayed in the text behind
+      // it, and what was typed for the window went into the document instead -- the
+      // address typed after Ctrl+K replaced the words chosen, Tab and 5 in the
+      // paragraph settings indented the paragraph and wrote a 5 (BUGS #234). When the
+      // last window closes without putting the caret back itself (Cancel, Esc), the
+      // text gets back the keyboard and the words that were chosen.
+      let modalReturn = null;
+      const shellEl = this.$el;
+      if (shellEl && typeof MutationObserver === 'function') {
+        new MutationObserver((records) => {
+          let added = null;
+          let removed = false;
+          records.forEach((rec) => {
+            rec.addedNodes.forEach((n) => { if (n.nodeType === 1 && n.classList.contains('eb-modal-back')) { added = n; } });
+            rec.removedNodes.forEach((n) => { if (n.nodeType === 1 && n.classList.contains('eb-modal-back')) { removed = true; } });
+          });
+          const top = topModal(shellEl);
+          if (added && top === added) {
+            const r = getRange();
+            if (r && !modalReturn) { modalReturn = r.cloneRange(); }
+            if (!added.contains(document.activeElement)) { focusModal(added); }
+            return;
+          }
+          if (!removed) { return; }
+          const act = document.activeElement;
+          const lost = !act || act === document.body || !act.isConnected;
+          if (top) { if (!top.contains(act)) { focusModal(top); } return; }
+          const back = modalReturn;
+          modalReturn = null;
+          if (lost && back && inCanvas(back.commonAncestorContainer)) {
+            canvas().focus();
+            try { selectRange(back); } catch (err) { /* the text moved on */ }
+          }
+        }).observe(shellEl, { childList: true });
+      }
 
       const c = canvasEl;
+      c.addEventListener('beforeinput', () => noteCutMerge());
       c.addEventListener('beforeinput', (e) => this.onBeforeInput(e));
-      c.addEventListener('compositionstart', () => { this.composing = true; if (this.review) { ensureIns(); } });
-      c.addEventListener('compositionend', () => { this.composing = false; this.$nextTick(() => this.repaginate()); });
-      c.addEventListener('input', () => {
+      // 変換を始める前にも（変換中にカーソルを動かすと変換が壊れる）。
+      c.addEventListener('compositionstart', () => caretOutOfRuby());
+      c.addEventListener('compositionstart', () => {
+        // The word being converted is one step: what was there before it begins.
+        history.push(true);
+        this.composing = true;
+        if (this.review) { ensureIns(); } else { imeOutOfDel(); }
+      });
+      c.addEventListener('compositionend', () => {
+        this.composing = false;
+        if (imeFoothold) { window.setTimeout(() => imeFootholdDone(), 0); }
+        this.$nextTick(() => this.repaginate());
+      });
+      c.addEventListener('input', (e) => {
+        // Enter inside a paragraph cut at a page foot: the two halves the browser
+        // made both carry the cut's marks, and the next layout would join them.
+        if (e && e.inputType === 'insertParagraph' && !this.composing) { enterInCut(c); }
+        // 継ぎ目にかかった範囲を置き換えた（keydown の来ない入力）：継いだ塊の切った印を直す。
+        settleCutMerge();
         // Splitting a paragraph inside a mark leaves the empty half behind, and
         // typing does not go through a command, so it is swept up here.
         if (this.review) { tidyMarks(); this.changes = countChanges(); }
+        if (e && /^delete/.test(String(e.inputType || '')) && !this.composing) { dropJoinSpans(); }
         // Never in the middle of a Japanese conversion: replacing the block the
         // caret is in would throw the half-finished word away.
         if (!this.composing) { blankToParagraph(c); }
+        // 注の番号を含む範囲を消したら、行き先の無くなった注の本文も消す（BUGS #221）。
+        if (e && /^delete/.test(String(e.inputType || '')) && !this.review) { notesAfterDelete(); }
+        this.calcSoon();
         this.touch();
         this.recount();
         this.queueWrap();
         this.keepCaretVisible();
       });
+      // A picture, a shape or a frame taken hold of is what Ctrl+C and Ctrl+X take:
+      // the whole object, which Ctrl+V puts back at the caret. With nothing written
+      // chosen there was nothing to copy at all, and the right button's Cut and
+      // Copy were greyed out on a picture (BUGS #194, PS P16).
+      const objectToClipboard = (e, cut) => {
+        const r = getRange();
+        if (!frameTaken || !frameEl || !canvas().contains(frameEl) || (r && !r.collapsed) || !e.clipboardData) { return; }
+        const holder = objectFree(frameEl) ? frameEl.parentNode : frameEl;
+        const copy = holder.cloneNode(true);
+        copy.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
+        copy.querySelectorAll('.eb-anchor > *').forEach((n) => n.style && n.style.removeProperty('--eb-shift'));
+        if (copy.firstElementChild && copy.firstElementChild.style) { copy.firstElementChild.style.removeProperty('--eb-shift'); }
+        e.clipboardData.setData('text/html', '<meta charset="utf-8">' + copy.outerHTML);
+        const img = frameEl.querySelector ? frameEl.querySelector('img') : null;
+        e.clipboardData.setData('text/plain', String(frameEl.textContent || (img && img.getAttribute('alt')) || '').trim());
+        e.preventDefault();
+        if (cut) { this.frameCmd('delete'); }
+      };
+      // Ctrl+F and Ctrl+H are EditBase's own find, before anything else on the page
+      // hears them: Nextcloud's unified search listens for Ctrl+F too, opened at the
+      // same moment, and took the letters typed after it (PS 仕事7, BUGS #275).
+      window.addEventListener('keydown', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || !this.doc || !this.doc.id) { return; }
+        const k = String(e.key || '').toLowerCase();
+        if (k !== 'f' && k !== 'h') { return; }
+        const a = document.activeElement;
+        if (a && a.closest && a.closest('.eb-modal')) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        this.openFind();
+      }, true);
+      document.addEventListener('copy', (e) => objectToClipboard(e, false));
+      document.addEventListener('cut', (e) => objectToClipboard(e, true));
+      // 注の番号を写す・切り取るときは、その注の本文を覚えておく（BUGS #212）。
+      document.addEventListener('copy', (e) => { if (!e.defaultPrevented) { rememberNotes(getRange()); } });
+      document.addEventListener('cut', (e) => { if (!e.defaultPrevented) { rememberNotes(getRange()); } });
       c.addEventListener('paste', (e) => {
         const files = e.clipboardData ? Array.from(e.clipboardData.files || []) : [];
         // Excel (and others) put an image of the selection on the clipboard
@@ -17547,7 +27582,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const plain = pastePlain;
         pastePlain = false;
         const asObject = this.pasteObject && !plain && !pasteWouldNest();
-        const out = handlePaste(e, plain, asObject) || {};
+        const out = handlePaste(e, plain, asObject, !!(this.review && this.doc.id)) || {};
         if (out.made) {
           frameEl = out.made;
           frameMore = [];
@@ -17562,11 +27597,50 @@ ${insideObjects('.eb-paper.boxed')} {
         // A picture pasted inside a piece of HTML never passed through the
         // shrinking that a pasted file goes through. Now everything does.
         this.lightenPictures(true);
+        // A picture pasted from another site is read by the server and kept in
+        // the document: the editor may not show it from there (BUGS #75).
+        this.bringInPictures('');
       });
       c.addEventListener('keydown', (e) => this.onKey(e));
       c.addEventListener('contextmenu', (e) => this.openCtx(e));
+      // Ctrl（Mac は ⌘）を押しながらリンクを押すと、そのリンクを開く ―― LibreOffice・
+      // Word と同じ。文書の中への飛び先ならその場所へ飛ぶ（BUGS #223）。
+      c.addEventListener('click', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || !e.target || !e.target.closest) { return; }
+        const a = e.target.closest('a[href]');
+        if (!a || !c.contains(a)) { return; }
+        e.preventDefault();
+        this.openLinkTarget(a);
+      });
 
       c.addEventListener('pointerdown', (e) => this.onCanvasDown(e));
+      // A cell picked into the formula bar keeps the bar's caret: the press must not
+      // take the focus to the page (BUGS #290).
+      c.addEventListener('mousedown', (e) => { if (fxPicking) { e.preventDefault(); } }, true);
+      // A press in the page puts the writer back in the text: the word the find bar
+      // had marked is no longer what Replace acts on (BUGS #233).
+      c.addEventListener('pointerdown', () => markFindHit(null));
+      // 物を選ぶと、上に物の道具の列（画像・表のときはその列も）が一段増え、文書全体が
+      // 一段ぶん下へずれていた。押した場所の字が逃げるので、同じ所をもう一度押すと別の
+      // 所（枠の縁など）に当たり、バックスペースで枠ごと消えた（オーナー 2026-09-22、
+      // BUGS #45）。道具の列が増えても減っても、紙は画面の同じ所に留める。
+      const desk = c.closest('.eb-desk');
+      if (desk && typeof ResizeObserver === 'function') {
+        let deskTop = desk.getBoundingClientRect().top;
+        new ResizeObserver(() => {
+          const top = desk.getBoundingClientRect().top;
+          const delta = top - deskTop;
+          deskTop = top;
+          // 紙を押した直後（押した物が選ばれて道具の列が出入りした）ときだけ送る。
+          // ボタンやプログラムで物を変えている最中に送ると、その処理が測る位置が送る
+          // 前と後で混ざり、「自由に配置」した写真が 25mm ずれて置かれた（点検で発見）。
+          const now = window.performance ? window.performance.now() : 0;
+          if (delta && Math.abs(delta) < 200 && now - canvasPressedAt < 800) {
+            paperKeptAt = now;
+            desk.scrollTop += delta;
+          }
+        }).observe(desk);
+      }
       c.addEventListener('pointermove', (e) => this.frameHover(e), { passive: true });
       // Safari on a phone does not always raise contextmenu, so a long press on
       // the page opens the same menu: half a second, without the finger moving.
@@ -17686,11 +27760,58 @@ ${insideObjects('.eb-paper.boxed')} {
       // the right button on a sheet below the fold gave no menu at all, every
       // time. An event within a tenth of a second of the menu opening is that
       // scroll, not the writer's; nobody reaches the wheel that fast.
-      document.addEventListener('scroll', () => {
+      document.addEventListener('scroll', (e) => {
+        // The menu's own scrolling (a menu taller than the window, BUGS #246) is not
+        // the page moving away from under it.
+        const tg = e && e.target;
+        if (tg && tg.nodeType === 1 && tg.closest && tg.closest('.eb-ctxmenu')) { return; }
         const now = window.performance ? window.performance.now() : 0;
         if (now - ctxAt < 150) { return; }
+        // 道具の列が出入りしたときに紙を留めるための送りは、書き手の操作ではない。
+        if (now - paperKeptAt < 300) { return; }
         this.closeCtx();
       }, true);
+      // マウスを乗せた部品の名前から説明を引き、名前の下に添える（title に書く）。
+      // 道具の列・メニュー・右クリック・画面のボタンのすべてに、この一か所で効く。
+      const tipRoot = document.getElementById('editbase-root') || document.body;
+      let tipLang = null;
+      let tipIndex = null;
+      const tipFor = (label) => {
+        const lang = this.i18nTick;
+        if (!tipIndex || tipLang !== lang) {
+          tipIndex = new Map();
+          Object.keys(TIPS).forEach((k) => { tipIndex.set(this.t(k), this.t(TIPS[k])); });
+          tipLang = lang;
+        }
+        return tipIndex.get(label) || '';
+      };
+      tipRoot.addEventListener('mouseover', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('button, .ci, .eb-menu-item, label.eb-tb') : null;
+        if (!el || !tipRoot.contains(el)) { return; }
+        const title = el.getAttribute('title') || '';
+        const base = title ? title.split('\n')[0] : '';
+        if (el.dataset.tipFor === (base || el.textContent)) { return; }
+        let name = base.replace(/\s*\((Ctrl|Shift|Alt|Tab)[^)]*\)\s*$/, '').trim();
+        if (!name) {
+          const copy = el.cloneNode(true);
+          copy.querySelectorAll('.k, .s').forEach((k) => k.remove());
+          name = String(copy.textContent || '').replace(/\s+/g, ' ').trim();
+        }
+        const tip = tipFor(name);
+        if (!tip) { return; }
+        // 乗せている間だけ説明を添え、離れたら元の名前に戻す（名前を書き換えたまま
+        // にすると、名前で部品を探す処理が見つけられなくなる）。
+        el.dataset.tipOrig = title;
+        el.setAttribute('title', (base || name) + '\n' + tip);
+        el.dataset.tipFor = base || el.textContent;
+      });
+      tipRoot.addEventListener('mouseout', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('[data-tip-for]') : null;
+        if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) { return; }
+        if (el.dataset.tipOrig) { el.setAttribute('title', el.dataset.tipOrig); } else { el.removeAttribute('title'); }
+        delete el.dataset.tipOrig;
+        delete el.dataset.tipFor;
+      });
       document.addEventListener('selectionchange', () => {
         const r = getRange();
         // The last run of words the writer actually chose. Clicking into a box on
@@ -17699,13 +27820,19 @@ ${insideObjects('.eb-paper.boxed')} {
         // nothing had been: the size went on the whole paragraph, or on the whole
         // 文字枠, instead of on the words.
         if (r && !r.collapsed) { heldRange = r.cloneRange(); }
+        // 本文の別の場所を押した（カーソルを置いた）ら、覚えていた範囲は捨てる。
+        // 捨てずにいたので、まとめ枠の文字を選んだあとに文字枠を押して大きさを
+        // 変えると、覚えていたまとめ枠の文字が大きくなった（オーナー 2026-09-21）。
+        else if (r && r.collapsed && document.activeElement === canvas()) { heldRange = null; }
+        if (r) { this.followFormulaCell(r); }
         if (r) { this.refreshState(); }
       });
       window.addEventListener('beforeunload', (e) => {
         // Say we have gone, so the other people writing in it stop being told
         // that somebody is here who is not.
         this.letGo(this.doc.id);
-        if (this.dirty) { e.preventDefault(); e.returnValue = ''; }
+        // A save still on the wire is not in the file either: leaving now can cut it off.
+        if (this.dirty || this.saving) { e.preventDefault(); e.returnValue = ''; }
       });
       this.boot();
     },
@@ -17718,14 +27845,28 @@ ${insideObjects('.eb-paper.boxed')} {
   });
 
   /** Nextcloud's dark mode is a theme app, not a media query, so ask the page. */
-  const URL_BEFORE = /(?:^|[\s　(（「『])((?:https?:\/\/[^\s　）」』]+)|(?:www\.[^\s　）」』]+)|(?:[^\s　@（）「」]+@[^\s　@（）「」]+\.[A-Za-z]{2,}))$/;
+  // 後ろの閉じ括弧・句読点は URL の外（BUGS #228：「。」「、」「)」まで含んでいた）。
+  const URL_BEFORE = /(?:^|[\s　(（「『])((?:https?:\/\/[^\s　）」』]+)|(?:www\.[^\s　）」』]+)|(?:[^\s　@（）「」]+@[^\s　@（）「」]+\.[A-Za-z]{2,}))([）」』】。、，．,.;:!?)]*)$/;
+  const URL_TRAIL = /[。、，．,.;:!?'"]$/;
   /** The address the caret has just finished typing, if that is what it is. */
   function urlBeforeCaret() {
     const r = getRange();
     if (!r || !r.collapsed || r.startContainer.nodeType !== 3) { return null; }
     if (linkAt(r.startContainer)) { return null; }
     const m = r.startContainer.data.slice(0, r.startOffset).match(URL_BEFORE);
-    return m ? { node: r.startContainer, end: r.startOffset, text: m[1] } : null;
+    if (!m) { return null; }
+    let text = m[1];
+    let cut = m[2].length;
+    // 文の終わりの「.」「。」や、URL の外の閉じ括弧は外す。括弧は URL の中で開いた
+    // 物（…/Foo_(bar)）だけ残す。
+    for (;;) {
+      const last = text.slice(-1);
+      if (URL_TRAIL.test(last)) { text = text.slice(0, -1); cut += 1; continue; }
+      if (last === ')' && (text.split('(').length - 1) < (text.split(')').length - 1)) { text = text.slice(0, -1); cut += 1; continue; }
+      break;
+    }
+    if (!/^(https?:\/\/.|www\..|[^@]+@[^@]+\..)/i.test(text)) { return null; }
+    return { node: r.startContainer, end: r.startOffset - cut, text: text, after: cut };
   }
   /** Turn it into a link and leave the caret outside, so the next word is plain. */
   function autoLink() {
@@ -17740,6 +27881,9 @@ ${insideObjects('.eb-paper.boxed')} {
     if (a) {
       const after = document.createRange();
       after.setStartAfter(a);
+      // URL の外に残した句読点・閉じ括弧の後ろ（打っていた所）へ戻す。
+      const next = a.nextSibling;
+      if (found.after && next && next.nodeType === 3 && next.data.length >= found.after) { after.setStart(next, found.after); }
       after.collapse(true);
       selectRange(after);
     }
@@ -17823,7 +27967,7 @@ ${insideObjects('.eb-paper.boxed')} {
     const el = document.elementFromPoint(dropX, dropY);
     return el && inCanvas(el) ? blockUnder(el) : null;
   }
-  function dropAt(point, data) {
+  function dropAt(point, data, tracked) {
     // Something from this document, dragged: it moves. The browser would hand us
     // a copy of it and leave the original standing.
     if (dragObject) {
@@ -17842,6 +27986,25 @@ ${insideObjects('.eb-paper.boxed')} {
     }
     if (!point || !inCanvas(point.startContainer)) { return false; }
     if (dragRange && pointInsideRange(dragRange, point)) { return false; }
+    if (tracked) {
+      // Recording: the words dragged away are struck out where they were and
+      // marked as added where they land. They were cut out unmarked, and
+      // "Undo them all" could not put them back (BUGS #215).
+      const frag = dragRange ? dragRange.cloneContents() : fragmentFromTransfer(data);
+      if (!frag || !frag.firstChild) { return false; }
+      // A foothold at the drop point, which striking out the source (it wraps
+      // and splits text nodes) cannot move.
+      const foot = document.createTextNode('');
+      point.insertNode(foot);
+      if (dragRange) { markJoins(dragRange); markDeleted(dragRange); }
+      const at = document.createRange();
+      at.setStartBefore(foot);
+      at.collapse(true);
+      selectRange(at);
+      foot.remove();
+      insertFragmentAt(markFragmentAdded(frag));
+      return true;
+    }
     const frag = dragRange ? dragRange.extractContents() : fragmentFromTransfer(data);
     if (!frag || !frag.firstChild) { return false; }
     selectRange(point);
@@ -17926,6 +28089,8 @@ ${insideObjects('.eb-paper.boxed')} {
     joinChain, splitChain, reflowFrames };
   // Which object the click took hold of. The tests ask; nothing else does.
   window.__eb_held = () => frameEl;
+  // ソースの健全性のルーチンが直した数と、かかった時間。検査が読む。
+  window.__eb_heal = heal;
   // Where a placed thing is worked out to stand. The tests ask; nothing else does.
   window.__eb_place = { settleFree, reanchor, placeFreeAsDrawn, placeFreeAt, pageGeometry, topOnPaper,
     filledLast: filledLast, flowPages: () => flowPages, objectFree: objectFree, chainable: chainable };

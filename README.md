@@ -29,6 +29,11 @@ orientation and margins are set in millimetres and written into the file as an
 produces the result. The editor lays the pages out itself and shows them as
 sheets of paper, so what is on the screen is what comes out of the printer.
 
+EditBase is a program for writing documents with HTML, CSS and JavaScript alone,
+without relying on any external program. It is made to work like LibreOffice
+Writer, with handling close to that of DTP software. It has grown into a very
+large program, so many bugs may remain.
+
 ### Features
 
 **Documents**
@@ -62,7 +67,7 @@ sheets of paper, so what is on the screen is what comes out of the printer.
 - Page guides on screen, a ruler, a five-millimetre grid
 - Explicit page breaks, and a blank page put in above or below any page
 - A running header and footer that repeat on every printed page, each in a band of
-  its own; they can carry `{title}`, `{name}`, `{date}` and `{time}`
+  its own; they can carry `{page}`, `{pages}`, `{title}`, `{name}`, `{date}` and `{time}`
 - Columns, and vertical writing (縦書き) for Japanese
 
 **Writing**
@@ -82,9 +87,22 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   nowhere
 - Tables, callout boxes, shapes, rules, embedded pages, and formulas as native
   MathML — drawn by the browser, so a formula stays selectable text
-- Anything can be placed by hand and dragged about the page, nudged with the arrow
-  keys, stacked, and told what the words should do when they meet it: keep above
-  and below, keep to its left, keep to its right, or run underneath
+- Formulas made in FormulaBase inserted into the document as they are
+- Anything can be placed by hand and dragged about the page, or nudged with the
+  arrow keys. Two ways of placing it: **standard placement** follows the rules of
+  HTML and keeps clear of the text and of other objects — above and below, with the
+  text to its left or to its right (and on both sides, with JavaScript); **free
+  placement** puts it anywhere with CSS, over other things, in the stacking order
+  you choose. Which one a new object gets is a setting
+- **Tables that calculate**, like a small spreadsheet: write `=SUM(B2:B5)` or
+  `=B2*C2` in a cell and it shows the answer, worked out again when a number
+  changes. 33 functions, written as in LibreOffice Calc; a formula bar with a list
+  of the functions, where pressing a cell puts its name into the formula; column
+  letters and row numbers round the table
+- **Cell properties in tabs, as in Excel**: number format (including your own codes
+  such as `#,##0"cm"`), alignment, font, borders drawn edge by edge, and fill. Cells
+  are chosen as a block by dragging, and formatted all at once; optimal row height
+  and column width
 - A frame too tall for its page carries its writing on into a frame of the same
   shape inside the next page, cut at the line rather than at the edge of the paper
 - Anything placed by hand keeps to one sheet: dragged over the edge of the paper it
@@ -98,6 +116,9 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   any side, the mark in front of a list item — set with the mouse, with a sample
   that changes as you go, and written into the file as rules rather than on each
   paragraph
+- **Heading designs**: twenty of them — underlines, a bar at the start, bands, boxes,
+  speech bubbles and more — drawn with CSS alone, in one colour for every heading
+  if you like
 - The document's own stylesheet, written by hand, for anything those fields cannot
   say
 - Light and dark themes per user; English and Japanese
@@ -109,8 +130,63 @@ sheets of paper, so what is on the screen is what comes out of the printer.
   can show, a photograph heavy enough to make the file slow, a page with nothing
   written on it
 - Photographs made lighter in place
+- **Web preview**: the saved document opened in a new tab as the web page it is,
+  its JavaScript running
 - An undo history of the editor's own, because an editor that rewrites the document
   tree cannot rely on the browser's
+
+### HTML5 and CSS first, JavaScript only where they cannot
+
+A document is one HTML file, and as much of it as possible is drawn with HTML5 and
+CSS alone, so it reads the same wherever JavaScript does not run — opened from an
+e-mail, in a browser with scripts off, printed, or as a PDF. JavaScript is used
+only for what HTML and CSS cannot do, and each document can have it on or off
+(Document settings → Use JavaScript). With it off, nothing the document says is
+lost.
+
+**HTML5 and CSS alone** — the same with JavaScript on or off:
+text, headings, lists, quotations, tables, callout boxes, shapes, pictures and
+captions; heading designs, styles and the document's own CSS; columns, vertical
+writing, ruby and emphasis dots; standard and free placement, with the text kept
+above and below, to the left or to the right; the answers and number formats of
+the tables; paper, margins, page breaks, headers and footers with page numbers;
+contents, notes and links.
+
+**With the help of JavaScript:**
+
+| Feature | Without JavaScript |
+|---|---|
+| Text on both sides of an object | Shown as it was saved; laid again only where another font has moved the words |
+| Photographs enlarged with an effect: whole screen, all of them in turn, grown in place, a magnifying glass, lifted when pointed at | The photograph is shown as it is |
+| Table calculation: the answers of the formulas | Worked out in the editor and saved as text, so the answers are read anywhere |
+
+More will be added here as EditBase grows. The only script a document carries is
+EditBase's own, recognised by its fingerprint (SHA-256).
+
+### The toolbar
+
+- **Document**: document list, save, print / PDF, view the HTML, paper setup
+- **Editing**: undo, redo
+- **Paragraph**: paragraph style (body text, headings 1–4, quotation, preformatted),
+  change a style everywhere, alignment, bulleted and numbered lists and the kind of
+  marker, increase and decrease indent
+- **Characters**: typeface, size (pt), bold, italic, underline, strikethrough,
+  emphasis dots, superscript, subscript, inline code, highlight, text colour, copy
+  the format at the cursor and put it on a selection, clear formatting
+- **Insert**: the insert menu, page layout, marks and notes, shapes, and bringing in
+  from Notes, RegiBase and FormulaBase
+- **View**: ruler, margin boundaries, the shelf of shapes, a 5 mm grid, the pages
+  and layers panels, header, footer, a box round every object, the page exactly as
+  it prints, fit to the screen, zoom
+- **A selected picture, shape or frame**: how the words flow round it (above and
+  below, to its left, to its right, on both sides, underneath), anchor, put it at
+  the left or right margin or in the centre, the width of the column, space several
+  evenly, make them the same size, properties, crop, delete
+- **In a table**: insert a row above or below and a column left or right, delete a
+  row, a column or the table, first row as a header, cell colour, text at the top,
+  middle or bottom of the cell, rules round the cells
+- **Recording changes**: record what is changed from now on, go to the previous or
+  next change
 
 ### The markup it writes
 
@@ -129,10 +205,6 @@ pile of inline styles:
 
 ### What it does not do
 
-- **Page numbers cannot be printed from the file.** A browser has no count of
-  printed pages to give a document, and the margins of a printed page cannot be
-  reached from the page itself. Your print dialogue's own "Headers and footers"
-  will add them.
 - **Vertical writing is behind.** The newest page-fitting work — frames that carry
   their writing on, and keeping placed things on one sheet — is written for
   horizontal text so far.
@@ -146,12 +218,13 @@ pile of inline styles:
 
 ### Requirements
 
-Nextcloud 30–34. No external service, no additional PHP extension, and nothing to
+Nextcloud 30–35. No external service, no additional PHP extension, and nothing to
 install in the browser.
 
 ### Installation
 
-Copy the app into `apps/editbase` and enable it:
+Install EditBase from the Nextcloud App Store (Apps → Office & text), or copy the
+app into `apps/editbase` and enable it:
 
 ```bash
 sudo -u www-data php occ app:enable editbase
@@ -175,6 +248,11 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 書き込まれ、改ページは明示的に置かれ、仕上がりはブラウザ自身の「PDFに保存」で
 得られます。エディタ自身がページを組んで紙として表示するので、画面で見えている
 ものが、そのまま印刷されます。
+
+EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript だけで文書を作成する
+ためのプログラムです。LibreOffice ライクかつ DTP ソフトに似た操作性を求めて作って
+います。非常に大きなプログラムになっているため、不具合が多く残っている可能性が
+あります。
 
 ### 主な機能
 
@@ -205,7 +283,7 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
   上下左右の余白、本文の書体とサイズ
 - 画面上のページガイド、ルーラー、5mm グリッド
 - 明示的な改ページと、任意のページの上／下への白紙の挿入
-- すべての印刷ページに繰り返し入るヘッダーとフッター（それぞれ専用の帯に入ります）。
+- すべての印刷ページに繰り返し入るヘッダーとフッター（それぞれ専用の帯に入ります。`{page}`（ページ番号）・`{pages}`（総ページ数）も入れられます）。
   `{title}` `{name}` `{date}` `{time}` を差し込めます
 - 段組み、縦書き
 
@@ -223,8 +301,19 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 - 貼り付け・ドラッグで入る画像（トリミング可、説明文は下・上・中・なしから選択）
 - 表・囲み記事・図形・罫線・埋め込みページ、そしてネイティブ MathML の数式
   （ブラウザが描画するので、数式は文字のまま残ります）
-- どれも自由に配置してページ上を動かせます。矢印キーで微調整、重ね順の指定、
-  本文の回り込み（上下に配置・左に回り込む・右に回り込む・下を通す）
+- FormulaBase で作った式を、そのまま文書に挿入できます
+- どれもページ上をドラッグで動かせ、矢印キーで微調整できます。置き方は2つです。
+  **標準配置**は HTML の規則に則って配置し、文字列やほかのオブジェクトをよけます
+  （上下によける・文字列を左側に・文字列を右側に。JavaScript を使うと両側にも）。
+  **自由配置**は CSS で自由に配置し、ほかのものと重ねられ、重ね順も指定できます。
+  新しく置くときにどちらにするかは、設定で選べます
+- **計算できる表**：小さな表計算のように、セルに `=SUM(B2:B5)` や `=B2*C2` と書くと
+  答えが表示され、数値を変えると計算し直します。関数は LibreOffice Calc と同じ書き方で
+  33 種類。数式バーから関数を選んで入れられ、セルをクリックするとそのセルの名前が式に
+  入ります。表の上と左に列の記号と行の番号が出ます
+- **Excel と同じタブのセルのプロパティ**：表示形式（`#,##0"cm"` のような書式コードも
+  可）、文字揃え、フォント、辺ごとの罫線、塗りつぶし。セルはドラッグで範囲を選択して
+  まとめて書式を設定できます。行の高さと列の幅の最適化もあります
 - ページに入りきらない枠は、次ページの同じ形の枠に文章を続けます。用紙の端では
   なく、行の切れ目で分けます
 - 自由に配置したものは必ず1枚の紙に収まります。用紙の端にかかると次のページへ移り、
@@ -236,6 +325,8 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 - 種類ごとのスタイル（書体・サイズ・色・字間・太さ・行揃え・行間・字下げ・前後の
   間隔・背景色・辺ごとの罫線・行頭記号）。マウス操作で決められ、見本がその場で
   変わります。段落ごとではなく、ファイル内の規則として書き込まれます
+- **見出しのデザイン** 20 種類（下線・先頭の太線・帯・囲み・吹き出しなど）。CSS だけで
+  描き、すべての見出しを同じ色にそろえることもできます
 - それでは書けないものは、文書自身のスタイルシートに CSS で直接書けます
 - 利用者ごとのライト／ダークテーマ、日本語・英語
 
@@ -244,8 +335,56 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 - 文書の点検 ― 用紙の端にかかっているもの、回り込みを設定したのに重なっている本文、
   入りきらない文章を抱えた枠、重すぎる画像、何も書かれていないページ
 - 画像をその場で軽くする
+- **Web プレビュー**：保存した文書を、Web ページとして新しいタブで開きます
+  （文書の JavaScript も動きます）
 - エディタ自身が持つ取り消し履歴（文書ツリーを書き換えるエディタは、ブラウザ標準の
   取り消しに頼れないため）
+
+### HTML5 と CSS が先、JavaScript はそれで無理なところだけ
+
+文書は HTML ファイル 1 つです。できるかぎり HTML5 と CSS だけで表示しているので、
+JavaScript が動かないところ（メールに添付して開いたとき、JavaScript を止めたブラウザ、
+印刷、PDF）でも同じように読めます。JavaScript は HTML と CSS ではできないことにだけ
+使い、文書ごとに入り切りできます（文書の設定 → JavaScript を使う）。切っても、文書の
+内容が失われることはありません。
+
+**HTML5 と CSS だけで実現しているもの**（JavaScript の入り切りに関係なく同じ）：
+文章・見出し・リスト・引用・表・囲み記事・図形・画像と説明文、見出しのデザイン・
+スタイル・独自の CSS、段組み・縦書き・ルビ・傍点、標準配置と自由配置（上下・左・右への
+回り込み）、表の答えと表示形式、用紙・余白・改ページ・ページ番号付きのヘッダーと
+フッター、目次・注・リンク。
+
+**JavaScript の力を借りているもの：**
+
+| 機能 | JavaScript が無いとき |
+|---|---|
+| オブジェクトの両側への文字列の回り込み | 保存したときの形のまま表示されます。別のフォントで字がずれた場合だけ組み直します |
+| 画像のエフェクト付きの拡大（画面いっぱい・全部を順に・その場で拡大・虫眼鏡・マウスを重ねると浮き上がる） | 画像はそのまま表示されます |
+| 表計算（式の答えを出す） | 編集画面で計算し、答えを文字として保存するので、どこでも答えは読めます |
+
+EditBase が育つにつれ、この表に足していきます。文書に入る JavaScript は EditBase 自身の
+ものだけで、その指紋（SHA-256）で見分けます。
+
+### ツールバー
+
+- **文書**：文書一覧、保存、印刷／PDF、HTML を見る、用紙設定
+- **編集**：元に戻す、やり直す
+- **段落**：段落スタイル（本文・見出し1〜4・引用・整形済み）、スタイルのまとめて変更、
+  揃え、箇条書き・番号付きリストと行頭の記号、インデントを深く・浅く
+- **文字**：書体、大きさ（pt）、太字、斜体、下線、取り消し線、圏点、上付き文字、
+  下付き文字、インラインコード、ハイライト、文字色、カーソル位置の書式をコピーして
+  選択範囲に付ける、書式を消す
+- **挿入**：挿入メニュー、ページ構成、記号・注記、図形、差し込み（Notes・RegiBase・
+  FormulaBase から）
+- **表示**：ルーラー、余白の境界線、図形パレット、5mm のマス目、ページとレイヤーの
+  一覧、ヘッダー、フッター、オブジェクトの枠、印刷どおりの表示、画面幅に合わせる、
+  倍率
+- **画像・図形・枠を選んだとき**：文字の回り込み（上下・左・右・両側・重ね合わせ）、
+  アンカー、左余白・中央・右余白に寄せる、段の幅いっぱいにする、等間隔に並べる、
+  同じ大きさにする、プロパティ、切り抜き、削除
+- **表の中**：上・下に行を追加、左・右に列を追加、行・列・表の削除、先頭行を見出しに
+  する、セルの色、セル内の上・中央・下寄せ、セルの罫線
+- **変更の記録**：これ以降の変更を記録する、前・次の変更へ
 
 ### 出力される HTML
 
@@ -264,9 +403,6 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 
 ### できないこと
 
-- **ファイル自身でページ番号を印刷することはできません。** ブラウザには印刷ページの
-  通し番号を文書に渡す仕組みがなく、ページの余白にはページ自身から手が届きません。
-  印刷ダイアログの「ヘッダーとフッター」を有効にすると、ブラウザが付けます。
 - **縦書きは遅れています。** 新しいページ調整（枠が次ページへ続く、自由配置物を
   1枚の紙に収める）は、いまのところ横書き向けに書かれています。
 - **同時編集は段落単位です。** 別々の段落なら約1秒で互いに反映されます。同じ段落は、
@@ -277,12 +413,13 @@ EditBase は、すべての文書を、スタイルシートを内包した1枚�
 
 ### 動作要件
 
-Nextcloud 30〜34。外部サービスも、追加の PHP 拡張も、ブラウザに入れるものも
+Nextcloud 30〜35。外部サービスも、追加の PHP 拡張も、ブラウザに入れるものも
 必要ありません。
 
 ### 導入
 
-`apps/editbase` に配置して有効化します。
+Nextcloud の App Store（アプリ → オフィスとテキスト）から入れるか、`apps/editbase` に
+配置して有効化します。
 
 ```bash
 sudo -u www-data php occ app:enable editbase

@@ -35,6 +35,7 @@ class PageController extends Controller {
 		// Runtime-only Vue + precompiled render function (no template compiler → no eval).
 		Util::addScript(Application::APP_ID, 'vue.runtime.global.prod');
 		Util::addScript(Application::APP_ID, 'vue-private');
+		Util::addScript(Application::APP_ID, 'markdown-private');
 		Util::addScript(Application::APP_ID, 'editbase.dist');
 
 		$user = $this->userSession->getUser();

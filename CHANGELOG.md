@@ -3,7 +3,7 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-09-29
 
 The first version. Everything below is new, because there was nothing before it.
 
@@ -119,6 +119,21 @@ The first version. Everything below is new, because there was nothing before it.
   language, put in at the caret. The character is what goes into the file, so it is
   drawn by whatever emoji font the reader's machine has.
 - Light and dark themes, chosen per user, and English and Japanese translations.
+
+- **Standard and free placement.** Standard placement follows the rules of HTML and
+  keeps clear of the text and of other objects (above and below, text to the left
+  or to the right, and on both sides with JavaScript); free placement puts an object
+  anywhere with CSS, over other things. The default is a setting.
+- **Tables that calculate**: formulas as in LibreOffice Calc (33 functions, `;` or `,`
+  between arguments, Err:522 for a circle), a formula bar with a list of the
+  functions and cells picked into the formula by pressing them, column letters and
+  row numbers round a chosen table, and number formats written as format codes.
+- **Cell properties in tabs as in Excel** — number format, alignment, font, borders
+  drawn edge by edge (none, outline, inside, all), fill — for a block of cells
+  chosen by dragging; optimal row height and column width.
+- **Twenty heading designs**, drawn with CSS alone, in one colour for every heading.
+- **Web preview**: the saved document opened as a web page, its JavaScript running.
+- Page numbers (`{page}`, `{pages}`) in the running header and footer.
 
 ### Fixed
 
@@ -252,9 +267,6 @@ The first version. Everything below is new, because there was nothing before it.
 
 ### Known limits
 
-- A page number cannot be printed from the file itself: a browser has no count of
-  printed pages to give a document, and the margins of a printed page cannot be
-  reached from the page. The print dialogue's own headers and footers add them.
 - Vertical writing does not yet have the newest page fitting: frames that carry
   their writing on to the next page, and keeping a thing placed by hand on one
   sheet, are written for horizontal text so far.

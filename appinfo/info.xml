@@ -8,34 +8,48 @@
 
 Because the document is HTML and CSS, printing is typesetting: paper size, orientation and margins are set in millimetres, page breaks are explicit, and your browser's own "Save as PDF" produces the finished result. The editor lays the pages out itself and draws them as sheets of paper, so what is on the screen is what comes off the printer.
 
+EditBase is a program for writing documents with HTML, CSS and JavaScript alone, without relying on any external program. It is made to work like LibreOffice Writer, with handling close to that of DTP software. It has grown into a very large program, so many bugs may remain.
+
 Features:
 - Documents are plain HTML files in your own Files, editable and shareable like any other file
 - Paper setup in millimetres — A3, A4, A5, B4, B5, Letter and Legal, portrait or landscape — with page guides, a ruler and a grid
-- A running header and footer on every printed page, carrying the title, the file name or the date
+- A running header and footer on every printed page, carrying the page number, the title, the file name or the date
 - Headings, lists, tables, quotations, callout boxes, footnotes, a table of contents, columns and vertical writing
 - Readings over words (ruby), emphasis dots, highlighting and text colour, applied as clean HTML rather than editor cruft
-- Pictures, shapes, rules and embedded pages, placed by hand anywhere on the page, with the words kept clear of them
+- Pictures, shapes, tables, rules and embedded pages placed by hand: standard placement keeps clear of the text and of other objects by the rules of HTML; free placement puts it anywhere with CSS
+- Tables that calculate like a small spreadsheet: formulas as in LibreOffice Calc, a formula bar, column letters and row numbers
+- Cell properties in tabs as in Excel: number format, alignment, font, borders and fill, for a block of cells at once
+- Twenty heading designs drawn with CSS alone
 - Frames that carry their writing on into the next page, cut at the line rather than at the edge of the paper
 - Mathematics written as native MathML — no images, no external renderer
+- Formulas made in FormulaBase inserted into the document as they are
 - Styles for each kind of block, and the document's own stylesheet for anything they cannot say
 - A check over the document that finds what is wrong with the page before it is printed
-- Find and replace, recorded changes, mail merge, and an undo history kept by the editor itself]]></description>
+- Find and replace, recorded changes, mail merge, and an undo history kept by the editor itself
+- HTML5 and CSS first: JavaScript is used only for what they cannot do (text on both sides of an object, photographs enlarged with an effect, table calculation), and can be turned on or off for each document]]></description>
 	<description lang="ja"><![CDATA[EditBaseは、文書そのものがWebページであるワードプロセッサです。すべての文書は、スタイルシートを内包した1枚の独立した .html ファイルとして、あなたのNextcloud Filesに保存されます。どの端末のどのブラウザでも、ブラウザが存在する限り開けます ― 取り込みも書き出しも、その間に挟まる独自フォーマットもありません。
 
 文書がHTMLとCSSであるということは、印刷がそのまま組版であるということです。用紙サイズ・向き・余白はミリメートルで指定し、改ページは明示的に置き、仕上がりはブラウザ自身の「PDFに保存」で得られます。エディタ自身がページを組んで紙として描くので、画面で見えているものがそのまま印刷されます。
 
+EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript だけで文書を作成するためのプログラムです。LibreOffice ライクかつ DTP ソフトに似た操作性を求めて作っています。非常に大きなプログラムになっているため、不具合が多く残っている可能性があります。
+
 主な機能:
 - 文書は自分のFilesの中の素のHTMLファイル ― 他のファイルと同じように編集・共有できます
 - ミリメートル単位の用紙設定 ― A3・A4・A5・B4・B5・Letter・Legal、縦置き／横置き。ページガイド・ルーラー・グリッド付き
-- すべての印刷ページに入るヘッダーとフッター。タイトル・ファイル名・日付を差し込めます
+- すべての印刷ページに入るヘッダーとフッター。ページ番号・タイトル・ファイル名・日付を差し込めます
 - 見出し・箇条書き・表・引用・囲み記事・脚注・目次・段組み・縦書き
 - ルビ・圏点・ハイライト・文字色を、エディタ特有のゴミではなく整ったHTMLとして適用
-- 画像・図形・罫線・埋め込みページを、ページ上の好きな場所に配置。本文は重ならないよう避けます
+- 画像・図形・表・罫線・埋め込みページを、ページ上の好きな場所に配置。標準配置は HTML の規則に則って文字列やほかのオブジェクトをよけ、自由配置は CSS で自由に配置します
+- 小さな表計算のように計算できる表。LibreOffice Calc と同じ書き方の式、数式バー、列の記号と行の番号
+- Excel と同じタブのセルのプロパティ（表示形式・文字揃え・フォント・罫線・塗りつぶし）。範囲を選択してまとめて設定できます
+- CSS だけで描く見出しのデザイン 20 種類
 - ページに入りきらない枠は、用紙の端ではなく行の切れ目で分けて、次ページの枠に文章を続けます
 - 数式はネイティブのMathMLで記述 ― 画像も外部レンダラーも使いません
+- FormulaBase で作った式を、そのまま文書に挿入できます
 - 種類ごとのスタイル設定と、それでは書けないものを直接書くための文書専用スタイルシート
 - 印刷する前にページの不具合を見つける「文書の点検」
-- 検索と置換、変更履歴、差し込み印刷、エディタ自身が保持する取り消し履歴]]></description>
+- 検索と置換、変更履歴、差し込み印刷、エディタ自身が保持する取り消し履歴
+- HTML5 と CSS が先。JavaScript はそれで無理なこと（オブジェクトの両側への回り込み・画像のエフェクト付きの拡大・表計算）にだけ使い、文書ごとに入り切りできます]]></description>
 	<version>0.1.0</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
@@ -45,8 +59,13 @@ Features:
 	<website>https://github.com/ktec-nc-apps/EditBase</website>
 	<bugs>https://github.com/ktec-nc-apps/EditBase/issues</bugs>
 	<repository>https://github.com/ktec-nc-apps/EditBase</repository>
+	<screenshot>https://raw.githubusercontent.com/ktec-nc-apps/EditBase/master/screenshots/01-editor.png</screenshot>
+	<screenshot>https://raw.githubusercontent.com/ktec-nc-apps/EditBase/master/screenshots/02-formulas.png</screenshot>
+	<screenshot>https://raw.githubusercontent.com/ktec-nc-apps/EditBase/master/screenshots/03-cell-format.png</screenshot>
+	<screenshot>https://raw.githubusercontent.com/ktec-nc-apps/EditBase/master/screenshots/04-cell-borders.png</screenshot>
+	<screenshot>https://raw.githubusercontent.com/ktec-nc-apps/EditBase/master/screenshots/05-heading-designs.png</screenshot>
 	<dependencies>
-		<nextcloud min-version="30" max-version="34"/>
+		<nextcloud min-version="30" max-version="35"/>
 	</dependencies>
 	<navigations>
 		<navigation>

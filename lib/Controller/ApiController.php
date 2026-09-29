@@ -8,10 +8,13 @@ use OCA\EditBase\AppInfo\Application;
 use OCA\EditBase\Service\DocumentService;
 use OCA\EditBase\Service\Connectors;
 use OCA\EditBase\Service\FileBrowser;
+use OCA\EditBase\Service\TextEncoding;
 use OCA\EditBase\Service\ShareService;
 use OCA\EditBase\Service\SessionService;
 use OCA\EditBase\Service\LiveService;
 use OCA\EditBase\Service\VersionService;
+use OCA\EditBase\Service\FetchRefused;
+use OCA\EditBase\Service\WebFetch;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -21,7 +24,6 @@ use OCP\Files\NotPermittedException;
 use OCP\IConfig;
 use OCP\IRequest;
 use OCP\IUserSession;
-use OCP\Http\Client\IClientService;
 use OCP\L10N\IFactory;
 
 class ApiController extends Controller {
@@ -39,7 +41,7 @@ class ApiController extends Controller {
 		private IUserSession $userSession,
 		private IConfig $config,
 		private IFactory $l10nFactory,
-		private IClientService $clientService,
+		private WebFetch $web,
 	) {
 		parent::__construct(Application::APP_ID, $request);
 	}
@@ -60,6 +62,8 @@ class ApiController extends Controller {
 			return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		} catch (NotPermittedException $e) {
 			return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_FORBIDDEN);
+		} catch (FetchRefused $e) {
+			return new JSONResponse(['error' => $e->getMessage()], $e->status());
 		} catch (\InvalidArgumentException $e) {
 			return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		} catch (\Throwable $e) {
@@ -80,6 +84,8 @@ class ApiController extends Controller {
 				// is taken: every save, or only the ones the writer asks for.
 				'versionKeep' => $this->versions->keep($uid),
 				'versionWhen' => $this->versions->when($uid),
+				// How a newly placed object stands: by the rules of HTML, or freely.
+				'placement' => $this->config->getUserValue($uid, Application::APP_ID, 'placement', 'standard'),
 				// What colour each category is drawn in, as the writer chose.
 				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
 				'languages' => $this->availableLanguages(),
@@ -125,6 +131,10 @@ class ApiController extends Controller {
 			if (is_string($when) && $when !== '') {
 				$this->versions->setWhen($uid, $when);
 			}
+			$placement = $this->request->getParam('placement');
+			if ($placement === 'standard' || $placement === 'free') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'placement', $placement);
+			}
 			$colours = $this->request->getParam('folderColours');
 			if (is_string($colours) && strlen($colours) < 4000) {
 				$this->config->setUserValue($uid, Application::APP_ID, 'folderColours', $colours);
@@ -166,31 +176,56 @@ class ApiController extends Controller {
 	 * Fetch a page from the web so its writing can be brought into a document.
 	 * The browser cannot do this itself -- another site's page is not its to read --
 	 * so the server asks for it and hands back the markup, which the editor then
-	 * strips down to the writing. Only http and https, and only the address the
-	 * user typed: Nextcloud's own client refuses local addresses when the instance
-	 * is configured to.
+	 * strips down to the writing. Only http and https, and never this server itself
+	 * or a link-local address unless an administrator allows it (WebFetch, S1).
+	 * The address handed back is the one the page was finally found at, after any
+	 * redirects, so that what the page links to is read from the right place.
 	 */
 	#[NoAdminRequired]
 	public function fetchPage(string $url): JSONResponse {
 		return $this->run(function () use ($url) {
-			$clean = trim($url);
-			if (!preg_match('#^https?://#i', $clean) || filter_var($clean, FILTER_VALIDATE_URL) === false) {
-				throw new \InvalidArgumentException('that is not a web address');
-			}
-			$response = $this->clientService->newClient()->get($clean, [
-				'timeout' => 20,
-				'headers' => ['Accept' => 'text/html,application/xhtml+xml'],
-				'nextcloud' => ['allow_local_address' => false],
-			]);
-			$type = $response->getHeader('Content-Type');
-			if ($type !== '' && stripos($type, 'html') === false) {
-				throw new \InvalidArgumentException('that address is not a web page');
-			}
-			$body = (string)$response->getBody();
-			if (strlen($body) > 4 * 1024 * 1024) {
-				$body = substr($body, 0, 4 * 1024 * 1024);
-			}
-			return ['url' => $clean, 'html' => $this->asUtf8($body, $type)];
+			$got = $this->web->get(
+				$url,
+				'text/html,application/xhtml+xml',
+				WebFetch::PAGE_BYTES,
+				true,
+				// No Content-Type at all is taken for a page, as it always was.
+				static fn (string $type): bool => $type === '' || stripos($type, 'html') !== false,
+				'that address is not a web page',
+				'that page is too large',
+			);
+			$read = $this->asUtf8($got['body'], $got['type']);
+			return ['url' => $got['url'], 'html' => $read['text'], 'encoding' => [
+				'read' => $read['encoding'],
+				'declared' => $read['declared'],
+				'mismatch' => $read['mismatch'],
+				'lossy' => $read['lossy'],
+			]];
+		});
+	}
+
+	/**
+	 * A picture on another site, for a document that shows it. Nextcloud's own
+	 * policy will not let the editor load a picture from anywhere but this
+	 * server, so every picture in a page brought in from the web -- or in a file
+	 * or a Markdown note that points at one -- was an empty box (BUGS #75). The
+	 * server reads it instead, the same way it reads the page, and the editor
+	 * keeps it in the document the way it keeps a picture from Files.
+	 */
+	#[NoAdminRequired]
+	public function fetchImage(string $url): JSONResponse {
+		return $this->run(function () use ($url) {
+			$mime = static fn (string $type): string => strtolower(trim(explode(';', $type)[0]));
+			$got = $this->web->get(
+				$url,
+				'image/*',
+				WebFetch::IMAGE_BYTES,
+				false,
+				static fn (string $type): bool => (bool)preg_match('#^image/(png|jpeg|gif|webp|svg\+xml|avif|bmp)$#', $mime($type)),
+				'that address is not a picture',
+				'that picture is too large',
+			);
+			return ['mime' => $mime($got['type']), 'data' => base64_encode($got['body'])];
 		});
 	}
 
@@ -202,36 +237,16 @@ class ApiController extends Controller {
 	 * as they are, the whole answer comes back empty and the writer sees a page
 	 * that brought in nothing at all, with nothing said about why.
 	 */
-	private function asUtf8(string $body, string $type): string {
-		$charset = '';
-		if (preg_match('/charset=["\']?([A-Za-z0-9_.:-]+)/i', $type, $m)) {
-			$charset = $m[1];
+	private function asUtf8(string $body, string $type): array {
+		// What the server says comes first, then what the page says about itself --
+		// but neither is believed over the bytes (see TextEncoding). A page served as
+		// ISO-8859-1, which is what a server says when nobody told it anything, while
+		// being written in UTF-8, used to come out as accented Latin letters.
+		$said = TextEncoding::declaredInContentType($type);
+		if ($said === '') {
+			$said = TextEncoding::declaredInHtml($body);
 		}
-		if ($charset === '' && preg_match('/<meta[^>]+charset=["\']?([A-Za-z0-9_.:-]+)/i', substr($body, 0, 4096), $m)) {
-			$charset = $m[1];
-		}
-		if ($charset === '') {
-			$charset = (string)mb_detect_encoding($body, ['UTF-8', 'SJIS-win', 'EUC-JP', 'ISO-2022-JP', 'ISO-8859-1'], true);
-		}
-		$charset = strtoupper(trim($charset));
-		if ($charset === 'SHIFT_JIS' || $charset === 'SHIFT-JIS' || $charset === 'SJIS' || $charset === 'X-SJIS' || $charset === 'MS_KANJI') {
-			// The web's Shift_JIS is really Windows-31J: the ① and ㈱ of a Japanese
-			// page are in the Microsoft extension, and plain SJIS loses them.
-			$charset = 'SJIS-WIN';
-		}
-		if ($charset !== '' && $charset !== 'UTF-8' && $charset !== 'UTF8') {
-			$turned = @mb_convert_encoding($body, 'UTF-8', $charset);
-			if (is_string($turned) && $turned !== '') {
-				$body = $turned;
-			}
-		}
-		if (!mb_check_encoding($body, 'UTF-8')) {
-			$body = (string)mb_convert_encoding($body, 'UTF-8', 'UTF-8');
-		}
-		// The page now IS UTF-8; a meta tag still saying otherwise would have the
-		// browser read it back the old way.
-		$body = preg_replace('/<meta[^>]+charset=["\']?[A-Za-z0-9_.:-]+["\']?[^>]*>/i', '<meta charset="utf-8">', $body, 1) ?? $body;
-		return $body;
+		return TextEncoding::htmlToUtf8($body, $said);
 	}
 
 	#[NoAdminRequired]
@@ -254,6 +269,11 @@ class ApiController extends Controller {
 	#[NoAdminRequired]
 	public function fileImage(int $id): JSONResponse {
 		return $this->run(fn () => $this->files->image($this->uid(), $id));
+	}
+
+	#[NoAdminRequired]
+	public function fileMarkdown(int $id): JSONResponse {
+		return $this->run(fn () => $this->files->markdown($this->uid(), $id));
 	}
 
 	// ---- the other apps on this server ----
@@ -335,7 +355,8 @@ class ApiController extends Controller {
 	public function documentState(int $id): JSONResponse {
 		return $this->run(function () use ($id) {
 			$state = $this->documents->state($this->uid(), $id);
-			$writing = (bool)($this->request->getParam('writing') ?? false);
+			// Somebody who may only read the document is never shown as writing in it.
+			$writing = (bool)($this->request->getParam('writing') ?? false) && !empty($state['writable']);
 			$state['people'] = $this->sessions->beat($id, $this->uid(), $writing);
 			return $state;
 		});
@@ -359,8 +380,11 @@ class ApiController extends Controller {
 	public function liveDocument(int $id): JSONResponse {
 		return $this->run(function () use ($id) {
 			$uid = $this->uid();
-			// Being allowed to read the file is what allows this: the same check
-			// as opening it, and it throws if the document is not theirs to see.
+			// Being allowed to read the file is what lets somebody take part: the
+			// same check as opening it, and it throws if the document is not theirs
+			// to see. Being allowed to write in the file is what lets what they send
+			// be passed on to the others (review S2): a reader is shown the writing
+			// as it happens, and nothing they send is taken.
 			$state = $this->documents->state($uid, $id);
 			$since = (int)($this->request->getParam('since') ?? 0);
 			$blocks = $this->request->getParam('blocks');
@@ -371,6 +395,7 @@ class ApiController extends Controller {
 				$since,
 				is_array($blocks) ? $blocks : [],
 				is_array($where) ? $where : [],
+				!empty($state['writable']),
 			);
 			$out['etag'] = $state['etag'];
 			$out['writable'] = $state['writable'];

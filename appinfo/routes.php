@@ -5,6 +5,7 @@ declare(strict_types=1);
 return [
 	'routes' => [
 		['name' => 'page#index', 'url' => '/', 'verb' => 'GET'],
+		['name' => 'preview#show', 'url' => '/preview/{id}', 'verb' => 'GET'],
 
 		// settings & translations
 		['name' => 'api#getSettings', 'url' => '/api/settings', 'verb' => 'GET'],
@@ -13,10 +14,12 @@ return [
 		['name' => 'api#getEmoji', 'url' => '/api/emoji/{lang}', 'verb' => 'GET'],
 		['name' => 'api#fonts', 'url' => '/api/fonts', 'verb' => 'GET'],
 		['name' => 'api#fetchPage', 'url' => '/api/fetch', 'verb' => 'GET'],
+		['name' => 'api#fetchImage', 'url' => '/api/fetch-image', 'verb' => 'GET'],
 
 		// pictures, from the user's own Files
 		['name' => 'api#browseFiles', 'url' => '/api/files/browse', 'verb' => 'GET'],
 		['name' => 'api#fileImage', 'url' => '/api/files/{id}/image', 'verb' => 'GET'],
+		['name' => 'api#fileMarkdown', 'url' => '/api/files/{id}/markdown', 'verb' => 'GET'],
 
 		// the other apps on this server
 		['name' => 'api#sources', 'url' => '/api/sources', 'verb' => 'GET'],

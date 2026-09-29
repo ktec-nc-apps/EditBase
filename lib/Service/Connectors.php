@@ -8,6 +8,7 @@ use OCP\App\IAppManager;
 use OCP\Calendar\IManager as ICalendarManager;
 use OCP\Contacts\IManager as IContactsManager;
 use OCP\Server;
+use OCP\Share\IManager as IShareManager;
 
 /**
  * Everything EditBase reads out of the other apps on this server.
@@ -24,6 +25,8 @@ class Connectors {
 	public function __construct(
 		private IAppManager $appManager,
 		private IContactsManager $contacts,
+		private SharingPolicy $policy,
+		private IShareManager $shares,
 	) {
 	}
 
@@ -160,9 +163,22 @@ class Connectors {
 	 */
 	public function contacts(string $userId, string $query = '', int $limit = 200): array {
 		$this->need('contacts', $userId);
-		$found = $this->contacts->search($query, ['FN', 'N', 'ORG', 'EMAIL', 'NICKNAME'], ['types' => true, 'limit' => $limit]);
+		// The user's own address books are theirs to read. The system address book is
+		// every account on the server, and the administrator decides how much of it a
+		// search may show, as core's contacts menu does (review S5): whether it may
+		// be listed at all, or only an exact match, and within which groups.
+		$found = $this->contacts->search($query, ['FN', 'N', 'ORG', 'EMAIL', 'NICKNAME'], [
+			'types' => true,
+			'limit' => $limit,
+			'enumeration' => $this->shares->allowEnumeration(),
+			'fullmatch' => $this->shares->allowEnumerationFullMatch(),
+		]);
 		$out = [];
 		foreach ($found as $card) {
+			if (!empty($card['isLocalSystemBook'])
+				&& !$this->policy->mayListAccount($userId, (string)($card['UID'] ?? ''), $this->emailsOf($card), $query)) {
+				continue;
+			}
 			// Entries from the user directory are real people too; they are marked so
 			// the picker can group them apart from the user's own address books.
 			$fields = $this->contactFields($card);
@@ -173,6 +189,23 @@ class Connectors {
 			}
 		}
 		usort($out, static fn (array $a, array $b): int => strnatcasecmp((string)$a['name'], (string)$b['name']));
+		return $out;
+	}
+
+	/**
+	 * Every e-mail address on a card, however the address book gave them.
+	 *
+	 * @param array<string, mixed> $card
+	 * @return list<string>
+	 */
+	private function emailsOf(array $card): array {
+		$out = [];
+		foreach ((array)($card['EMAIL'] ?? []) as $value) {
+			$value = is_array($value) ? ($value['value'] ?? '') : $value;
+			if (is_string($value) && $value !== '') {
+				$out[] = $value;
+			}
+		}
 		return $out;
 	}
 

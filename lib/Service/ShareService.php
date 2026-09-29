@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\EditBase\Service;
 
+use OCP\Collaboration\Collaborators\ISearch;
 use OCP\Constants;
 use OCP\Files\File;
 use OCP\Files\Folder;
@@ -29,6 +30,8 @@ class ShareService {
 		private IManager $shares,
 		private IRootFolder $rootFolder,
 		private IUserManager $users,
+		private ISearch $collaborators,
+		private SharingPolicy $policy,
 	) {
 	}
 
@@ -75,7 +78,13 @@ class ShareService {
 		if ($with === '' || $with === $userId) {
 			throw new \InvalidArgumentException('nobody to share with');
 		}
-		if (!$this->users->userExists($with)) {
+		// The administrator's sharing settings apply here as they do in Files (S5).
+		if (!$this->policy->mayShare($userId)) {
+			throw new NotPermittedException('sharing is not allowed for your account');
+		}
+		// Somebody outside the groups this user may share with gets the same answer
+		// as somebody who does not exist: which accounts exist is not for them to learn.
+		if (!$this->users->userExists($with) || !$this->policy->mayShareWith($userId, $with)) {
 			throw new \InvalidArgumentException('no such account: ' . $with);
 		}
 		$node = $this->node($userId, $id);
@@ -111,30 +120,31 @@ class ShareService {
 	}
 
 	/**
-	 * Accounts on this server whose name or id begins like this, for the picker.
-	 * Never the asker themselves, and never more than a screenful.
+	 * Accounts on this server that match this, for the picker. Never the asker
+	 * themselves, and never more than a screenful.
+	 *
+	 * The search is Nextcloud's own, the one its sharing dialog uses (review S5):
+	 * whether accounts may be listed at all, whether only the asker's groups or
+	 * phone book are, whether an exact id or address still finds somebody, and
+	 * "share only with group members" are all the administrator's to say, and are
+	 * said in one place.
 	 *
 	 * @return array<int, array<string, string>>
 	 */
 	public function findUsers(string $userId, string $term): array {
-		$term = trim($term);
+		if (!$this->policy->mayShare($userId)) {
+			return [];
+		}
+		[$found] = $this->collaborators->search(trim($term), [IShare::TYPE_USER], false, 25, 0);
 		$out = [];
 		$seen = [];
-		foreach ($this->users->search($term, 25) as $user) {
-			$uid = $user->getUID();
-			if ($uid === $userId || isset($seen[$uid]) || !$user->isEnabled()) {
+		foreach (array_merge($found['exact']['users'] ?? [], $found['users'] ?? []) as $row) {
+			$uid = (string)($row['value']['shareWith'] ?? '');
+			if ($uid === '' || $uid === $userId || isset($seen[$uid])) {
 				continue;
 			}
 			$seen[$uid] = true;
-			$out[] = ['id' => $uid, 'name' => $user->getDisplayName()];
-		}
-		foreach ($this->users->searchDisplayName($term, 25) as $user) {
-			$uid = $user->getUID();
-			if ($uid === $userId || isset($seen[$uid]) || !$user->isEnabled()) {
-				continue;
-			}
-			$seen[$uid] = true;
-			$out[] = ['id' => $uid, 'name' => $user->getDisplayName()];
+			$out[] = ['id' => $uid, 'name' => (string)($row['label'] ?? $uid)];
 		}
 		usort($out, static fn ($a, $b) => strcasecmp($a['name'], $b['name']));
 		return array_slice($out, 0, 25);
