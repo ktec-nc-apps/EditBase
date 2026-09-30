@@ -3,6 +3,46 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] — 2026-10-01
+
+### Fixed
+- Copying part of a paragraph with Ctrl+C and pasting it into a paragraph with Ctrl+V
+  made a new paragraph. The words now go in where the cursor is. Whole paragraphs,
+  tables and other blocks pasted into the middle of a paragraph split it and stand
+  between the two halves, instead of ending up inside it.
+- A paragraph set to "words to its right" (or left) that ran over several pages
+  started its next part in the bottom margin of the page and ran across the page
+  break. Each part now starts at the top of the next page's text area.
+- The page thumbnails could keep showing the layout from the middle of a
+  re-pagination (a heading halfway down the wrong page, an empty last page) after
+  the wrap of an object was changed. They are redrawn whenever the pages are laid
+  out again.
+- "Fit to the column width" on a paragraph inside a block frame made it as wide as
+  the page column, so it ran out of the right side of the frame. Inside a frame, a
+  box, a note or a table cell it now fills the inside of that box.
+- Ctrl+Home and Ctrl+End go to the first and last words of the body text. They could
+  put the cursor inside a shape placed elsewhere on the page.
+
+### Changed
+- Headings are spaced as in LibreOffice Writer: space above and below of 12/6 pt for
+  Heading 1, 10/6, 7/6, 6/6, 6/3 and 3/3 pt for Headings 2 to 6, and single line
+  height. The old spacing left about a line of empty space under every heading.
+  Spacing set in the style dialog is kept.
+- Block frames, boxes and notes have no inner margin unless one is set: the text
+  touches the frame, as in a word processor. The inner margin is set in the
+  properties.
+- In the properties, the outer margins (top, bottom, left, right) and the inner
+  margin are on the Placement tab together, named so that inside and outside can be
+  told apart.
+- A frame is taken by clicking its border or just outside it. Inside the frame, a
+  click goes to the words, even right next to the border.
+- Japanese: the block frame is called まとめ枠 again.
+
+### Removed
+- The dotted box drawn round the phrase at the cursor, and turning chosen words into
+  a frame of their own. Documents that have such word frames get their words back as
+  ordinary text when they are opened.
+
 ## [0.1.3] — 2026-09-30
 
 ### Added

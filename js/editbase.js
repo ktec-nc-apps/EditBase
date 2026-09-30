@@ -656,9 +656,17 @@
    makes the file render the same wherever it is opened. */
 .eb-doc h1, .eb-doc h2, .eb-doc h3, .eb-doc h4, .eb-doc h5, .eb-doc h6 {
   font-family: var(--eb-font-head, "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif);
-  line-height: 1.4; margin: 0; margin-block: 1.6em 0.7em; break-after: avoid-page; text-align: left;
+  line-height: normal; margin: 0; margin-block: 12pt 6pt; break-after: avoid-page; text-align: left;
   color: #111111; font-weight: 700;
 }
+/* 見出しの上下の間隔と行の高さは LibreOffice Writer の既定と同じ（UNO で実測：見出し1 上12pt・下6pt、
+   2 10/6、3 7/6、4 6/6、5 6/3、6 3/3、行間はどれも 100%＝normal）。以前の 1.6em 0.7em・行の高さ 1.4 では
+   見出しと次の段落の間が約1行空いた（オーナー 2026-09-30 漢字一覧.html、BUGS #314）。 */
+.eb-doc h2 { margin-block: 10pt 6pt; }
+.eb-doc h3 { margin-block: 7pt 6pt; }
+.eb-doc h4 { margin-block: 6pt 6pt; }
+.eb-doc h5 { margin-block: 6pt 3pt; }
+.eb-doc h6 { margin-block: 3pt 3pt; }
 .eb-doc h1 { font-size: 1.9em; letter-spacing: .02em; }
 .eb-doc h2 { font-size: 1.5em; border-block-end: 1.5pt solid #222; padding-block-end: .2em; }
 .eb-doc h3 { font-size: 1.25em; }
@@ -734,7 +742,8 @@
 /* callout boxes — borders rather than fills, because browsers do not print
    background colours unless the reader turns them on */
 .eb-doc .eb-box {
-  border: 1pt solid #444; border-radius: 8pt; padding: 0; padding-block: .8em; padding-inline: 1em;
+  /* 内側の余白は 0。使う人がプロパティの「内側の余白」で付ける（オーナー 2026-10-01 BUGS #322）。 */
+  border: 1pt solid #444; border-radius: 8pt; padding: 0;
   margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 .eb-doc .eb-box.sq { border-radius: 0; }
@@ -746,7 +755,7 @@
 .eb-doc .eb-box > *:last-child { margin-block-end: 0; }
 .eb-doc .eb-box .eb-box-title { font-weight: 700; margin-block-end: .4em; }
 .eb-doc .eb-note {
-  border-inline-start: 4pt solid #2563eb; padding: 0; padding-block: .5em; padding-inline-start: .9em;
+  border-inline-start: 4pt solid #2563eb; padding: 0;
   margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 
@@ -823,7 +832,9 @@
   border: 3.5pt solid transparent; border-left-color: #333333; border-right: none;
 }
 .eb-doc .eb-frame {
-  border: .75pt solid #666; padding: 0; padding-block: .6em; padding-inline: .8em;
+  /* 内側の余白は 0。書き手が自分で付けない限り、枠と中の字の間は空けない（ワープロと同じ・
+     オーナー 2026-09-30 BUGS #318）。以前の 0.6em / 0.8em は枠の中の段落の左右に空きを作った。 */
+  border: .75pt solid #666; padding: 0;
   margin: 0; margin-block: 1.1em; break-inside: avoid;
 }
 /* A frame carried on from the page before begins the next page. In the editor
@@ -6910,6 +6921,30 @@ ${insideObjects('.eb-paper.boxed')} {
    * from a few pixels away. Measuring is better than an invisible band in the
    * page: a band would swallow the clicks meant for the words around it.
    */
+  /**
+   * 字を書く枠（まとめ枠・囲み記事・注・文字枠）の枠線の上か、そのすぐ外側（5px）を押したか。
+   * 内側の余白が 0 だと中の字が枠線に接するので、枠の内側には枠だけを掴める所が無い。枠は
+   * 枠線とその外側で掴む（BUGS #318）。重なっていれば内側の（小さい）方。
+   */
+  function frameEdgeNear(x, y) {
+    const c = canvas();
+    if (!c) { return null; }
+    let best = null;
+    Array.from(c.querySelectorAll('div.eb-frame, aside.eb-box, div.eb-note, .eb-textbox')).forEach((el) => {
+      if (!writtenFrame(el) || !el.getBoundingClientRect) { return; }
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) { return; }
+      const out = 5;
+      const inX = x >= r.left - out && x <= r.right + out;
+      const inY = y >= r.top - out && y <= r.bottom + out;
+      if (!inX || !inY) { return; }
+      const onLine = (x <= r.left + 1 || x >= r.right - 1 || y <= r.top + 1 || y >= r.bottom - 1);
+      if (!onLine) { return; }
+      const area = r.width * r.height;
+      if (!best || area < best[0]) { best = [area, el]; }
+    });
+    return best ? best[1] : null;
+  }
   function thinObjectNear(x, y) {
     const c = canvas();
     if (!c) { return null; }
@@ -7183,7 +7218,9 @@ ${insideObjects('.eb-paper.boxed')} {
     // どこでも文字にカーソルが入る。枠そのものを掴むのは縁か取っ手を押したときだけ。
     // 以前は字の無い所（余白・最後の行の下・行末の先）を押すと枠が選ばれ、そのまま
     // バックスペースで枠ごと中身が消えた（オーナー 2026-09-22、BUGS #45）。
-    if (writtenFrame(el)) { return onEdge(el, x, y, 6); }
+    // 縁の帯（内側 6px）でも、字の上なら字。内側の余白が 0 だと字が縁に接するので、縁の近くの
+    // 字を押しただけで枠が選ばれてしまう（BUGS #318）。
+    if (writtenFrame(el)) { return onEdge(el, x, y, 6) && !onText(el, x, y); }
     // A box or a frame is written in: the click has to miss the words to take
     // hold of the thing itself.
     return !onText(el, x, y);
@@ -9736,6 +9773,12 @@ ${insideObjects('.eb-paper.boxed')} {
         const moverEl = keeper ? keeper.el : child;
         const moverTop = keeper ? keeper.top : top;
         const spacer = makeSpacer(wanted - moverTop, tate);
+        // 送る物が左右に寄せた物（float・「文字列を右側に」など）なら、詰め物も同じ側の
+        // 寄せた物の下から始める。寄せた物の後ろのブロックは寄せた物の横（上端）から始まる
+        // ので、詰め物を伸ばしても送る物が前の寄せた物の下から動かず、3回の直しでも届かずに
+        // ページの下の余白に残った（オーナー 2026-09-30 漢字一覧.html、BUGS #313）。
+        const moverFloat = window.getComputedStyle ? window.getComputedStyle(moverEl).float : 'none';
+        if (moverFloat && moverFloat !== 'none') { spacer.style.clear = moverFloat; }
         c.insertBefore(spacer, moverEl);
         put.push({ spacer: spacer, el: moverEl, wanted: wanted });
         shift += wanted - moverTop;
@@ -12746,9 +12789,24 @@ ${insideObjects('.eb-paper.boxed')} {
       seen.add(id);
     });
   }
+  /**
+   * 行の中の枠（字を選んで作った塊・span.eb-frame）は廃止した。入っている文書は、開いたときに
+   * 普通の字に戻す。字は残し、塊に付けた幅や枠線などは外れる（オーナー 2026-10-01「お前が勝手に
+   * 作ったものだ不要だ」BUGS #319）。
+   */
+  function unwrapWordFrames(root) {
+    Array.from(root.querySelectorAll('span.eb-frame')).forEach((span) => {
+      const anchor = span.parentNode && span.parentNode.classList && span.parentNode.classList.contains('eb-anchor') ? span.parentNode : null;
+      const spot = anchor || span;
+      while (span.firstChild) { spot.parentNode.insertBefore(span.firstChild, spot); }
+      span.remove();
+      if (anchor && !anchor.firstChild) { anchor.remove(); }
+    });
+  }
   function normaliseCanvas(pageBreakLabel, captionLabel) {
     const c = canvas();
     if (!c) { return; }
+    unwrapWordFrames(c);
     repairNesting();
     nameBlocks(c);
     keepRegionsInPlace(c);
@@ -13691,6 +13749,12 @@ ${insideObjects('.eb-paper.boxed')} {
     const range = getRange();
     if (!range) { return; }
     range.deleteContents();
+    // 段落の中へ段落（ブロック）を差し込まない。貼り付けの中身は段落の外の字も段落に包まれて
+    // 来るので、そのまま入れると段落の中に段落ができ、画面では新しい段落になっていた（オーナー
+    // 2026-10-01「段落内で Ctrl+C でコピーし、段落内に Ctrl+V すると新しい段落が作られる」
+    // BUGS #321）。Word・LibreOffice と同じく、段落1つなら包みを外して字だけを入れ、2つ以上
+    // （または表などの物を含む）なら、カーソルの所で段落を分けてその間に置く。
+    if (blocksIntoParagraph(range, frag)) { return; }
     const last = frag.lastChild;
     range.insertNode(frag);
     if (last) {
@@ -13699,6 +13763,65 @@ ${insideObjects('.eb-paper.boxed')} {
       after.collapse(true);
       selectRange(after);
     }
+  }
+
+  /** insertFragmentAt の段落の中への差し込み。扱ったら true。 */
+  function blocksIntoParagraph(range, frag) {
+    const c = canvas();
+    const at = range.startContainer.nodeType === 3 ? range.startContainer.parentNode : range.startContainer;
+    const host = at && at.closest ? at.closest('p, h1, h2, h3, h4, h5, h6, li, dt, dd, pre') : null;
+    if (!c || !host || !c.contains(host) || (host.matches && host.matches(OBJECT_SEL))) { return false; }
+    const kids = Array.from(frag.childNodes).filter((n) => !(n.nodeType === 3 && !n.data.trim()));
+    const isBlockKid = (n) => n.nodeType === 1 && isBlock(n);
+    if (!kids.some(isBlockKid)) { return false; }
+    // 書式の無い段落＝段落の途中をコピーした字を、取り込みで段落に包んだもの。これだけは包みを外して
+    // 前後の字に続ける。書式の付いた段落（段落ごとコピーしたもの）は段落のまま置く。
+    const plain = (n) => n && n.nodeType === 1 && n.nodeName === 'P' && !n.attributes.length;
+    const empty = (el) => !String(el.textContent || '').replace(/[\s\u200b]/g, '')
+      && !el.querySelector('img, table, svg, math, video, iframe, hr, .eb-anchor, [contenteditable="false"]');
+    const place = (node, offset) => { const r = document.createRange(); r.setStart(node, offset); r.collapse(true); selectRange(r); };
+    // 書式の無い段落1つだけ：包みを外して、字をカーソルの所へ。
+    if (kids.length === 1 && plain(kids[0])) {
+      const inner = document.createDocumentFragment();
+      while (kids[0].firstChild) { inner.appendChild(kids[0].firstChild); }
+      const last = inner.lastChild;
+      range.insertNode(inner);
+      if (last) { const r = document.createRange(); r.setStartAfter(last); r.collapse(true); selectRange(r); }
+      return true;
+    }
+    // 2つ以上：カーソルの所で段落を分ける。後半は同じ種類・同じ書式の段落（名前と切れの印は付けない）。
+    const tailRange = document.createRange();
+    tailRange.setStart(range.startContainer, range.startOffset);
+    tailRange.setEnd(host, host.childNodes.length);
+    const tail = host.cloneNode(false);
+    ['id', 'data-eb-id', 'data-eb-flowcut', 'data-split'].forEach((k) => tail.removeAttribute(k));
+    tail.appendChild(tailRange.extractContents());
+    const list = kids.slice();
+    let headMerged = false;
+    let tailMerged = false;
+    if (plain(list[0])) { const first = list.shift(); while (first.firstChild) { host.appendChild(first.firstChild); } headMerged = true; }
+    let caretNode = null;
+    let caretAt = 0;
+    if (list.length && plain(list[list.length - 1])) {
+      const lastBlock = list.pop();
+      const n = lastBlock.childNodes.length;
+      while (lastBlock.lastChild) { tail.insertBefore(lastBlock.lastChild, tail.firstChild); }
+      caretNode = tail;
+      caretAt = n;
+      tailMerged = true;
+    }
+    let ref = host;
+    list.forEach((n) => { ref.parentNode.insertBefore(n, ref.nextSibling); ref = n; });
+    // 分けた後半に何も残らなければ（行の終わりに貼った）、空の段落は作らない。
+    const keepTail = tailMerged || !empty(tail);
+    if (keepTail) { ref.parentNode.insertBefore(tail, ref.nextSibling); }
+    // 前半が空（行の頭に貼った・空の段落に貼った）なら、前半の段落も残さない。
+    const lastPlaced = list.length ? list[list.length - 1] : null;
+    if (!headMerged && empty(host) && (list.length || keepTail)) { host.remove(); }
+    if (caretNode) { place(caretNode, caretAt); } else if (lastPlaced && lastPlaced.isConnected) {
+      const r = document.createRange(); r.selectNodeContents(lastPlaced); r.collapse(false); selectRange(r);
+    } else if (keepTail) { place(tail, 0); }
+    return true;
   }
 
   // ---- a page from the web -------------------------------------------------------
@@ -14458,6 +14581,13 @@ ${insideObjects('.eb-paper.boxed')} {
     tidyPasted(holder);
     const frag = document.createDocumentFragment();
     while (holder.firstChild) { frag.appendChild(holder.firstChild); }
+    // 字だけ（段落を含まない）なら、枠にせずそのまま字として入れる。行の中の枠は廃止した（BUGS #319）。
+    // 段落の途中をコピーした字は、取り込みで書式の無い段落1つに包まれて来る。これも字だけとして扱う
+    // （「貼り付けた内容をオブジェクトにする」がオンでも、段落の途中に貼れば字が入るだけ・BUGS #326）。
+    const tops = Array.from(frag.childNodes).filter((n) => !(n.nodeType === 3 && !n.data.trim()));
+    const wordsOnly = !tops.some((n) => n.nodeType === 1 && isBlock(n))
+      || (tops.length === 1 && tops[0].nodeName === 'P' && !tops[0].attributes.length);
+    if (asObject && wordsOnly) { asObject = false; }
     if (tracked && !asObject) { markFragmentAdded(frag); }
     const made = asObject ? placePasted(objectFromFragment(frag)) : (insertFragmentAt(frag), null);
     // 番号と組にした注の本文を、文書の注の一覧へ。並べ直しは renumberNotes。
@@ -14476,11 +14606,13 @@ ${insideObjects('.eb-paper.boxed')} {
   }
   function pasteTextAt(text, asObject, tracked) {
     const frag = document.createDocumentFragment();
-    String(text == null ? '' : text).split(/\r?\n/).forEach((line, i) => {
+    const lines = String(text == null ? '' : text).split(/\r?\n/);
+    lines.forEach((line, i) => {
       if (i) { frag.appendChild(document.createElement('br')); }
       frag.appendChild(document.createTextNode(line));
     });
-    if (asObject) { return placePasted(objectFromFragment(frag)); }
+    // 1行だけの字は、枠にせずそのまま字として入れる（行の中の枠は廃止・BUGS #319）。
+    if (asObject && lines.length > 1) { return placePasted(objectFromFragment(frag)); }
     if (tracked) { markFragmentAdded(frag); }
     insertFragmentAt(frag);
     return null;
@@ -17453,6 +17585,8 @@ ${insideObjects('.eb-paper.boxed')} {
             <label>{{ t('Space below (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mb" class="w-s">
             <label>{{ t('Space left (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.ml" class="w-s">
             <label>{{ t('Space right (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.mr" class="w-s">
+            <!-- 内側の余白は外側の余白と並べる。名前で内と外が分かるように（BUGS #323）。 -->
+            <label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" placeholder="0" class="w-s">
           </div>
           <p class="eb-tip" v-if="freePlacement">{{ t('A frame placed freely is measured from the line of text it was put on, so it keeps to that page when the document is printed. The text runs underneath it rather than round it.') }}</p>
         </template>
@@ -17472,7 +17606,6 @@ ${insideObjects('.eb-paper.boxed')} {
             <label>{{ t('Thickness (pt)') }}</label><input type="number" min="0.25" step="0.25" v-model="fprops.borderWidth" class="w-s">
             <label>{{ t('Line colour') }}</label><input type="color" v-model="fprops.borderColour" class="w-c">
             <label>{{ t('Corners (pt)') }}</label><input type="number" min="0" step="1" v-model="fprops.radius" class="w-s">
-            <label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" step="1" v-model="fprops.pad" :placeholder="t('auto')" class="w-s">
             <label></label><label class="opt"><input type="checkbox" v-model="fprops.shadow"> {{ t('Drop shadow') }}</label>
           </div>
         </template>
@@ -20352,6 +20485,12 @@ ${insideObjects('.eb-paper.boxed')} {
             if (this.pageCount !== was) {
               clearTimeout(this._barTimer);
               this._barTimer = setTimeout(() => { this.refreshPreview(); this.refreshLayers(); }, 250);
+            } else if (this.previewOpen) {
+              // 枚数が同じでも、ページの中の並びは変わっている。縮小表示はページ割りの
+              // やり直しの途中（詰め物を外した姿）を写したまま残り、見出しが前のページの
+              // 途中に、最後のページが空に描かれていた（オーナー 2026-09-30 漢字一覧.html、
+              // BUGS #315）。終わった姿で、見えている分だけ描き直す。
+              this.paintSoon();
             }
             const waiting = this._pageThen || [];
             this._pageThen = [];
@@ -22349,6 +22488,10 @@ ${insideObjects('.eb-paper.boxed')} {
        */
       syncText() {
         textRange = null;
+        // カーソルの所の文節や選んだ字を囲んで塊（行の中の枠）にする機能は廃止した（BUGS #319）。
+        // 囲みは出さず、字を塊にする入口も無い。
+        this.tsel.on = false;
+        if (this.tsel) { return; }
         const c = canvas();
         const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
         if (!c || !wrap || !this.doc.id) { this.tsel.on = false; return; }
@@ -22437,6 +22580,9 @@ ${insideObjects('.eb-paper.boxed')} {
         const hit = placedAt(e.clientX, e.clientY);
         let at = (hit && (!up || up === hit || up.contains(hit) || stackRank(hit) > stackRank(up)))
           ? hit : (up || thinObjectNear(e.clientX, e.clientY));
+        // 枠線の上かすぐ外側なら、その枠を掴む（BUGS #318）。
+        const edgeFrame = frameEdgeNear(e.clientX, e.clientY);
+        if (edgeFrame) { at = edgeFrame; }
         // Shift takes hold of another one without letting go of the first, which
         // is how several things are lined up with each other.
         if (e.shiftKey && at && frameEl && at !== frameEl) {
@@ -22454,7 +22600,7 @@ ${insideObjects('.eb-paper.boxed')} {
         framePinned = !!at;
         if (at) { this.frame.bar = true; }
         // One click picks the object up; a second one goes inside it to write.
-        frameTaken = takesClick(at, e.target, e.clientX, e.clientY) && e.detail <= 1;
+        frameTaken = (!!edgeFrame || takesClick(at, e.target, e.clientX, e.clientY)) && e.detail <= 1;
         // まとめ枠などの中の段落の上を押したときは、枠を選ばない。カーソルが入った段落が
         // 「今の物」になる（syncFrame がカーソルから選ぶ・BUGS #304）。段落の外の枠の地や
         // 縁を押したときは、今までどおり枠。
@@ -23264,7 +23410,41 @@ ${insideObjects('.eb-paper.boxed')} {
           const w = round1(sheet(paper).w - paper.margin.left - paper.margin.right);
           history.push(true);
           framePinned = true;
+          const z = this.frameZoom() || 1;
           frameAll().forEach((o) => {
+            // まとめ枠・囲み記事・注・表のセルの中の物は、その箱の内側の幅に（段の幅は用紙の
+            // もの）。段落を押すと段落が選ばれるようになって、枠の中の段落が用紙の段の幅に
+            // され、枠の右へはみ出した（オーナー 2026-09-30 test.html、BUGS #316）。
+            const c = canvas();
+            const up = objectFree(o) ? o.parentNode.parentNode : o.parentNode;
+            const host = up && up.closest ? up.closest('div.eb-frame, aside.eb-box, div.eb-note, td, th') : null;
+            if (host && c && c.contains(host) && !objectFree(o) && o.matches && o.matches(TEXT_SEL)) {
+              // 枠の中の段落は幅を書かない。幅の指定を外せば枠の内側いっぱいに広がり、枠の大きさや
+              // 内側の余白が変わっても合ったまま（mm で書くと、あとで合わなくなる・BUGS #318）。
+              ['width', 'max-width'].forEach((k) => o.style.removeProperty(k));
+              if (o.style.marginLeft === 'auto') { o.style.removeProperty('margin-left'); }
+              if (o.style.marginRight === 'auto') { o.style.removeProperty('margin-right'); }
+              if (!o.getAttribute('style')) { o.removeAttribute('style'); }
+              return;
+            }
+            if (host && c && c.contains(host)) {
+              const r = host.getBoundingClientRect();
+              const hs = window.getComputedStyle(host);
+              // 段落の左右の余白（字下げ）は、長さで書かれた分だけ差し引く。「自動（auto）」は
+              // 幅が箱より広いとブラウザがマイナスの余白を返し、はみ出した分を足し戻してしまう。
+              const side = (v) => (/^-?[\d.]+(px|pt|mm|cm|in|em|rem)$/.test(String(v || '').trim()) ? v : '');
+              const px = (v) => { if (!v) { return 0; } const t = document.createElement('div'); t.style.width = v; t.style.position = 'absolute'; host.appendChild(t); const w = t.getBoundingClientRect().width / z; t.remove(); return w; };
+              const margins = objectFree(o) ? 0 : px(side(o.style.marginLeft)) + px(side(o.style.marginRight));
+              const inner = r.width / z - parseFloat(hs.borderLeftWidth) - parseFloat(hs.borderRightWidth)
+                - parseFloat(hs.paddingLeft) - parseFloat(hs.paddingRight) - margins;
+              o.style.width = round1(Math.max(5, inner * MM)) + 'mm';
+              o.style.maxWidth = 'none';
+              if (objectFree(o)) {
+                const left = r.left + (parseFloat(hs.borderLeftWidth) + parseFloat(hs.paddingLeft)) * z;
+                this.nudgeFree(o, left - o.getBoundingClientRect().left);
+              }
+              return;
+            }
             o.style.width = w + 'mm';
             o.style.maxWidth = 'none';
             if (objectFree(o)) {
@@ -25677,12 +25857,14 @@ ${insideObjects('.eb-paper.boxed')} {
         // The right button acts on what it is over, so it also picks the frame up.
         // Writing counts: a paragraph is an object like any other, and the menu is
         // where its wrap, its arrangement and its size are set.
-        let obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
+        const edgeFrame = frameEdgeNear(e.clientX, e.clientY);
+        let obj = edgeFrame || objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
           || textBlockAt(e.target) || textBlockAt(at);
         // まとめ枠・囲み記事・注の中の段落の上は、左クリックと同じく段落が相手。枠の
         // メニューは段落の外の枠の地や縁を右クリックしたとき（オーナー 2026-09-30「左クリック
         // では段落を選択できるが右クリックするとまとめ枠を選ぶ」BUGS #306）。文字枠は枠そのものが段落。
-        if (obj && writtenFrame(obj) && !obj.classList.contains('eb-textbox') && !onEdge(obj, e.clientX, e.clientY, 6)) {
+        if (obj && !edgeFrame && writtenFrame(obj) && !obj.classList.contains('eb-textbox')
+          && !(onEdge(obj, e.clientX, e.clientY, 6) && !onText(obj, e.clientX, e.clientY))) {
           const blk = textBlockAt(e.target);
           if (blk && blk !== obj && obj.contains(blk)) { obj = blk; }
         }
@@ -25696,7 +25878,7 @@ ${insideObjects('.eb-paper.boxed')} {
         // 文字を書く枠の中の字の上で右クリックしたときも、枠のメニューを出すために枠を
         // 掴む。ただしそれは右クリックのためだけで、そのあと BS / Delete を押しても枠は
         // 消さない（字が消える。BUGS #45）。
-        const forMenu = !!(obj && writtenFrame(obj) && !onEdge(obj, e.clientX, e.clientY, 6));
+        const forMenu = !!(obj && writtenFrame(obj) && !(onEdge(obj, e.clientX, e.clientY, 6) && !onText(obj, e.clientX, e.clientY)));
         ctxTookFrame = forMenu ? obj : null;
         if (obj && (forMenu || takesClick(obj, e.target, e.clientX, e.clientY))) {
           frameEl = obj;
@@ -27618,6 +27800,23 @@ ${insideObjects('.eb-paper.boxed')} {
           this.run(() => autoLink());
         }
         // Tab indents the paragraph instead of leaving the document.
+        // Ctrl+Home / Ctrl+End は本文の最初／最後の字へ。紙の上に置いた物の錨は文書の先頭にもあり、
+        // ブラウザに任せると図形の中の段落へ入った（BUGS #305・#324）。Shift 付き（範囲を広げる）は任せる。
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'Home' || e.key === 'End')) {
+          const c = canvas();
+          const body = c ? Array.from(c.children).filter((k) => k.matches && k.matches(TEXT_SEL) && !k.matches(OBJECT_SEL)) : [];
+          const target = e.key === 'Home' ? body[0] : body[body.length - 1];
+          if (target) {
+            e.preventDefault();
+            const r = document.createRange();
+            r.selectNodeContents(target);
+            r.collapse(e.key === 'Home');
+            selectRange(r);
+            target.scrollIntoView({ block: 'nearest' });
+            this.refreshState();
+            return undefined;
+          }
+        }
         if (e.key === 'Tab') {
           e.preventDefault();
           if (cellAt()) {
