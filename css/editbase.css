@@ -404,7 +404,7 @@
   .eb-paper { box-shadow: none !important; background-image: none !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
   /* the sheets themselves, the folds between them, and every mark of the editor's */
   .eb-sheets, .eb-pagespacer, .eb-fsel, .eb-mate, .eb-snap, .eb-placeband, .eb-fdrop,
-  .eb-ruler, .eb-preview, .eb-layers, .eb-docset, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
+  .eb-ruler, .eb-rulerbar, .eb-wsmarks, .eb-preview, .eb-layers, .eb-docset, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
   .eb-ctxmenu, .eb-modal-back, .eb-fbar { display: none !important; }
   /* Nothing may hold the writing to one screenful: the page break has to be free
      to fall where it falls, or only the first page comes out. */
@@ -781,32 +781,25 @@
    It sits just above the paper and is drawn in the paper's own scale, so a mark
    on it is at the millimetre it says. The two outer marks are the page margins;
    the three inner ones are the indents of the paragraph the cursor is in. */
-.eb-paperwrap.ruled { margin-top: 30px; }
-/* ルーラーを出しているときは机の上の余白を無くし、ルーラーを道具の列の真下に付ける
-   （オーナー 2026-09-22「上のツールバーの下にくっつけろ」）。 */
-.eb-desk.ruled { padding-top: 0; }
-/* 道具の列のすぐ下に留める（LibreOffice と同じ）。以前は紙と一緒に動き、スクロール
-   すると画面の外へ消えた（オーナー 2026-09-22、BUGS #52）。流れの中では高さを持た
-   せない（上下の余白で打ち消す）ので、紙の位置は変わらない。 */
+.eb-rulerbar {
+  position: relative; flex: 0 0 auto; height: 22px; overflow: hidden;
+  background: var(--surface); border-block: 1px solid var(--border);
+}
+/* 目盛りの部分は紙の幅だけ（紙の位置に合わせて置く）。余白の側は濃い灰色、書ける範囲
+   （.band）は白（LibreOffice と同じ）。 */
 .eb-ruler {
-  position: sticky; top: 0; z-index: 6; height: 22px; box-sizing: border-box;
-  margin-top: -30px; margin-bottom: 8px; border-radius: 0;
-  /* LibreOffice と同じ：余白の部分は濃い灰色、書ける範囲（.band）は白。帯そのものは
-     机の横幅いっぱいに引く（影を左右へ伸ばし、上下は切る）。 */
-  background: transparent;
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--text) 16%, var(--surface));
   font-size: 9px; color: var(--text); user-select: none;
 }
-.eb-ruler::before { content: ""; position: absolute; top: -1px; bottom: -1px; left: -100vw; right: -100vw; z-index: -1;
-  background: var(--surface); border-block: 1px solid var(--border); pointer-events: none; }
-/* 紙の幅の部分：余白の側は濃い灰色（書ける範囲は .band が白で上に重なる）。 */
-.eb-ruler::after { content: ""; position: absolute; top: 3px; bottom: 3px; left: 0; right: 0; z-index: -1;
-  background: color-mix(in srgb, var(--text) 16%, var(--surface)); pointer-events: none; }
-.eb-ruler .band { position: absolute; top: 3px; bottom: 3px; background: var(--surface); }
+.eb-ruler .band { position: absolute; top: 0; bottom: 0; background: var(--surface); }
 .eb-ruler .tick { position: absolute; bottom: 5px; width: 0; height: 3px; border-left: 1px solid var(--muted); }
 .eb-ruler .tick.half { height: 6px; }
 .eb-ruler .tick.cm { height: 0; border-left: 0; }
 .eb-ruler .tick .num { position: absolute; bottom: -1px; transform: translateX(-50%); line-height: 1; }
 .eb-ruler .hm, .eb-ruler .ind { position: absolute; cursor: ew-resize; touch-action: none; }
+/* 字下げのつまみは小さいので、左右の矢印の形にするとつまみが隠れて掴みにくい。矢印のまま（BUGS #303）。 */
+.eb-ruler .ind { cursor: default; }
 .eb-ruler .hm {
   top: 0; bottom: 0; width: 9px; margin-left: -4px;
   border-left: 1px solid var(--primary); border-right: 1px solid var(--primary);
@@ -1683,3 +1676,11 @@
 #editbase-root .eb-hdtile .pv { font: 700 15px/1.5 var(--eb-font-head, sans-serif); display: block; }
 #editbase-root .eb-hdtile .pv > span { display: block; }
 #editbase-root .eb-inks input[type=color] { width: 60px; flex: 0 0 60px; }
+
+/* 空白の表示（半角＝·、全角＝□、タブ＝→）。紙の上に重ねた目印で、文書には書かない（BUGS #310）。 */
+.eb-wsmarks { position: absolute; inset: 0; pointer-events: none; z-index: 40; }
+.eb-wsmarks:empty { display: none; }
+.eb-wsmarks i { position: absolute; display: flex; align-items: center; justify-content: center; font-style: normal; line-height: 1; color: #2f6fd6; opacity: .75; }
+.eb-wsmarks i.h::after { content: '·'; font-size: 14px; font-weight: 700; }
+.eb-wsmarks i.t::after { content: '→'; font-size: 11px; }
+.eb-wsmarks i.z::after { content: ''; width: 72%; height: 72%; border: 1px solid currentColor; box-sizing: border-box; }

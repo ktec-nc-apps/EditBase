@@ -86,6 +86,14 @@ class ApiController extends Controller {
 				'versionWhen' => $this->versions->when($uid),
 				// How a newly placed object stands: by the rules of HTML, or freely.
 				'placement' => $this->config->getUserValue($uid, Application::APP_ID, 'placement', 'standard'),
+				// Whether Delete / Backspace may delete a frame that is selected (off unless chosen).
+				'keyDelete' => $this->config->getUserValue($uid, Application::APP_ID, 'keyDelete', '0'),
+				// Whether spaces (half-width, full-width, tabs) are marked on the page (off unless chosen).
+				'showSpaces' => $this->config->getUserValue($uid, Application::APP_ID, 'showSpaces', '0'),
+				// The unit indents are shown and written in: pt (the default), mm, or characters (em).
+				'indentUnit' => $this->config->getUserValue($uid, Application::APP_ID, 'indentUnit', 'pt'),
+				// The unit the ruler is marked in and moves by: pt, px, mm, cm (the default) or inches.
+				'rulerUnit' => $this->config->getUserValue($uid, Application::APP_ID, 'rulerUnit', 'cm'),
 				// What colour each category is drawn in, as the writer chose.
 				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
 				'languages' => $this->availableLanguages(),
@@ -134,6 +142,22 @@ class ApiController extends Controller {
 			$placement = $this->request->getParam('placement');
 			if ($placement === 'standard' || $placement === 'free') {
 				$this->config->setUserValue($uid, Application::APP_ID, 'placement', $placement);
+			}
+			$keyDelete = $this->request->getParam('keyDelete');
+			if ($keyDelete === '1' || $keyDelete === '0') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'keyDelete', $keyDelete);
+			}
+			$showSpaces = $this->request->getParam('showSpaces');
+			if ($showSpaces === '1' || $showSpaces === '0') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'showSpaces', $showSpaces);
+			}
+			$indentUnit = $this->request->getParam('indentUnit');
+			if ($indentUnit === 'pt' || $indentUnit === 'mm' || $indentUnit === 'ch') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'indentUnit', $indentUnit);
+			}
+			$rulerUnit = $this->request->getParam('rulerUnit');
+			if (in_array($rulerUnit, ['pt', 'px', 'mm', 'cm', 'in'], true)) {
+				$this->config->setUserValue($uid, Application::APP_ID, 'rulerUnit', $rulerUnit);
 			}
 			$colours = $this->request->getParam('folderColours');
 			if (is_string($colours) && strlen($colours) < 4000) {

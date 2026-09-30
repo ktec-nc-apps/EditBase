@@ -2560,7 +2560,14 @@ ${insideObjects('.eb-paper.boxed')} {
     const others = Array.from(c.children).filter((k) => k !== el && pieces.indexOf(k) < 0
       && k.matches && k.matches('p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, table')
       && !k.classList.contains('eb-textbox'));
-    return others.length === 0;
+    if (others.length) { return false; }
+    // 本文に物（置いた物・枠）が残っているなら、空の段落が本文の最後の一つでも消せる。
+    // 物は段落の中ではなく本文の直下の錨に立っているので、段落を消しても一緒には消えない
+    // （オーナー 09-23「他のオブジェクトがあるのに消せないのはおかしい」BUGS #84・#301）。
+    // 断るのは、消すと本文が何も無くなるときだけ。
+    const things = Array.from(c.children).some((k) => k !== el && pieces.indexOf(k) < 0 && k.matches
+      && ((k.classList.contains('eb-anchor') && k.querySelector(':scope > *')) || k.matches(OBJECT_SEL)));
+    return !things;
   }
   /** 枠の中に置いた物（直下のものだけ）を、奥から手前の順に。 */
   function placedIn(holder) {
@@ -4771,21 +4778,61 @@ ${insideObjects('.eb-paper.boxed')} {
   /** The paragraph dialogue's boxes as they were when it opened (see applyPara). */
   let paraOpened = null;
   /** What the dialog shows: only what the paragraph itself sets, not what it inherits. */
-  function paragraphProps() {
+  // 字下げの単位（設定・初期値 pt）。字は CSS の em で、段落の文字の大きさに付いてくる（BUGS #311）。
+  const INDENT_UNITS = { pt: { css: 'pt', step: 0.5 }, mm: { css: 'mm', step: 0.5 }, ch: { css: 'em', step: 0.5 } };
+  const unitOf2 = (u) => (INDENT_UNITS[u] ? u : 'pt');
+  /** mm を字下げの単位の数に（字は文字の大きさ fontPx で割る）。 */
+  function mmToUnit(mm, u, fontPx) {
+    u = unitOf2(u);
+    if (u === 'pt') { return mm * 72 / 25.4; }
+    if (u === 'ch') { return mm / ((fontPx || 16) * MM); }
+    return mm;
+  }
+  function unitToMm(v, u, fontPx) {
+    u = unitOf2(u);
+    if (u === 'pt') { return v * 25.4 / 72; }
+    if (u === 'ch') { return v * (fontPx || 16) * MM; }
+    return v;
+  }
+  const tidyNum = (x) => Math.round(x * 100) / 100;
+  // 定規の単位（設定・初期値 cm）。mm＝1単位の長さ、step＝動かす刻み、minor・mid・big＝目盛り
+  // （minor の何本ごとに中・大の目盛りと数字）。オーナー 2026-09-30「1pt 1mm 1cm 0.1インチ単位で
+  // ルーラーを動かせるように」「pxが抜けていた」（BUGS #312）。
+  const RULER_UNITS = {
+    pt: { mm: 25.4 / 72, step: 1, minor: 6, mid: 2, big: 6 },
+    px: { mm: 25.4 / 96, step: 1, minor: 10, mid: 5, big: 10 },
+    mm: { mm: 1, step: 1, minor: 1, mid: 5, big: 10 },
+    cm: { mm: 10, step: 1, minor: 0.25, mid: 2, big: 4 },
+    in: { mm: 25.4, step: 0.1, minor: 0.1, mid: 5, big: 10 },
+  };
+  const rulerUnitOf = (u) => RULER_UNITS[u] || RULER_UNITS.cm;
+  function paragraphProps(of, unit) {
     // Read off the head of a paragraph cut at a page foot: what the paragraph says
     // is written there (the piece on the next page has the first line's indent
     // taken off, because it does not begin the paragraph).
-    const block = cutHead(selectedBlocks(true)[0]);
+    const block = cutHead(of || selectedBlocks(true)[0]);
     if (!block) { return null; }
     const s = block.style;
+    // 字下げは、段落に書いた値が無ければ実際にかかっている値（書式から来たもの）を出す。
+    // 空欄だと、字下げがかかっているのに数字が出ていなかった（オーナー 2026-09-30 BUGS #308）。
+    const cs = window.getComputedStyle ? window.getComputedStyle(block) : null;
+    const u = unitOf2(unit || 'mm');
+    const fpx = cs ? parseFloat(cs.fontSize) || 16 : 16;
+    // 実際にかかっている値を、字下げの単位で（段落に書いた値の単位が何であっても）。
+    const eff = (own, prop) => {
+      const px = cs ? parseFloat(cs[prop]) || 0 : 0;
+      if ((own === '' || own == null) && !px) { return ''; }
+      if (!cs) { return own; }
+      return Math.round(mmToUnit(px * MM, u, fpx) * 10) / 10;
+    };
     return {
       align: s.getPropertyValue('text-align') || '',
       lineHeight: lineMultiple(s.getPropertyValue('line-height')),
       before: lengthIn(s.getPropertyValue('margin-top'), 'pt'),
       after: lengthIn(s.getPropertyValue('margin-bottom'), 'pt'),
-      left: lengthIn(s.getPropertyValue('margin-left'), 'mm'),
-      right: lengthIn(s.getPropertyValue('margin-right'), 'mm'),
-      firstLine: lengthIn(s.getPropertyValue('text-indent'), 'mm'),
+      left: eff(lengthIn(s.getPropertyValue('margin-left'), 'mm'), 'marginLeft'),
+      right: eff(lengthIn(s.getPropertyValue('margin-right'), 'mm'), 'marginRight'),
+      firstLine: eff(lengthIn(s.getPropertyValue('text-indent'), 'mm'), 'textIndent'),
       noLoneLines: Number(s.getPropertyValue('orphans')) >= 2 && Number(s.getPropertyValue('widows')) >= 2,
       pageBefore: s.getPropertyValue('break-before') === 'page',
       keepWithNext: s.getPropertyValue('break-after') === 'avoid',
@@ -4835,9 +4882,10 @@ ${insideObjects('.eb-paper.boxed')} {
       if (did('lineHeight')) { styleOrClear(block, 'line-height', num(v.lineHeight) === '' ? '' : String(num(v.lineHeight))); }
       if (did('before')) { styleOrClear(block, 'margin-top', num(v.before) === '' ? '' : num(v.before) + 'pt'); }
       if (did('after')) { styleOrClear(block, 'margin-bottom', num(v.after) === '' ? '' : num(v.after) + 'pt'); }
-      if (did('left')) { styleOrClear(block, 'margin-left', num(v.left) === '' ? '' : num(v.left) + 'mm'); }
-      if (did('right')) { styleOrClear(block, 'margin-right', num(v.right) === '' ? '' : num(v.right) + 'mm'); }
-      if (did('firstLine')) { styleOrClear(block, 'text-indent', num(v.firstLine) === '' ? '' : num(v.firstLine) + 'mm'); }
+      const iu = (INDENT_UNITS[v.unit] || INDENT_UNITS.mm).css;
+      if (did('left')) { styleOrClear(block, 'margin-left', num(v.left) === '' ? '' : num(v.left) + iu); }
+      if (did('right')) { styleOrClear(block, 'margin-right', num(v.right) === '' ? '' : num(v.right) + iu); }
+      if (did('firstLine')) { styleOrClear(block, 'text-indent', num(v.firstLine) === '' ? '' : num(v.firstLine) + iu); }
       if (did('pageBefore')) { styleOrClear(block, 'break-before', v.pageBefore ? 'page' : ''); }
       if (did('keepWithNext')) { styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : ''); }
       if (did('keepTogether')) { styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : ''); }
@@ -7019,6 +7067,19 @@ ${insideObjects('.eb-paper.boxed')} {
     if (el.nodeName === 'PRE') { return 'PRE'; }
     return el.nodeName;
   }
+  /**
+   * カーソル（または押した所）にある「今の物」。まとめ枠・囲み記事・注の中の段落なら、
+   * 枠ではなくその段落（LibreOffice と同じく、中を押せば字、枠は縁で選ぶ）。枠を先に
+   * 選んでいたので、段落を押してもまとめ枠が選ばれ、定規もツールバーも枠のものになった
+   * （オーナー 2026-09-30「段落をクリックしているのに、まとめ枠にフォーカスをとられる」BUGS #304）。
+   * 文字枠は枠そのものが段落なので、文字枠のまま。
+   */
+  function thingAt(node) {
+    const obj = objectAt(node);
+    const blk = textBlockAt(node);
+    if (obj && blk && obj !== blk && obj.contains(blk) && writtenFrame(obj) && !obj.classList.contains('eb-textbox')) { return blk; }
+    return obj || blk;
+  }
   /** Writing is an object as well: the block the caret is in, when nothing else holds it. */
   function textBlockAt(node) {
     let n = node && node.nodeType === 3 ? node.parentNode : node;
@@ -7127,6 +7188,17 @@ ${insideObjects('.eb-paper.boxed')} {
     // hold of the thing itself.
     return !onText(el, x, y);
   }
+  // 文字（段落）以外の物（枠・文字枠・画像・図形・表・線など）は Delete キーでは消さない（Backspace は
+  // 物を何も消さない）。消すのは右クリックやツールバーの「削除」（オーナー 2026-09-30「DEL キーや
+  // BS キーで各種枠が消えるのは止めて欲しい」「文字以外は対象にする。右クリックで削除ができればいい」
+  // BUGS #307）。設定の「DELキーでオブジェクト枠を削除可能にする」（settings.keyDelete・初期値 OFF）を
+  // 入れると Delete で消せる。
+  const keySafe = (el) => {
+    if (!el || !el.matches) { return false; }
+    if (el.matches(OBJECT_SEL)) { return true; }
+    const placed = !!(el.parentNode && el.parentNode.classList && el.parentNode.classList.contains('eb-anchor'));
+    return placed && !el.matches(TEXT_SEL);
+  };
   /** 枠の縁の線の上（内側 px まで）を押したか。LibreOffice でも枠は縁の線を押して選ぶ。 */
   function onEdge(el, x, y, px) {
     const r = el.getBoundingClientRect();
@@ -15800,21 +15872,27 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" v-if="fx.editing" @mousedown.prevent @click="fxCancel" :title="t('Cancel')">✕</button>
       <button class="eb-tb" v-if="fx.editing" @mousedown.prevent @click="fxCommit" :title="t('Accept')">✓</button>
     </div>
-    <div class="eb-desk" :class="{ empty: !doc.id, tate: tategaki && !flow, ruled: doc.id && ruler && !flow && !tategaki }">
+    <!-- 定規（ルーラー）：机の外、ツールバーのすぐ下に窓の幅いっぱいの帯として置き、
+         目盛りとつまみだけを紙の位置に合わせて描く（LibreOffice と同じ）。紙と一緒に
+         机の中にあったときは、帯を机の幅に見せるために左右へ伸ばしていて、その分
+         だけ横スクロールバーが出ていた（オーナー 2026-09-30、BUGS #300）。 -->
+    <div class="eb-rulerbar" ref="rulerBar" v-if="doc.id && ruler && !flow && !tategaki" @pointerdown.prevent>
+      <div class="eb-ruler" :style="{ left: rulerX + 'px', width: rpx(rulerMm.w) + 'px' }">
+        <div class="band" :style="{ left: rpx(rulerMm.bl) + 'px', width: rpx(rulerMm.w - rulerMm.bl - rulerMm.br) + 'px' }"></div>
+        <span v-for="m in rulerMm.marks" :key="m.at" class="tick" :class="m.kind" :style="{ left: rpx(m.at) + 'px' }"><span v-if="m.label" class="num">{{ m.label }}</span></span>
+        <span class="hm left" v-if="!rulerMm.box" :style="{ left: rpx(rulerMm.ml) + 'px' }" @pointerdown.prevent.stop="rulerGrab($event, 'ml')" :title="t('Left margin')"></span>
+        <span class="hm right" v-if="!rulerMm.box" :style="{ left: rpx(rulerMm.w - rulerMm.mr) + 'px' }" @pointerdown.prevent.stop="rulerGrab($event, 'mr')" :title="t('Right margin')"></span>
+        <span class="ind first" :style="{ left: rpx(rulerMm.bl + ind.left + ind.first) + 'px' }" @pointerdown.prevent.stop="rulerGrab($event, 'first')" :title="t('First line')"></span>
+        <span class="ind il" :style="{ left: rpx(rulerMm.bl + ind.left) + 'px' }" @pointerdown.prevent.stop="rulerGrab($event, 'left')" :title="t('Indent left')"></span>
+        <span class="ind ir" :style="{ left: rpx(rulerMm.w - rulerMm.br - ind.right) + 'px' }" @pointerdown.prevent.stop="rulerGrab($event, 'right')" :title="t('Indent right')"></span>
+      </div>
+    </div>
+    <div class="eb-desk" ref="desk" :class="{ empty: !doc.id, tate: tategaki && !flow }" @scroll.passive="syncRuler">
       <!-- The palette. A page is laid out by taking things off a shelf and putting
            them on the paper, so the shelf stands beside the paper rather than
            hiding in a menu. Press one to put it in the flow of the text; drag one
            on to the page to put it down where it lands. -->
-      <div class="eb-paperwrap" :class="{ cellsel: csel.rects.length > 0, noguides: !guides, flow: flow, grid: grid && !flow, ruled: ruler && !flow && !tategaki, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
-        <div class="eb-ruler" v-if="ruler && !flow && !tategaki" @pointerdown.prevent>
-          <div class="band" :style="{ left: rulerMm.ml + 'mm', right: rulerMm.mr + 'mm' }"></div>
-          <span v-for="m in rulerMm.marks" :key="m.at" class="tick" :class="m.kind" :style="{ left: m.at + 'mm' }"><span v-if="m.label" class="num">{{ m.label }}</span></span>
-          <span class="hm left" :style="{ left: rulerMm.ml + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'ml')" :title="t('Left margin')"></span>
-          <span class="hm right" :style="{ left: (rulerMm.w - rulerMm.mr) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'mr')" :title="t('Right margin')"></span>
-          <span class="ind first" :style="{ left: (rulerMm.ml + ind.left + ind.first) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'first')" :title="t('First line')"></span>
-          <span class="ind il" :style="{ left: (rulerMm.ml + ind.left) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'left')" :title="t('Indent left')"></span>
-          <span class="ind ir" :style="{ left: (rulerMm.w - rulerMm.mr - ind.right) + 'mm' }" @pointerdown.prevent.stop="rulerGrab($event, 'right')" :title="t('Indent right')"></span>
-        </div>
+      <div class="eb-paperwrap" :class="{ cellsel: csel.rects.length > 0, noguides: !guides, flow: flow, grid: grid && !flow, tate: tategaki && !flow }" v-show="doc.id" :style="[paperStyle, { zoom: flow ? 1 : zoom / 100 }]">
         <!-- The sheets themselves, and the running bands standing in their
              margins. The first sheet's bands are the ones the writer types in:
              what is written there is written on every page, so the header and
@@ -15847,6 +15925,9 @@ ${insideObjects('.eb-paper.boxed')} {
           :style="{ left: placeBox.x + 'px', top: placeBox.y + 'px', width: placeBox.w + 'px', height: placeBox.h + 'px' }"></div>
         <div id="eb-canvas" class="eb-paper eb-doc" :class="[numberClass, { boxed: boxes && !flow, placing: !!placing, asprinted: asPrinted, objtaken: frame.taken }]"
           :style="paperStyle" contenteditable="true" :spellcheck="spellcheck" role="textbox" aria-multiline="true"></div>
+        <!-- 空白の表示（半角・全角・タブ）。文書には何も書かず、紙の上に目印だけを重ねる。
+             保存にも印刷にも出ない（オーナー 2026-09-30 BUGS #310）。 -->
+        <div class="eb-wsmarks" ref="wsLayer" aria-hidden="true"></div>
         <!-- Where the other people writing in this document have their carets.
              Drawn from what they say they are doing, once a second or so. -->
         <div class="eb-mate" v-for="m in live.carets" :key="m.id"
@@ -16604,8 +16685,30 @@ ${insideObjects('.eb-paper.boxed')} {
           <p class="eb-tip">{{ settings.placement === 'free' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.') }}</p>
         </div>
         <div class="eb-field">
+          <label>{{ t('Unit for indents') }}</label>
+          <select v-model="settings.indentUnit">
+            <option value="pt">pt</option>
+            <option value="mm">mm</option>
+            <option value="ch">{{ t('characters') }}</option>
+          </select>
+          <p class="eb-tip">{{ t('Used by the indents in the paragraph properties, and written into the file in that unit. Characters follow the size of the letters.') }}</p>
+        </div>
+        <div class="eb-field">
+          <label>{{ t('Unit for the ruler') }}</label>
+          <select v-model="settings.rulerUnit">
+            <option value="pt">pt</option>
+            <option value="px">px</option>
+            <option value="mm">mm</option>
+            <option value="cm">cm</option>
+            <option value="in">{{ t('inches') }}</option>
+          </select>
+          <p class="eb-tip">{{ t('The ruler is marked in this unit, and what is dragged on it moves 1 pt, 1 px, 1 mm, 1 cm or 0.1 inch at a time.') }}</p>
+        </div>
+        <div class="eb-field">
           <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
           <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
+          <label class="opt"><input type="checkbox" v-model="settings.keyDelete"> {{ t('Let the Delete key delete an object frame') }}</label>
+          <label class="opt"><input type="checkbox" v-model="settings.showSpaces"> {{ t('Show spaces (half-width, full-width and tabs)') }}</label>
           <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
           <p class="eb-tip">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
           <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
@@ -17278,6 +17381,35 @@ ${insideObjects('.eb-paper.boxed')} {
         <button v-for="tb in fpropsTabs" :key="tb.key" class="eb-fp-tab" :class="{ on: fpTab === tb.key }" role="tab" @click="fpTab = tb.key">{{ tb.label }}</button>
       </div>
       <div class="body">
+        <!-- 段落：インデントと間隔（旧「段落設定」の中身・LibreOffice の段落の画面の先頭のタブ）。
+             段落の罫線・網掛けは「罫線」「領域」のタブにある（BUGS #308）。 -->
+        <template v-if="fpTab === 'para'">
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Alignment') }}</label>
+              <select v-model="para.align">
+                <option value="">{{ t('Unchanged') }}</option>
+                <option value="left">{{ t('Left') }}</option>
+                <option value="center">{{ t('Centre') }}</option>
+                <option value="right">{{ t('Right') }}</option>
+                <option value="justify">{{ t('Justified') }}</option>
+              </select>
+            </div>
+            <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
+          </div>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Space above (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="para.before"></div>
+            <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="para.after"></div>
+          </div>
+          <div class="eb-row">
+            <div class="eb-field"><label>{{ t('Indent left ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.left"></div>
+            <div class="eb-field"><label>{{ t('Indent right ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
+            <div class="eb-field"><label>{{ t('First line ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
+          </div>
+          <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+          <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
+          <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
+          <label class="opt"><input type="checkbox" v-model="para.noLoneLines"> {{ t('Never leave one line of it alone on a page') }}</label>
+        </template>
         <!-- 位置と大きさ -->
         <template v-if="fpTab === 'type'">
           <p class="eb-fp-what">{{ t('Where the object stands on the page, and how big it is.') }}</p>
@@ -17699,7 +17831,6 @@ ${insideObjects('.eb-paper.boxed')} {
       <!-- レイヤーバーの行の右クリック：名前を付ける -->
       <button class="ci" v-if="ctx.fromLayers" @click="ctxDo('layerRename')">{{ t('Name…') }}</button>
       <button class="ci" v-if="ctx.selection" @click="ctxDo('runProps')">{{ t('Properties of the chosen words…') }}</button>
-      <button class="ci" v-if="!ctx.textless" @click="ctxDo('para')">{{ t('Paragraph settings…') }}</button>
       <button class="ci" v-if="(ctx.frame || ctx.text) && !ctx.writingRow" @click="ctxDo('frameProps')">{{ propsLabel(ctx.frame ? ctx.kind : 'TEXT') }}</button>
       <button class="ci" v-if="ctx.table" @click="ctxDo('cellProps')">{{ t('Cell properties…') }}</button>
       <button class="ci" v-if="ctx.image" @click="ctxDo('alt')">{{ t('Alternative text…') }}</button>
@@ -17810,9 +17941,9 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="eb-field"><label>{{ t('Space below (pt)') }}</label><input type="number" min="0" max="200" step="0.5" v-model="para.after"></div>
         </div>
         <div class="eb-row">
-          <div class="eb-field"><label>{{ t('Indent left (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.left"></div>
-          <div class="eb-field"><label>{{ t('Indent right (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
-          <div class="eb-field"><label>{{ t('First line (mm)') }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
+          <div class="eb-field"><label>{{ t('Indent left ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.left"></div>
+          <div class="eb-field"><label>{{ t('Indent right ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
+          <div class="eb-field"><label>{{ t('First line ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
         </div>
         <div class="eb-row eb-frow">
           <div class="eb-field b-style">
@@ -17857,7 +17988,7 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="foot">
         <button class="eb-btn ghost" @click="clearPara">{{ t('Reset') }}</button>
         <button class="eb-btn ghost" @click="paraOpen = false">{{ t('Cancel') }}</button>
-        <button class="eb-btn primary" @click="applyPara">{{ t('Apply') }}</button>
+        <button class="eb-btn primary" @click="applyPara()">{{ t('Apply') }}</button>
       </div>
     </div>
   </div>
@@ -18019,7 +18150,7 @@ ${insideObjects('.eb-paper.boxed')} {
         runBandOn: false,
         runBandWhich: '',
         savedAt: 0,
-        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual', placement: 'standard' },
+        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual', placement: 'standard', keyDelete: false, showSpaces: false, indentUnit: 'pt', rulerUnit: 'cm' },
         autosave: true,
         guides: true,
         colour: '#111111',
@@ -18028,12 +18159,14 @@ ${insideObjects('.eb-paper.boxed')} {
         rubyOpen: false, rubyWord: '', rubyText: '',
         noteOpen: false, noteText: '',
         colsOpen: false, cols: { count: 2, gap: 8 }, colsGapWas: null, paperWas: null,
-        csel: { rects: [] }, fx: { name: '', text: '', editing: false }, numUi: { cat: '', dec: 0, sep: true, cur: '¥', date: 'YYYY/MM/DD' }, numSample: 1234.5, paperTab: 'paper', cellSpan: { rows: 1, cols: 1 }, cellTab: 'number', bord: { style: 'solid', width: 0.75, colour: '#000000', edges: { top: 'keep', bottom: 'keep', left: 'keep', right: 'keep', insideH: 'keep', insideV: 'keep' } },
+        rulerX: 0, csel: { rects: [] }, fx: { name: '', text: '', editing: false }, numUi: { cat: '', dec: 0, sep: true, cur: '¥', date: 'YYYY/MM/DD' }, numSample: 1234.5, paperTab: 'paper', cellSpan: { rows: 1, cols: 1 }, cellTab: 'number', bord: { style: 'solid', width: 0.75, colour: '#000000', edges: { top: 'keep', bottom: 'keep', left: 'keep', right: 'keep', insideH: 'keep', insideV: 'keep' } },
         cellWidthWas: '', cellPropsOpen: false, cellProps: { fill: '', align: '', valign: '', pad: '', width: '', font: '', size: '', colour: '', bold: false, italic: false, underline: false, rule: { style: '', sides: 'all', width: 0.75, colour: '#666666' } },
         runOpen: false,
         brush: null,
         toast: '',
         fpropsPhoto: false,
+        // 段落のプロパティ：先頭に「インデントと間隔」のタブ（旧「段落設定」の中身・BUGS #308）。
+        fpPara: false,
         usedFonts: [],
         fpTab: 'type',
         docSet: { open: false, useScript: false, title: '', lang: 'ja', head: normaliseHead({}) },
@@ -18069,6 +18202,11 @@ ${insideObjects('.eb-paper.boxed')} {
         coarse: false,
         ruler: true,
         ind: { left: 0, right: 0, first: 0 },
+        // 定規の白い帯。カーソルのある段落が枠・文字枠・セルの中なら、その箱の内側（紙の左端から mm）。
+        // 本文なら null で、用紙の余白を帯にする（LibreOffice と同じ・BUGS #302）。
+        rulerBox: null,
+        // 定規の「字」の目盛りに使う、カーソルのある段落の文字の大きさ（px）。
+        rulerFontPx: 0,
         review: false, showChanges: true, changes: 0,
         prevSettings: '',
         cropOpen: false, cropSrc: '',
@@ -18201,6 +18339,11 @@ ${insideObjects('.eb-paper.boxed')} {
         return calc ? this.numSampleOf(this.cellProps.numFmt || '') : '';
       },
       colPctSum() { return round1((this.fprops.colPct || []).reduce((a, b) => a + (Number(b) || 0), 0)); },
+      indentUnitLabel() {
+        this.i18nTick;
+        const u = unitOf2(this.settings.indentUnit);
+        return u === 'ch' ? this.t('characters') : u;
+      },
       fpropsTabs() {
         this.i18nTick;
         const tabs = [{ key: 'type', label: this.t('Size') }, { key: 'wrap', label: this.t('Placement') },
@@ -18208,6 +18351,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (this.frameHoldsWords) { tabs.push({ key: 'text', label: this.t('Text inside') }); }
         if (this.fpropsPhoto) { tabs.push({ key: 'picture', label: this.t('Picture') }); }
         if (this.fprops.colPct && this.fprops.colPct.length) { tabs.push({ key: 'columns', label: this.t('Columns and rows') }); }
+        if (this.fpPara) { tabs.unshift({ key: 'para', label: this.t('Indents and spacing') }); }
         return tabs;
       },
       /** 文書の言語（html の lang）。名前はその言語自身の書き方で。今の値が一覧に無ければ加える。 */
@@ -18417,14 +18561,22 @@ ${insideObjects('.eb-paper.boxed')} {
         const s2 = sheet(p);
         // 目盛りは LibreOffice と同じく左の余白線を 0 として cm で数える（余白の側も
         // 左へ 1, 2…）。1cm ごとに数字、0.5cm に長め、0.25cm に短い目盛り。
+        // 帯（字下げを数える基準）。枠やセルの中の段落は、その箱の内側（BUGS #302）。
+        // 目盛りの 0 も LibreOffice と同じく帯の左端に置く。
+        const box = this.rulerBox;
+        const bl = box ? box.l : p.margin.left;
+        const br = box ? Math.max(0, s2.w - box.r) : p.margin.right;
+        // 目盛りは定規の単位で（設定・BUGS #312）。
+        const ru = rulerUnitOf(this.settings.rulerUnit);
+        const stepMm = ru.minor * ru.mm;
         const marks = [];
-        for (let q = -Math.floor(p.margin.left / 2.5); q * 2.5 <= s2.w - p.margin.left + 0.01; q += 1) {
-          const at = p.margin.left + q * 2.5;
+        for (let q = -Math.floor(bl / stepMm); q * stepMm <= s2.w - bl + 0.01 && marks.length < 2000; q += 1) {
+          const at = bl + q * stepMm;
           if (at < 0.5 || at > s2.w - 0.5) { continue; }
-          const kind = q % 4 === 0 ? 'cm' : (q % 2 === 0 ? 'half' : 'quarter');
-          marks.push({ at, kind, label: kind === 'cm' && q !== 0 ? String(Math.abs(q / 4)) : '' });
+          const kind = q % ru.big === 0 ? 'cm' : (q % ru.mid === 0 ? 'half' : 'quarter');
+          marks.push({ at, kind, label: kind === 'cm' && q !== 0 ? String(Math.abs(tidyNum(q * ru.minor))) : '' });
         }
-        return { w: s2.w, ml: p.margin.left, mr: p.margin.right, marks };
+        return { w: s2.w, ml: p.margin.left, mr: p.margin.right, bl, br, box: !!box, marks };
       },
       numberClass() {
         const out = [];
@@ -20230,11 +20382,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const cell = rg ? cellAt(rg.startContainer) : null;
         s.cellFill = cell ? (rgbToHex(cell.style.backgroundColor) || '') : '';
         const block = cutHead(selectedBlocks(true)[0]);
-        this.ind = block ? {
-          left: Number(numberIn(block.style.getPropertyValue('margin-left'), 'mm')) || 0,
-          right: Number(numberIn(block.style.getPropertyValue('margin-right'), 'mm')) || 0,
-          first: Number(numberIn(block.style.getPropertyValue('text-indent'), 'mm')) || 0,
-        } : { left: 0, right: 0, first: 0 };
+        this.readIndents(block);
         s.ruby = !!(rg && rubyAt(rg.startContainer));
         s.change = !!(rg && (insAt(rg.startContainer) || delAt(rg.startContainer)));
         this.changes = countChanges();
@@ -21965,6 +22113,60 @@ ${insideObjects('.eb-paper.boxed')} {
       // ---- the bounding box round an object -------------------------------------
       /** The page is drawn at a zoom; every measurement here is in unzoomed pixels. */
       frameZoom() { return this.flow ? 1 : ((this.zoom || 100) / 100); },
+      /**
+       * 空白の目印を描く（半角＝·、全角＝□、タブ＝→）。字そのものの場所をブラウザに測らせ、
+       * 紙の置き場に重ねた層に置く。文書の中身には触れない（BUGS #310）。
+       */
+      drawSpaces() {
+        const layer = this.$refs.wsLayer;
+        if (!layer) { return; }
+        const c = canvas();
+        if (!this.settings.showSpaces || !this.doc.id || !c) { if (layer.firstChild) { layer.textContent = ''; } return; }
+        const wrap = layer.parentElement;
+        if (!wrap || typeof document.createRange !== 'function') { return; }
+        const b = wrap.getBoundingClientRect();
+        const z = this.frameZoom() || 1;
+        const out = [];
+        const walk = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+        const r = document.createRange();
+        if (typeof r.getClientRects !== 'function') { return; }
+        const px = (v) => (Math.round(v * 10) / 10) + 'px';
+        let n = walk.nextNode();
+        while (n && out.length < 30000) {
+          const text = n.data;
+          if (/[ \u00a0\u3000\t]/.test(text)) {
+            for (let i = 0; i < text.length && out.length < 30000; i += 1) {
+              const ch = text[i];
+              const k = (ch === ' ' || ch === '\u00a0') ? 'h' : (ch === '\u3000' ? 'z' : (ch === '\t' ? 't' : ''));
+              if (!k) { continue; }
+              r.setStart(n, i);
+              r.setEnd(n, i + 1);
+              // 詰められて表に出ない空白（HTML の改行・字の無い所）は幅が無い。数えない。
+              const q = r.getClientRects()[0];
+              if (!q || q.width < 0.5 || q.height < 0.5) { continue; }
+              out.push('<i class="' + k + '" style="left:' + px((q.left - b.left) / z) + ';top:' + px((q.top - b.top) / z)
+                + ';width:' + px(q.width / z) + ';height:' + px(q.height / z) + '"></i>');
+            }
+          }
+          n = walk.nextNode();
+        }
+        layer.innerHTML = out.join('');
+      },
+      spacesSoon() {
+        if (!this.settings.showSpaces) { return; }
+        clearTimeout(this._spacesTimer);
+        this._spacesTimer = setTimeout(() => this.drawSpaces(), 150);
+      },
+      /** Millimetres of the paper in screen pixels at the zoom, for the ruler. */
+      rpx(mm) { return (Number(mm) || 0) * (96 / 25.4) * ((this.zoom || 100) / 100); },
+      /** The ruler's scale follows the paper: where the paper's left edge is on the screen. */
+      syncRuler() {
+        const bar = this.$refs.rulerBar;
+        const wrap = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-paperwrap') : null;
+        if (!bar || !wrap) { return; }
+        const x = Math.round((wrap.getBoundingClientRect().left - bar.getBoundingClientRect().left) * 10) / 10;
+        if (x !== this.rulerX) { this.rulerX = x; }
+      },
       /** Which object the box is round, and where to draw it. */
       syncFrame() {
         const c = canvas();
@@ -21987,7 +22189,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (!framePinned) {
           const range = getRange();
           const at = range && inCanvas(range.startContainer)
-            ? (objectAt(range.startContainer) || textBlockAt(range.startContainer)) : null;
+            ? thingAt(range.startContainer) : null;
           if (at) { frameEl = at; } else if (range && inCanvas(range.startContainer)) { frameEl = null; }
         }
         // A frame carried on to the next page is not a second object: what is
@@ -22253,12 +22455,19 @@ ${insideObjects('.eb-paper.boxed')} {
         if (at) { this.frame.bar = true; }
         // One click picks the object up; a second one goes inside it to write.
         frameTaken = takesClick(at, e.target, e.clientX, e.clientY) && e.detail <= 1;
+        // まとめ枠などの中の段落の上を押したときは、枠を選ばない。カーソルが入った段落が
+        // 「今の物」になる（syncFrame がカーソルから選ぶ・BUGS #304）。段落の外の枠の地や
+        // 縁を押したときは、今までどおり枠。
+        const pressedBlock = textBlockAt(e.target);
+        const inside = !!(at && !frameTaken && writtenFrame(at) && !at.classList.contains('eb-textbox')
+          && pressedBlock && pressedBlock !== at && at.contains(pressedBlock));
+        if (inside) { frameEl = null; framePinned = false; }
         // 文字を書く枠の中の字の無い所を押したときは、手を離したあとカーソルを枠の中の
         // いちばん近い字へ置く（枠の外や枠そのものに残さない）。
         if (at && !frameTaken && writtenFrame(at) && !onText(at, e.clientX, e.clientY) && e.button === 0) {
           const x = e.clientX, y = e.clientY;
           const up = () => { document.removeEventListener('mouseup', up, true);
-            setTimeout(() => { if (frameEl === at && !frameTaken) { caretIntoFrameAt(at, x, y); this.refreshState(); } }, 0); };
+            setTimeout(() => { if ((frameEl === at || inside) && !frameTaken) { caretIntoFrameAt(at, x, y); this.refreshState(); } }, 0); };
           document.addEventListener('mouseup', up, true);
         }
         this.$nextTick(() => this.syncFrame());
@@ -23028,6 +23237,13 @@ ${insideObjects('.eb-paper.boxed')} {
           const c = canvas();
           if (caret && c && c.contains(caret.startContainer)) { selectRange(caret); }
         };
+        // 本文の段落（置いた物ではない）の削除は、レイヤーバーの右クリックと同じ道を通す。
+        // 二つの入口で消せる・消せないが食い違っていた（BUGS #301）。
+        if (kind === 'delete' && !frameMore.length && !(frameEl.parentNode && frameEl.parentNode.classList
+          && frameEl.parentNode.classList.contains('eb-anchor')) && !(frameEl.matches && frameEl.matches(OBJECT_SEL))) {
+          this.deleteLayerItem(frameEl);
+          return;
+        }
         // Where the frame itself sits in the column, as against what the words
         // inside it do. These two are the whole of the difference between the
         // frame's own bar and the alignment buttons above the page.
@@ -23203,6 +23419,14 @@ ${insideObjects('.eb-paper.boxed')} {
           this.fpropsPhoto = !!(frameEl.matches && frameEl.matches('figure.eb-img'));
           this.fprops.colPct = frameEl.nodeName === 'TABLE' ? columnPercents(frameEl) : [];
           this.fprops.zoom = this.fpropsPhoto ? (frameEl.getAttribute('data-zoom') || '') : '';
+          // 段落（置いた物でない文字の塊）なら、段落の設定も同じ画面で（BUGS #308）。
+          this.fpPara = !!(frameEl.matches && frameEl.matches(TEXT_SEL) && !frameEl.matches(OBJECT_SEL));
+          if (this.fpPara) {
+            this.clearPara();
+            const now = paragraphProps(frameEl, this.settings.indentUnit);
+            if (now) { this.para = Object.assign({}, this.para, now); }
+            paraOpened = JSON.stringify(this.para);
+          }
           if (this.fpropsPhoto) {
             const cap = frameEl.querySelector(':scope > figcaption');
             this.fprops.caption = cap ? String(cap.textContent || '').trim() : '';
@@ -23213,8 +23437,11 @@ ${insideObjects('.eb-paper.boxed')} {
           // run of words only becomes a frame if the settings are applied.
           this.clearFrameProps();
           this.fpropsRange = textRange.cloneRange();
+          this.fpPara = false;
         }
         this._fpOpened = JSON.stringify(this.fprops);
+        if (this.fpPara) { this.fpTab = this._fpWantTab || 'para'; }
+        this._fpWantTab = null;
         if (!this.fpropsTabs.some((tb) => tb.key === this.fpTab)) { this.fpTab = 'type'; }
         this.fpropsOpen = true;
       },
@@ -23293,6 +23520,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (mode !== wrapMode(frameEl) || (!objectFree(frameEl) && (mode === 'left' || mode === 'right'))) {
           this.frameCmd('wrapMode', mode);
         }
+        if (this.fpPara && frameEl) { this.applyPara(frameEl); }
         this.settleFrame(frameEl);
       },
       /** 表のプロパティの「行の高さの最適化」「列の幅の最適化」：その場で効く（メニューと同じ）。 */
@@ -24383,6 +24611,9 @@ ${insideObjects('.eb-paper.boxed')} {
         if (e.target && (e.target.nodeName === 'INPUT' || e.target.isContentEditable)) { return; }
         if (!frameEl || layerEls.indexOf(frameEl) < 0) { return; }
         e.preventDefault();
+        // 消すのは Delete キーだけ（BUGS #307）。
+        if (e.key === 'Backspace') { return; }
+        if (!this.settings.keyDelete && keySafe(frameEl)) { return; }
         this.deleteLayerItem(frameEl);
       },
       toggleLayerOpen(key) {
@@ -25448,6 +25679,13 @@ ${insideObjects('.eb-paper.boxed')} {
         // where its wrap, its arrangement and its size are set.
         let obj = objectAt(e.target) || objectAt(at) || thinObjectNear(e.clientX, e.clientY)
           || textBlockAt(e.target) || textBlockAt(at);
+        // まとめ枠・囲み記事・注の中の段落の上は、左クリックと同じく段落が相手。枠の
+        // メニューは段落の外の枠の地や縁を右クリックしたとき（オーナー 2026-09-30「左クリック
+        // では段落を選択できるが右クリックするとまとめ枠を選ぶ」BUGS #306）。文字枠は枠そのものが段落。
+        if (obj && writtenFrame(obj) && !obj.classList.contains('eb-textbox') && !onEdge(obj, e.clientX, e.clientY, 6)) {
+          const blk = textBlockAt(e.target);
+          if (blk && blk !== obj && obj.contains(blk)) { obj = blk; }
+        }
         // The right button on an object shows that object's settings, whatever the
         // object is -- not only on the thin band of its border. Inside something
         // written in, a cell or a caption, the menu for text is what is wanted.
@@ -26540,6 +26778,33 @@ ${insideObjects('.eb-paper.boxed')} {
        * are this paragraph's indents, which is the division a word processor makes
        * and the one a writer expects.
        */
+      /**
+       * 定規に出す字下げと帯を、カーソルのある段落から読む。字下げは段落に書いた値だけでなく、
+       * 書式（スタイル）から来たものも含めて実際にかかっている値を測る。帯は段落が入っている
+       * 箱（枠・文字枠・セル）の内側で、本文の段落なら用紙の余白（BUGS #302）。
+       */
+      readIndents(block) {
+        const c = canvas();
+        if (!block || !c || !c.contains(block)) {
+          this.ind = { left: 0, right: 0, first: 0 };
+          this.rulerBox = null;
+          return;
+        }
+        const cs = window.getComputedStyle(block);
+        this.rulerFontPx = parseFloat(cs.fontSize) || 0;
+        const mm = (v) => Math.round((parseFloat(v) || 0) * MM * 10) / 10;
+        this.ind = { left: mm(cs.marginLeft), right: mm(cs.marginRight), first: mm(cs.textIndent) };
+        const box = block.parentElement;
+        const sh = this.$el && this.$el.querySelector ? this.$el.querySelector('.eb-sheets > .eb-sheet') : null;
+        if (!box || box === c || !sh) { this.rulerBox = null; return; }
+        const z = this.frameZoom() || 1;
+        const r = box.getBoundingClientRect();
+        const bs = window.getComputedStyle(box);
+        const x0 = sh.getBoundingClientRect().left;
+        const l = (r.left - x0) / z * MM + (parseFloat(bs.borderLeftWidth) + parseFloat(bs.paddingLeft)) * MM;
+        const rr = (r.right - x0) / z * MM - (parseFloat(bs.borderRightWidth) + parseFloat(bs.paddingRight)) * MM;
+        this.rulerBox = { l: Math.round(l * 10) / 10, r: Math.round(rr * 10) / 10 };
+      },
       rulerGrab(e, what) {
         const p = normalisePaper(this.doc.paper);
         const start = {
@@ -26558,22 +26823,38 @@ ${insideObjects('.eb-paper.boxed')} {
         if (what === 'ml' || what === 'mr') { history.push(true); } else { history.push(true); }
         const z = this.frameZoom() || 1;
         const x0 = e.clientX;
+        // 動かす刻みは定規の単位（1pt・1px・1mm・1cm・0.1インチ・BUGS #312）。ファイルには
+        // インデントの単位で書く（BUGS #311）。
+        const ru = rulerUnitOf(this.settings.rulerUnit);
+        const onGrid = (mm) => tidyNum(Math.round(mm / ru.mm / ru.step) * ru.step * ru.mm);
+        const unit = unitOf2(this.settings.indentUnit);
+        const fpx = block && window.getComputedStyle ? parseFloat(window.getComputedStyle(block).fontSize) || 16 : 16;
+        const snap = (mm) => {
+          const g = onGrid(mm);
+          const n = tidyNum(mmToUnit(g, unit, fpx));
+          return { mm: g, css: n ? n + INDENT_UNITS[unit].css : '' };
+        };
         const move = (ev) => {
-          const d = Math.round(((ev.clientX - x0) / z * MM) * 2) / 2;
+          const raw = (ev.clientX - x0) / z * MM;
           if (what === 'ml') {
-            this.doc.paper.margin.left = Math.max(0, Math.min(100, start.ml + d));
+            this.doc.paper.margin.left = Math.max(0, Math.min(100, onGrid(start.ml + raw)));
           } else if (what === 'mr') {
-            this.doc.paper.margin.right = Math.max(0, Math.min(100, start.mr - d));
+            this.doc.paper.margin.right = Math.max(0, Math.min(100, onGrid(start.mr - raw)));
           } else if (what === 'left') {
-            this.ind.left = Math.max(-50, Math.min(150, start.left + d));
-            pieces.forEach((b) => styleOrClear(b, 'margin-left', this.ind.left ? this.ind.left + 'mm' : ''));
+            const w = snap(Math.max(-50, Math.min(150, start.left + raw)));
+            this.ind.left = w.mm;
+            pieces.forEach((b) => styleOrClear(b, 'margin-left', w.css));
           } else if (what === 'right') {
-            this.ind.right = Math.max(-50, Math.min(150, start.right - d));
-            pieces.forEach((b) => styleOrClear(b, 'margin-right', this.ind.right ? this.ind.right + 'mm' : ''));
+            const w = snap(Math.max(-50, Math.min(150, start.right - raw)));
+            this.ind.right = w.mm;
+            pieces.forEach((b) => styleOrClear(b, 'margin-right', w.css));
           } else if (what === 'first') {
-            this.ind.first = Math.max(-50, Math.min(150, start.first + d));
-            styleOrClear(block, 'text-indent', this.ind.first ? this.ind.first + 'mm' : '');
+            const w = snap(Math.max(-50, Math.min(150, start.first + raw)));
+            this.ind.first = w.mm;
+            styleOrClear(block, 'text-indent', w.css);
           }
+          // 字下げで箱そのものが動くことがある（表の列の幅は中身で決まる）。帯を測り直す。
+          if (block) { this.readIndents(block); }
         };
         const up = () => {
           window.removeEventListener('pointermove', move);
@@ -26603,14 +26884,23 @@ ${insideObjects('.eb-paper.boxed')} {
 
       // ---- paragraph, contents, characters --------------------------------------
       openPara() {
-        const now = paragraphProps();
+        // 段落の設定は「段落のプロパティ」の「インデントと間隔」のタブにまとめた（BUGS #308）。
+        const block = cutHead(selectedBlocks(true)[0]);
+        if (block && !(block.matches && block.matches(OBJECT_SEL))) {
+          frameEl = block;
+          framePinned = true;
+          this._fpWantTab = 'para';
+          this.openFrameProps();
+          return;
+        }
+        const now = paragraphProps(null, this.settings.indentUnit);
         ctxRange = getRange() ? getRange().cloneRange() : null;
         if (now) { this.para = Object.assign({}, now); }
         // What the boxes said when the dialogue opened: OK writes only what was changed.
         paraOpened = JSON.stringify(this.para);
         this.paraOpen = true;
       },
-      applyPara() {
+      applyPara(target) {
         const v = Object.assign({}, this.para);
         this.paraOpen = false;
         let changed = null;
@@ -26624,9 +26914,16 @@ ${insideObjects('.eb-paper.boxed')} {
         const size = PAPERS[paper.size] || PAPERS.A4;
         const across = (paper.vertical ? (paper.orientation === 'landscape' ? size.w : size.h) - paper.margin.top - paper.margin.bottom
           : (paper.orientation === 'landscape' ? size.h : size.w) - paper.margin.left - paper.margin.right);
-        const room = Math.max(10, Math.floor(across - 10));
-        [['lineHeight', 1, 4], ['before', 0, 200], ['after', 0, 200], ['left', -100, room], ['right', -100, room],
-          ['firstLine', -100, room], ['pad', 0, 40], ['borderWidth', 0.25, 20]].forEach(([k, lo, hi]) => {
+        const roomMm = Math.max(10, Math.floor(across - 10));
+        // 字下げは設定の単位で入っている。限りもその単位に直して当てる（BUGS #311）。
+        const unit = unitOf2(this.settings.indentUnit);
+        const tb = (target && target.isConnected) ? target : cutHead(selectedBlocks(true)[0]);
+        const fpx = tb && window.getComputedStyle ? parseFloat(window.getComputedStyle(tb).fontSize) || 16 : 16;
+        const inU = (mm) => tidyNum(mmToUnit(mm, unit, fpx));
+        const room = inU(roomMm);
+        v.unit = unit;
+        [['lineHeight', 1, 4], ['before', 0, 200], ['after', 0, 200], ['left', inU(-100), room], ['right', inU(-100), room],
+          ['firstLine', inU(-100), room], ['pad', 0, 40], ['borderWidth', 0.25, 20]].forEach(([k, lo, hi]) => {
           if (v[k] === '' || v[k] == null) { return; }
           const n = Number(String(v[k]).replace(/[０-９．－]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
           if (!isFinite(n)) { v[k] = opened[k] != null ? opened[k] : ''; return; }
@@ -26639,7 +26936,14 @@ ${insideObjects('.eb-paper.boxed')} {
           changed = new Set(Object.keys(v).filter((k) => JSON.stringify(v[k]) !== JSON.stringify(was[k])));
         }
         paraOpened = null;
-        if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        if (target && target.isConnected) {
+          // プロパティの画面から：その段落に。
+          const r = document.createRange();
+          r.selectNodeContents(target);
+          r.collapse(true);
+          try { selectRange(r); } catch (e) { /* the text moved on */ }
+        } else if (ctxRange) { try { selectRange(ctxRange); } catch (e) { /* the text moved on */ } }
+        if (changed && !changed.size) { return; }
         this.blockRun(() => setParagraphProps(v, changed));
         this.repaginate();
       },
@@ -27028,6 +27332,10 @@ ${insideObjects('.eb-paper.boxed')} {
             folder: this.settings.folder, theme: this.settings.theme, language: this.settings.language,
             versionKeep: this.settings.versionKeep, versionWhen: this.settings.versionWhen,
             placement: this.settings.placement,
+            keyDelete: this.settings.keyDelete ? '1' : '0',
+            showSpaces: this.settings.showSpaces ? '1' : '0',
+            indentUnit: this.settings.indentUnit,
+            rulerUnit: this.settings.rulerUnit,
           } });
           this.applyTheme(this.settings.theme);
           await this.applyLanguage(this.settings.language);
@@ -27255,13 +27563,19 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         if ((e.key === 'Delete' || e.key === 'Backspace') && frameTaken && frameEl) {
           e.preventDefault();
+          // 選んだ物を消すのは Delete キーだけ。Backspace では何も消さない（オーナー 2026-09-30
+          //「BSは使うな。DELキーだけだ」BUGS #307）。
+          if (e.key === 'Backspace') { return undefined; }
           if (frameMore.length) {
+            const gone = frameAll().filter((o) => this.settings.keyDelete || !keySafe(o));
+            if (!gone.length) { return undefined; }
             history.push(true);
-            frameAll().forEach((o) => deleteObject(o));
+            gone.forEach((o) => deleteObject(o));
             this.clearFrame();
             this.settleFrame();
             return undefined;
           }
+          if (!this.settings.keyDelete && keySafe(frameEl)) { return undefined; }
           this.frameCmd('delete');
           return undefined;
         }
@@ -27328,6 +27642,10 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.versionKeep = s.versionKeep == null ? 10 : s.versionKeep;
           this.settings.versionWhen = s.versionWhen || 'manual';
           this.settings.placement = s.placement === 'free' ? 'free' : 'standard';
+          this.settings.keyDelete = s.keyDelete === '1';
+          this.settings.showSpaces = s.showSpaces === '1';
+          this.settings.indentUnit = ['pt', 'mm', 'ch'].indexOf(s.indentUnit) >= 0 ? s.indentUnit : 'pt';
+          this.settings.rulerUnit = RULER_UNITS[s.rulerUnit] ? s.rulerUnit : 'cm';
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
           if (s.folderColours) { try { this.catColours = JSON.parse(s.folderColours) || {}; } catch (e) { this.catColours = {}; } }
           this.build = s.build || '';
@@ -27353,6 +27671,7 @@ ${insideObjects('.eb-paper.boxed')} {
       },
     },
     watch: {
+      tategaki() { this.$nextTick(() => this.syncRuler()); },
       paperOpen(on) { if (on) { this.paperWas = JSON.parse(JSON.stringify(this.doc.paper || {})); } },
       // 枠線の種類と太さを連動させる（オーナー 2026-09-21）。線を選んで太さが空なら
       // 細線（0.75pt、LibreOffice の既定と同じ）を入れる。太さを空か 0 にしたら「なし」。
@@ -27366,7 +27685,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if ((v === '' || v == null || !(n > 0)) && this.fprops.border && this.fprops.border !== 'none') { this.fprops.border = 'none'; }
         else if (n > 0 && (!this.fprops.border || this.fprops.border === 'none')) { this.fprops.border = 'solid'; }
       },
-      'doc.id'(id) {
+      'doc.id'(id) { this.$nextTick(() => this.syncRuler());
         if (id) { window.localStorage.setItem('eb-last-doc', String(id)); }
         // What was found belongs to the document it was found in (BUGS E2).
         this.find.hits = [];
@@ -27391,9 +27710,9 @@ ${insideObjects('.eb-paper.boxed')} {
       'doc.paper.orientation'() { this.$nextTick(() => this.repaginate()); },
       'doc.paper.margin': { deep: true, handler() { this.$nextTick(() => this.repaginate()); } },
       fontPageItems() { this.loadPreviewFonts(); },
-      zoom(v) { window.localStorage.setItem('eb-zoom', String(v)); this.$nextTick(() => this.syncFrame()); },
-      flow() { this.$nextTick(() => this.syncFrame()); },
-      'doc.paper': { deep: true, handler() { if (this.doc.id && !this.opening) { this.markDirty(); this.scheduleAutosave(); } } },
+      zoom(v) { this.$nextTick(() => this.syncRuler()); window.localStorage.setItem('eb-zoom', String(v)); this.$nextTick(() => this.syncFrame()); },
+      flow() { this.$nextTick(() => this.syncRuler()); this.$nextTick(() => this.syncFrame()); },
+      'doc.paper': { deep: true, handler() { this.$nextTick(() => this.syncRuler()); if (this.doc.id && !this.opening) { this.markDirty(); this.scheduleAutosave(); } } },
       autosave(v) { window.localStorage.setItem('eb-autosave', v ? '1' : '0'); },
       guides(v) { window.localStorage.setItem('eb-guides', v ? '1' : '0'); },
       boxes(v) { window.localStorage.setItem('eb-boxes', v ? '1' : '0'); },
@@ -27408,15 +27727,22 @@ ${insideObjects('.eb-paper.boxed')} {
         this.$nextTick(() => this.refreshPreview());
       },
       pasteObject(v) { window.localStorage.setItem('eb-paste-object', v ? '1' : '0'); },
-      ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => this.syncFrame()); },
+      ruler(v) { window.localStorage.setItem('eb-ruler', v ? '1' : '0'); this.$nextTick(() => { this.syncFrame(); this.syncRuler(); }); },
       review(v) {
         // 文書に書く（ブラウザには覚えない）。入り切りも文書の変更として保存する。
         if (this.doc && this.doc.id && !!this.doc.review !== !!v) { this.doc.review = !!v; this.touch(); }
       },
       menu(v) { if (v) { this.$nextTick(() => this.fitMenu()); } },
+      'settings.showSpaces'() { this.$nextTick(() => this.drawSpaces()); },
     },
     mounted() {
       canvasEl = document.getElementById('eb-canvas');
+      // 空白の表示：紙の中身が変われば（字・段落・書式・ページ割り）描き直す（BUGS #310）。
+      if (canvasEl && typeof MutationObserver === 'function') {
+        new MutationObserver(() => this.spacesSoon()).observe(canvasEl,
+          { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'class'] });
+      }
+      if (document.fonts && document.fonts.addEventListener) { document.fonts.addEventListener('loadingdone', () => this.spacesSoon()); }
       // Enter at the end of a heading makes a paragraph, not a <div>. Chrome's own
       // separator is a div, which is not a paragraph here: no spacing below it, no
       // body style, and never cut at a page fold (BUGS E9). LibreOffice follows a
@@ -27869,6 +28195,9 @@ ${insideObjects('.eb-paper.boxed')} {
         // A save still on the wire is not in the file either: leaving now can cut it off.
         if (this.dirty || this.saving) { e.preventDefault(); e.returnValue = ''; }
       });
+      // 窓や左の一覧の大きさが変わると紙の位置も変わるので、定規の目盛りを合わせ直す。
+      if (typeof ResizeObserver === 'function') { new ResizeObserver(() => this.syncRuler()).observe(this.$el); }
+      window.addEventListener('resize', () => this.syncRuler());
       this.boot();
     },
     beforeUnmount() {

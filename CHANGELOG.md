@@ -3,6 +3,60 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] — 2026-09-30
+
+### Added
+- **Settings → Unit for indents**: pt (the default), mm or characters. The indent
+  boxes in the paragraph properties are labelled and filled in that unit, and indents
+  set there or on the ruler are written into the file in it. Characters are written
+  as CSS `em`, so an indent of two characters stays two characters when the letters
+  are made bigger.
+- **Settings → Unit for the ruler**: pt, px, mm, cm (the default, as before) or
+  inches. The ruler is marked in that unit, and the indent and margin handles move
+  1 pt, 1 px, 1 mm, 1 cm or 0.1 inch at a time.
+- **Settings → Show spaces (half-width, full-width and tabs)**, off by default.
+  Half-width spaces are marked ·, full-width spaces □ and tabs →. The marks are
+  drawn over the page only: nothing is written into the document, and they are
+  neither saved nor printed.
+- **Settings → Let the Delete key delete an object frame**, off by default (see
+  Changed).
+- The paragraph properties open on a new first tab, **Indents and spacing**:
+  alignment, line height, space above and below, the left, right and first-line
+  indents, and the page-break options. A paragraph's rule and shading stay on the
+  Borders and Area tabs.
+
+### Changed
+- The ruler is a bar of its own under the toolbar, across the whole width, with
+  its scale lined up with the paper. It follows zooming and scrolling.
+- The ruler follows the paragraph the caret is in. Inside a block frame, a text
+  frame or a table cell, its white band and its zero are the inside of that box,
+  and the handles stand on the paragraph's own indents. The page-margin handles
+  are shown for the body text only. The indents shown are the ones in effect,
+  including those that come from a style.
+- The indent handles keep the ordinary arrow pointer, so the pointer no longer
+  hides the handle being grabbed.
+- Clicking or right-clicking a paragraph inside a block frame, a box or a note
+  takes the paragraph, with its own toolbar and its own menu (paragraph
+  properties). The frame itself is taken by clicking its edge, or its background
+  outside the paragraphs.
+- **Backspace never deletes a selected object.** The Delete key deletes an object
+  (a frame, text frame, picture, shape, table, line…) only when the new setting is
+  on. The Delete item in the right-button menu and the delete button on the toolbar
+  work as before.
+- The **Paragraph settings…** item is gone from the right-button menu: everything
+  in it is on the Indents and spacing tab of the paragraph properties.
+
+### Fixed
+- A horizontal scrollbar appeared with no page to the right of the paper. The
+  ruler's background band reached past the page area.
+- An empty paragraph left in the writing (layer 0) could be deleted from the
+  toolbar but not from the layer bar's right-button menu. Both now follow one rule:
+  the last paragraph can be deleted while other objects remain on the page, and is
+  kept only when deleting it would leave nothing at all.
+- The ruler's first-line, left and right indent handles had no effect on a
+  paragraph inside a frame: they were measured from the page margins, not from the
+  box the paragraph is in.
+
 ## [0.1.2] — 2026-09-30
 
 ### Fixed
