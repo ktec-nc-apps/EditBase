@@ -403,7 +403,7 @@
   .eb-desk { display: block !important; background: none !important; padding: 0 !important; overflow: visible !important; }
   .eb-paper { box-shadow: none !important; background-image: none !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
   /* the sheets themselves, the folds between them, and every mark of the editor's */
-  .eb-sheets, .eb-pagespacer, .eb-fsel, .eb-mate, .eb-snap, .eb-placeband, .eb-fdrop,
+  .eb-sheets, .eb-pagespacer, .eb-fsel, .eb-mate, .eb-snap, .eb-placeband, .eb-ruleband, .eb-fdrop,
   .eb-ruler, .eb-rulerbar, .eb-wsmarks, .eb-preview, .eb-layers, .eb-docset, .eb-newbuild, .eb-toast, .eb-status, .eb-rail,
   .eb-ctxmenu, .eb-modal-back, .eb-fbar { display: none !important; }
   /* Nothing may hold the writing to one screenful: the page break has to be free
@@ -1684,3 +1684,56 @@
 .eb-wsmarks i.h::after { content: '·'; font-size: 14px; font-weight: 700; }
 .eb-wsmarks i.t::after { content: '→'; font-size: 11px; }
 .eb-wsmarks i.z::after { content: ''; width: 72%; height: 72%; border: 1px solid currentColor; box-sizing: border-box; }
+/* 文書のスタイルの「見出しのデザイン」タブ：並び全体を1画面に収める（スクロールさせない・オーナー 2026-10-01）。 */
+#editbase-root .eb-modal.wide .eb-hdgrid { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 5px; }
+/* 画面の中身（body）の中に置いたタブ：中身の余白に重ねて余白を足さない。 */
+#editbase-root .eb-tabbed .body > .eb-fp-tabs { padding: 0; margin: 0 0 12px; }
+/* 升目の線（画面だけ・印刷に出ない）。字の領域に、字送り・行送りの間隔で薄く引く（BUGS #340）。 */
+#editbase-root .eb-paperwrap.showgrid .eb-sheet::after {
+  content: ''; position: absolute; pointer-events: none;
+  top: var(--eb-mt); left: var(--eb-ml); right: var(--eb-mr); bottom: var(--eb-mb);
+  background-image: linear-gradient(to bottom, rgba(37, 99, 235, .16) 1px, transparent 1px), linear-gradient(to right, rgba(37, 99, 235, .10) 1px, transparent 1px);
+  background-size: var(--eb-pitch-x) var(--eb-pitch-y);
+}
+/* 罫線モード（BUGS #347）：引いている枠・Tab で入れた内側の線・大きさ（字×行）。 */
+.eb-ruleband {
+  position: absolute; z-index: 22; pointer-events: none;
+  border: 1.5px solid var(--primary); background: rgba(37, 99, 235, .06); box-sizing: border-box;
+}
+.eb-ruleband.erase { border: 1.5px dashed #d92d20; background: rgba(217, 45, 32, .06); }
+.eb-ruleband i { position: absolute; background: var(--primary); opacity: .7; }
+.eb-ruleband i.v { top: 0; bottom: 0; width: 1px; }
+.eb-ruleband i.h { left: 0; right: 0; height: 1px; }
+.eb-ruleband .lbl {
+  position: absolute; left: 100%; top: 100%; margin: 4px; white-space: nowrap;
+  font: 12px/1.4 system-ui, sans-serif; color: #fff; background: var(--primary); border-radius: 4px; padding: 1px 6px;
+}
+#editbase-root .eb-menu-label { padding: 4px 10px 2px; font-size: 12px; opacity: .7; }
+#editbase-root .eb-menu-hint { padding: 6px 10px; font-size: 12px; opacity: .7; max-width: 260px; white-space: normal; }
+#editbase-root .eb-rulekind { display: inline-block; width: 22px; height: 0; margin-right: 8px; vertical-align: middle; border-color: currentColor !important; }
+/* 文書の並べ替え（BUGS #348）：落とす先の前後に線を出す。 */
+#editbase-root .eb-docitem.dropabove { box-shadow: inset 0 2px 0 var(--primary); }
+#editbase-root .eb-docitem.dropbelow { box-shadow: inset 0 -2px 0 var(--primary); }
+/* 罫線モード：紙の上の重ね物（選んだ物の枠・列の境の取っ手など）は押下を通し、線を引ける。 */
+#editbase-root .eb-paperwrap.ruling > :not(#eb-canvas), #editbase-root .eb-paperwrap.ruling > :not(#eb-canvas) * { pointer-events: none !important; }
+#editbase-root .eb-paperwrap.ruling #eb-canvas, #editbase-root .eb-paperwrap.ruling #eb-canvas * { cursor: crosshair; }
+/* 描いている斜線・矢印・括弧・折れ線の見本：枠は出さず、描く絵だけ。 */
+.eb-ruleband.art { border: none; background-color: transparent; background-repeat: no-repeat; background-size: 100% 100%; }
+/* タブ位置の印（左・中央・右・小数点）とルーラーを押して置く所（BUGS #394） */
+.eb-ruler .tabhit { position: absolute; top: 0; bottom: 0; cursor: copy; }
+.eb-ruler .tabm { z-index: 2; cursor: ew-resize; touch-action: none; }
+.eb-ruler .tabm, .eb-tabkind .tabm { position: absolute; bottom: 2px; height: 7px; box-sizing: border-box; border-bottom: 2px solid var(--text); }
+.eb-ruler .hm, .eb-ruler .ind { z-index: 3; }
+.eb-tabkind .tabm { position: relative; display: inline-block; bottom: 0; }
+.tabm.l { width: 7px; margin-left: -1px; border-left: 2px solid var(--text); }
+.tabm.r { width: 7px; margin-left: -6px; border-right: 2px solid var(--text); }
+.tabm.c, .tabm.d { width: 10px; margin-left: -5px; }
+.tabm.c::before, .tabm.d::before { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; border-left: 2px solid var(--text); }
+.tabm.d::after { content: ''; position: absolute; left: 7px; top: 1px; width: 2px; height: 2px; background: var(--text); }
+.eb-tabkind .tabm { margin-left: 0; }
+.eb-tabkind {
+  position: absolute; left: 2px; top: 2px; width: 18px; height: 16px; padding: 0 0 0 4px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--surface); cursor: pointer; z-index: 4;
+  display: flex; align-items: flex-end; justify-content: flex-start;
+}
+.eb-tabrow { align-items: flex-end; }

@@ -3,6 +3,83 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] — 2026-10-02
+
+Built and checked by laying out five Japanese government forms (an employment
+conditions notice, a resignation certificate, a CV, a wage ledger and a staff
+register) and printing them over the original PDFs: the rules land within 0.5 mm of the
+originals and nearly all of the text within 0.5 mm.
+
+### Added
+- **Characters and lines per page.** A page can be set up by the number of
+  characters per line and lines per page, or by the character and line pitch in
+  millimetres (to 0.001 mm). The screen and the printout match, and half-width
+  letters take half a cell. A grid can be shown on the page.
+- **Ruling mode.** Draw a table by dragging on the page grid; press Tab while
+  dragging to add lines. Draw over a line to change its kind (thin, solid, medium,
+  thick, double, dotted, dashed), or erase it. Also draws diagonal lines, arrows,
+  round, square and curly brackets, and polylines. Drawn lines snap to the lines
+  already there. A table drawn on empty lines or below the text goes into the text
+  (it takes its room, and the text below moves down as its cells grow); the lines
+  down to it are added for you, as with click-and-type.
+- **Tab positions.** Left, centred, right and decimal tabs per paragraph, measured
+  from the left indent. Set them in the paragraph's Tabs tab in millimetres, or
+  press the ruler to place one, drag it to move it and drag it off the ruler to
+  remove it.
+- **Distribute.** Spread the chosen characters over a given number of characters
+  (to 0.01), and distribute the text of a table cell.
+- **Line spacing by the line pitch.** Fractions of a line (1/4 to 3/4), several
+  lines, or any amount.
+- **Raise or lower characters** by a given number of points.
+- **Table cells:** width and row height in millimetres, separate inner margins
+  on each side, vertical text, distributed alignment, and the paragraph settings
+  of the lines inside a cell. Each line of a cell can be aligned on its own.
+- A 1 pt rule.
+- Documents can be put in order within a category by dragging them. "Sort by date
+  modified" puts the order back.
+- Ctrl+Enter inserts a page break.
+- A setting makes Enter in a table cell start a new paragraph, as in LibreOffice.
+  By default it still breaks the line.
+- In the properties of a placed object, its position is given from the top-left
+  corner of the paper.
+
+### Fixed
+- A table placed after a page break on page 2 could be pulled up to the top of
+  that page when its size was changed.
+- Placing an object that pushes the text aside could move the objects below it
+  further than the text moved, and they did not come back when it was removed.
+- After a page break, an object's space above was lost when the page before was full.
+- The outer margin of an object with text wrapped round it was cleared every time
+  its properties were applied.
+- Text in a middle- or bottom-aligned cell of a ruled table sat about 0.4 mm too low.
+- A size typed into the toolbar could be replaced by the old size before Enter
+  was pressed.
+- Setting the size of all the text in a cell that already had a size could break
+  the cell apart (data loss).
+- "No border" on a cell was lost when the document was saved.
+- An object hanging over the left or right margin made the whole printout shrink,
+  or was cut off.
+- Changing one paragraph setting could clear indents set earlier.
+- A table inserted from the table dialog could land at the top of the document.
+- Changing a column width in a table split across pages could halve the first part.
+- Pasting into an empty table cell added empty lines.
+- Pasting several paragraphs into a list item produced invalid HTML.
+- After drawing or erasing lines, clicking a cell could fail to put the cursor in it.
+- Typing after Enter in a page with a character grid could join the previous line.
+- Half-width katakana is converted to full width.
+- Clicking or right-clicking the border of a block frame, a box or a note took the
+  paragraph inside it. Near the border, the frame itself is taken.
+- Right-clicking a row in the layer bar could offer "Frame properties" for a
+  paragraph or a shape.
+- Closing a dialog could jump the page to another page.
+
+### Changed
+- The right-button menu says what each kind of alignment acts on: "Position of the
+  …" moves the object itself, "Alignment of the text" aligns the lines inside it.
+- A shape has one name everywhere.
+- Wording follows Word's page setup: "Characters and lines", "Characters per
+  line", "Lines per page", "Show the character grid".
+
 ## [0.1.4] — 2026-10-01
 
 ### Fixed

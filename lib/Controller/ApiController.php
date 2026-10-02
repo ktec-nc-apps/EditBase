@@ -94,8 +94,15 @@ class ApiController extends Controller {
 				'indentUnit' => $this->config->getUserValue($uid, Application::APP_ID, 'indentUnit', 'pt'),
 				// The unit the ruler is marked in and moves by: pt, px, mm, cm (the default) or inches.
 				'rulerUnit' => $this->config->getUserValue($uid, Application::APP_ID, 'rulerUnit', 'cm'),
+				// A new document on a grid of characters and lines; the grid drawn on screen (both off unless chosen).
+				'gridNew' => $this->config->getUserValue($uid, Application::APP_ID, 'gridNew', '0'),
+				'showGrid' => $this->config->getUserValue($uid, Application::APP_ID, 'showGrid', '0'),
+				// What the Tab key does outside a table: 'indent' (as before) or 'tab' (a tab that lines the words up).
+				'tabKey' => $this->config->getUserValue($uid, Application::APP_ID, 'tabKey', 'indent'),
+				'cellEnter' => $this->config->getUserValue($uid, Application::APP_ID, 'cellEnter', 'br'),
 				// What colour each category is drawn in, as the writer chose.
 				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
+				'docOrder' => $this->config->getUserValue($uid, Application::APP_ID, 'docOrder', ''),
 				'languages' => $this->availableLanguages(),
 				// What the browser has loaded is not always what is on the server:
 				// a page left open goes on running the code it started with. This is
@@ -156,12 +163,41 @@ class ApiController extends Controller {
 				$this->config->setUserValue($uid, Application::APP_ID, 'indentUnit', $indentUnit);
 			}
 			$rulerUnit = $this->request->getParam('rulerUnit');
-			if (in_array($rulerUnit, ['pt', 'px', 'mm', 'cm', 'in'], true)) {
+			$tabKey = $this->request->getParam('tabKey');
+			if ($tabKey === 'indent' || $tabKey === 'tab') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'tabKey', $tabKey);
+			}
+			$cellEnter = $this->request->getParam('cellEnter');
+			if ($cellEnter === 'br' || $cellEnter === 'para') {
+				$this->config->setUserValue($uid, Application::APP_ID, 'cellEnter', $cellEnter);
+			}
+			foreach (['gridNew', 'showGrid'] as $flag) {
+				$v = $this->request->getParam($flag);
+				if ($v === '1' || $v === '0') {
+					$this->config->setUserValue($uid, Application::APP_ID, $flag, $v);
+				}
+			}
+			if (in_array($rulerUnit, ['pt', 'px', 'mm', 'cm', 'in', 'col'], true)) {
 				$this->config->setUserValue($uid, Application::APP_ID, 'rulerUnit', $rulerUnit);
 			}
 			$colours = $this->request->getParam('folderColours');
 			if (is_string($colours) && strlen($colours) < 4000) {
 				$this->config->setUserValue($uid, Application::APP_ID, 'folderColours', $colours);
+			}
+			// 文書一覧の並び順（カテゴリごとの文書の id の並び）。手で並べ替えたときだけ書く。
+			$order = $this->request->getParam('docOrder');
+			if (is_string($order) && strlen($order) < 200000) {
+				$parsed = json_decode($order, true);
+				if (is_array($parsed)) {
+					$clean = [];
+					foreach ($parsed as $cat => $ids) {
+						// 鍵は「c:カテゴリ名」：数字だけの名前でも配列にならないように
+						if (is_string($cat) && strncmp($cat, 'c:', 2) === 0 && strlen($cat) < 300 && is_array($ids)) {
+							$clean[$cat] = array_values(array_map('intval', array_filter($ids, 'is_numeric')));
+						}
+					}
+					$this->config->setUserValue($uid, Application::APP_ID, 'docOrder', ($clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : '{}'));
+				}
 			}
 			// The paper setup a new document starts from (JSON, produced by the editor).
 			$paper = $this->request->getParam('paper');
