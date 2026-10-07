@@ -118,6 +118,144 @@ class DocumentCheck {
 	}
 
 	/**
+	 * Whether a <script> is EditBase's own program: named eb-script, and its text
+	 * one of DOC_SCRIPT_SHA256. The same judgement as analyse() makes.
+	 */
+	public static function isOwnScript(string $attributes, string $text): bool {
+		if (!preg_match('/(^|\s)id\s*=\s*(?:"eb-script"|\'eb-script\'|eb-script(?=[\s\/>]|$))/i', $attributes)) {
+			return false;
+		}
+		return in_array(hash('sha256', trim($text)), self::DOC_SCRIPT_SHA256, true);
+	}
+
+	/**
+	 * A document shown as a web page under Nextcloud's content security policy:
+	 * EditBase's own program (isOwnScript) is given the page's nonce so that it
+	 * runs; every other script in the file is taken out. The preview used to give
+	 * the nonce to every script in the file, so a script somebody had written into
+	 * a shared document ran in the reader's session (review 2026-10-04, 高1).
+	 *
+	 * The text is read the way a browser reads tags, not with one pattern over the
+	 * whole of it: "<script" inside an attribute value (title="<script>") is not a
+	 * tag and was being rewritten (低5), and the text of a <style>, <textarea>,
+	 * <title> or <xmp> is not markup either. Everything but the scripts is handed
+	 * back byte for byte.
+	 */
+	public static function nonceOwnScript(string $html, string $nonce): string {
+		$out = '';
+		$len = strlen($html);
+		$i = 0;
+		$raw = ['style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'];
+		while ($i < $len) {
+			$lt = strpos($html, '<', $i);
+			if ($lt === false) {
+				$out .= substr($html, $i);
+				break;
+			}
+			$out .= substr($html, $i, $lt - $i);
+			$i = $lt;
+			if (substr($html, $i, 4) === '<!--') {
+				// A comment runs to its "-->", whatever is inside it.
+				$end = strpos($html, '-->', $i + 4);
+				$stop = $end === false ? $len : $end + 3;
+				$out .= substr($html, $i, $stop - $i);
+				$i = $stop;
+				continue;
+			}
+			if (!preg_match('/\G<(\/?)([a-zA-Z][^\s\/>]*)/', $html, $m, 0, $i)) {
+				// "<" that begins no tag (a doctype, a lone "<"): copied as it stands.
+				if (preg_match('/\G<[!?][^>]*>?/', $html, $mm, 0, $i)) {
+					$out .= $mm[0];
+					$i += strlen($mm[0]);
+				} else {
+					$out .= '<';
+					$i++;
+				}
+				continue;
+			}
+			$tagEnd = self::tagEnd($html, $i + strlen($m[0]));
+			$name = strtolower($m[2]);
+			if ($m[1] === '/' || ($name !== 'script' && !in_array($name, $raw, true))) {
+				$out .= substr($html, $i, $tagEnd - $i);
+				$i = $tagEnd;
+				continue;
+			}
+			if ($name === 'plaintext') {
+				$out .= substr($html, $i);
+				break;
+			}
+			// A raw text element: its text ends only at its own end tag.
+			$close = preg_match('/<\/' . $name . '(?=[\s\/>])/i', $html, $cm, PREG_OFFSET_CAPTURE, $tagEnd) ? (int)$cm[0][1] : $len;
+			if ($name !== 'script') {
+				$out .= substr($html, $i, $close - $i);
+				$i = $close;
+				continue;
+			}
+			$attrEnd = $tagEnd > 0 && $html[$tagEnd - 1] === '>' ? $tagEnd - 1 : $tagEnd;
+			$attributes = substr($html, $i + strlen($m[0]), $attrEnd - $i - strlen($m[0]));
+			$text = substr($html, $tagEnd, $close - $tagEnd);
+			$after = $close >= $len ? $len : self::tagEnd($html, $close + 2 + strlen($name));
+			if (self::isOwnScript($attributes, $text)) {
+				// Ours: given the nonce. Put first, so that it is the one a browser
+				// keeps should the file carry a nonce of its own (the first wins).
+				$out .= '<script nonce="' . htmlspecialchars($nonce, ENT_QUOTES) . '"' . $attributes . '>' . $text . substr($html, $close, $after - $close);
+			}
+			$i = $after;
+		}
+		return $out;
+	}
+
+	/**
+	 * Where the tag whose name ends at $from ends: just after its ">". Read as the
+	 * HTML tokenizer reads attributes: a quote counts only where a value begins
+	 * (after "="), so <p "><script> is a paragraph and then a script, as it is to
+	 * a browser, and not a quoted value that hides the script.
+	 */
+	private static function tagEnd(string $html, int $from): int {
+		$len = strlen($html);
+		$space = static fn (string $c): bool => $c === ' ' || $c === "\t" || $c === "\n" || $c === "\r" || $c === "\f";
+		$k = $from;
+		while ($k < $len) {
+			$ch = $html[$k];
+			if ($ch === '>') {
+				return $k + 1;
+			}
+			if ($space($ch) || $ch === '/') {
+				$k++;
+				continue;
+			}
+			// An attribute name: its first character whatever it is, then up to a
+			// space, "/", ">" or "=".
+			$k++;
+			while ($k < $len && !$space($html[$k]) && $html[$k] !== '/' && $html[$k] !== '>' && $html[$k] !== '=') {
+				$k++;
+			}
+			while ($k < $len && $space($html[$k])) {
+				$k++;
+			}
+			if ($k < $len && $html[$k] === '=') {
+				$k++;
+				while ($k < $len && $space($html[$k])) {
+					$k++;
+				}
+				if ($k >= $len) {
+					break;
+				}
+				$q = $html[$k];
+				if ($q === '"' || $q === "'") {
+					$end = strpos($html, $q, $k + 1);
+					$k = $end === false ? $len : $end + 1;
+				} else {
+					while ($k < $len && !$space($html[$k]) && $html[$k] !== '>') {
+						$k++;
+					}
+				}
+			}
+		}
+		return $len;
+	}
+
+	/**
 	 * Whether an address would run as a script when followed. A browser drops tabs
 	 * and line breaks anywhere in an address, and control characters and spaces
 	 * before it, so "java&#9;script:" and "&#1;javascript:" are javascript: to it

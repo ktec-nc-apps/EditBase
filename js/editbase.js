@@ -12,6 +12,8 @@
   const { createApp } = Vue;
 
   const BASE = ((window.OC && OC.generateUrl) ? OC.generateUrl('/apps/editbase') : '/apps/editbase') + '/';
+  // AI-Hub's own pages for a remembered conversation: read back, saved, summed up, dropped.
+  const HUB = ((window.OC && OC.generateUrl) ? OC.generateUrl('/apps/ai_hub') : '/apps/ai_hub') + '/conversation';
   // The request token is read each time it is sent, not once at load. Nextcloud
   // hands out a new one when the session is renewed (its heartbeat updates
   // OC.requestToken), and the one read at load then had every request refused
@@ -47,6 +49,7 @@
   // A non-'auto' language setting installs a client-side override map instead, so the
   // app can be read in one language while the rest of the server stays in another.
   let i18nOverride = null;
+  let i18nLang = '';
   function subst(s, vars) {
     return vars ? String(s).replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? vars[k] : m)) : s;
   }
@@ -59,6 +62,29 @@
     } catch (e) { /* fall through to the raw key */ }
     return subst(text, vars);
   }
+  /** Which of a language's forms a count takes: 0 is the singular. The same rules
+   *  as Nextcloud's own (getPlural), for the languages EditBase is translated into. */
+  function pluralIndex(lang, count) {
+    if (/^(ja|zh|ko|th|vi|id)/.test(lang)) { return 0; }
+    if (/^(fr|pt_BR)$/.test(lang)) { return count > 1 ? 1 : 0; }
+    return count === 1 ? 0 : 1;
+  }
+  /** A sentence with a count in it, in the form the count takes: "1 page", "2 pages"
+   *  (Nextcloud's n()). %n is the count. In the language files the key is
+   *  "_%n page_::_%n pages_" and the translation a list, one form per plural of the language. */
+  function TN(singular, plural, count, vars) {
+    if (i18nOverride) {
+      const forms = i18nOverride['_' + singular + '_::_' + plural + '_'];
+      const s = Array.isArray(forms) && forms.length
+        ? forms[Math.min(pluralIndex(i18nLang, count), forms.length - 1)]
+        : (count === 1 ? singular : plural);
+      return subst(String(s).replace(/%n/g, String(count)), vars);
+    }
+    try {
+      if (typeof window.n === 'function') { return window.n('editbase', singular, plural, count, vars, { escape: false }); }
+    } catch (e) { /* fall through to the English */ }
+    return subst((count === 1 ? singular : plural).replace(/%n/g, String(count)), vars);
+  }
 
   /** Lower case, and hiragana as katakana: the CLDR Japanese emoji names are in
    *  katakana, so "ねこ" has to find ネコの顔 as readily as "cat" finds it. */
@@ -68,7 +94,7 @@
 
   // ---- server ---------------------------------------------------------------
   async function api(path, opts, retried) {
-    const res = await fetch(BASE + 'api/' + path, {
+    const res = await fetch(((opts || {}).base || BASE + 'api/') + path, {
       credentials: 'same-origin',
       headers: Object.assign({ 'Content-Type': 'application/json', requesttoken: requestToken() }, (opts || {}).headers || {}),
       method: (opts || {}).method || 'GET',
@@ -649,6 +675,41 @@
   // Written into every saved file *and* applied to the editor canvas, so the
   // editor cannot drift from the artefact. Everything is scoped to .eb-doc: in a
   // saved file that class sits on <body>, in the editor it sits on the canvas.
+  /**
+   * The blocks that begin a page the writing simply ran on to (not one a page break
+   * asked for): the first of the page, and the pictures standing beside it in a row.
+   * Their space above is dropped, on paper as on the screen, where paginate stands
+   * the first of them against the top margin (#410, #417: a row of three pictures
+   * at the head of a page kept its 5mm on paper and came out 18px lower).
+   */
+  const NATURAL_AFTER = ':not(:has(> .eb-pagebreak:last-child)):not(:has(> .eb-blankpage:last-child))'
+    + ':not(:has(> :nth-last-child(1 of :not(.eb-anchor)):is([style*="break-after: page"], [style*="break-after: always"], [style*="break-after: left"], [style*="break-after: right"])))'
+    + ' + .eb-page > ';
+  const NOT_ASKED = ':not([style*="break-before: page"], [style*="break-before: always"], [style*="break-before: left"], [style*="break-before: right"])';
+  /**
+   * The block that begins a page the writing ran on to, for the printer to start
+   * a new sheet at: the first thing on the page that is not a peg or a picture
+   * standing beside the text (a float takes no page break of its own; the block
+   * after it does). It used to be only a paragraph, a heading, a list, a quotation
+   * or a table: the footnotes (a section) at the head of the last page were kept
+   * on the page before by the printer, and the file printed on 5 sheets where the
+   * editor drew 6 (the Information sample, #422). Any block can begin a page.
+   */
+  function naturalBreak(page) {
+    return page + NATURAL_AFTER + '*:nth-child(1 of :not(.eb-anchor, figure[style*="float"]))' + NOT_ASKED;
+  }
+  function naturalHeads(page) {
+    const after = NATURAL_AFTER;
+    const first = ':nth-child(1 of :not(.eb-anchor))';
+    const notAsked = NOT_ASKED;
+    const float = 'figure[style*="float"]';
+    return [
+      page + after + '*' + first + notAsked,
+      page + after + float + first + notAsked + ' + ' + float,
+      page + after + float + first + notAsked + ' + ' + float + ' + ' + float,
+      page + after + float + first + notAsked + ' + ' + float + ' + ' + float + ' + ' + float,
+    ].join(',\n');
+  }
   const DOC_CSS = `
 /* 目のマークで隠した物は、画面にも印刷にも出さない。 */
 .eb-doc [data-eb-hide] { visibility: hidden !important; }
@@ -702,6 +763,13 @@
 .eb-doc .eb-tab { white-space: pre; tab-size: var(--eb-tabw, 4em); }
 /* 段落に置いたタブ位置（data-eb-tabs）へ送るタブ：幅は組むときに計算して書き込む。印刷はその幅のまま。 */
 .eb-doc .eb-tab.eb-tabset { display: inline-block; tab-size: 0; text-indent: 0; }
+/* ドロップキャップ（段落の頭の字を N 行分の大きさに・Word と LibreOffice の段落の設定と同じ）。
+   CSS の initial-letter で、画面も印刷も JavaScript 無し。日本語の字体は字の箱が N 行より背が高く、
+   そのままだと N+1 行目まで食い込むので、下の余白を字の大きさの 0.3 倍だけ詰める
+   （2〜4行・明朝とゴシック・行送り mm と倍数のどれでも N 行ちょうどになることを確かめた）。 */
+.eb-doc .eb-drop2::first-letter { initial-letter: 2; margin-bottom: -0.3em; margin-right: var(--eb-drop-gap, 1mm); }
+.eb-doc .eb-drop3::first-letter { initial-letter: 3; margin-bottom: -0.3em; margin-right: var(--eb-drop-gap, 1mm); }
+.eb-doc .eb-drop4::first-letter { initial-letter: 4; margin-bottom: -0.3em; margin-right: var(--eb-drop-gap, 1mm); }
 /* 均等割付：選んだ字を指定の長さに配る。中の字を足し引きしても配り直す（BUGS #344）。 */
 .eb-doc .eb-dist { display: inline-block; text-align: justify; text-align-last: justify; white-space: nowrap; letter-spacing: 0; text-indent: 0; }
 /* 半角の字は升目の半分：字と字の間に足す幅を半分に（BUGS #343）。 */
@@ -903,30 +971,28 @@
 /* A frame carried on from the page before begins the next page. In the editor
    paginate puts it there; on paper this is what does it, in any browser. */
 .eb-doc .eb-cont { break-before: page; page-break-before: always; }
-/* A block that begins a page because it was told to keeps its top margin on
-   paper -- the editor does not draw one, because it stands the block against the
-   top margin of the sheet. Two and a half millimetres of disagreement between
-   the screen and the printout, measured. The margin goes. */
-.eb-doc .eb-cont, .eb-doc .eb-pagebreak + * { margin-block-start: 0; }
-/* And the block after a fold is not always the NEXT element. A peg of no height
-   (.eb-anchor) is left in the writing wherever an object was placed, and the
-   editor puts a spacer of its own in to carry the block to the sheet below; both
-   can stand between the fold and the writing it was meant for, and then the rule
-   above lands on them instead and the block keeps its own top margin. Measured
-   after inserting a sheet in front of test.html: the summary frame began 4.2mm
-   below the top margin of its page, and every object drawn on that page moved
-   down with it. Said again for the shapes that really occur. */
-.eb-doc .eb-pagebreak + .eb-pagespacer + *,
-.eb-doc .eb-pagebreak + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-anchor + .eb-anchor + .eb-anchor + *,
-.eb-doc .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + .eb-anchor + * { margin-block-start: 0; }
+/* A frame carried on from the page before has no margin above it: it is the same
+   frame, continued. */
+.eb-doc .eb-cont { margin-block-start: 0; }
+/* 改ページ（改ページの印・段落の「前で改ページ」「後で改ページ」）の後の物は、ページの頭でも
+   段落前の間隔を空ける。自然にページが変わった所では空けない。LibreOffice Writer の新規文書で
+   実測（2026-10-03・lo/pagetop.sh）：改ページの後は直接指定の 10mm も見出し1の 4.23mm も残り、
+   自然な改ページで頭に来た段落の 10mm は消えた。以前は改ページの印の後だけ間隔を 0 にして
+   いたが、段落に直接付けた間隔はその 0 に勝って印刷に残り、「前で改ページ」の見出しは画面
+   だけ間隔が付き、画面と印刷が見出しの種類と改ページの入れ方でばらばらに食い違った
+   （漢字一覧の3ページ目の見出しが画面だけ 4.5mm 下・#410）。縦書きはこれまでどおり 0。 */
+.eb-doc.eb-tategaki .eb-pagebreak + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-pagespacer + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-anchor + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-pagespacer + .eb-anchor + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-anchor + .eb-anchor + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-anchor + .eb-anchor + .eb-anchor + *,
+.eb-doc.eb-tategaki .eb-pagebreak + .eb-pagespacer + .eb-anchor + .eb-anchor + .eb-anchor + * { margin-block-start: 0; }
 /* ページの div に分けたファイルでは、改ページの印はページの div の最後に、次の
    物は次のページの div の最初にある。 */
-.eb-doc > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:first-child,
-.eb-doc > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
+.eb-doc.eb-tategaki > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:first-child,
+.eb-doc.eb-tategaki > .eb-page:has(> .eb-pagebreak:last-child) + .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }
 /* 足した白紙のページ（.eb-blankpage）の後も同じ：白紙の後ろで紙が変わり、次の物は
    紙の頭から始まる。編集の画面はそう描くのに、印刷は次の物の上の余白を残した ――
    1枚目の上にページを足すと、2枚目の頭の見出しの余白の分だけ字が次の紙へ押し出され、
@@ -946,9 +1012,19 @@
    ものに紙を変えさせると、置いた物だけのページが白紙で出て、別のページに描いた物の
    位置もずれた（オーナーの文書の写しが3枚→5ページ）ので、本文の物だけに付ける。 */
 @media print {
-  .eb-doc > .eb-page:not(:has(> .eb-pagebreak:last-child)):not(:has(> .eb-blankpage:last-child)) + .eb-page
-    > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, dl, blockquote, pre, table):nth-child(1 of :not(.eb-anchor)) {
-    break-before: page; page-break-before: always; margin-block-start: 0;
+  ${naturalBreak('.eb-doc > .eb-page')} {
+    break-before: page; page-break-before: always;
+  }
+  /* ページの div は独立した箱（flow-root）。そうでないと、ページの最初の段落の上の間隔が div の
+     外へ抜け出して div ごと下がり、div の頭に置いた写真（左右に寄せた物）まで一緒に下がった。
+     編集の画面は紙に余白（padding）があるので抜け出さない。総務省の記事の左上の本の絵が、
+     印刷だけ 5.8mm 下がって下の写真に隠れた（オーナー 2026-10-03・#411）。 */
+  .eb-doc > .eb-page { display: flow-root; }
+  /* 自然にページが変わった所の上の間隔は、段落に直接付けた物（style 属性）でも落とす ―― 画面は
+     落としていて、印刷にだけ残った（#410）。改ページで始まる物（前で改ページ・前の物が後で改ページ）
+     は残す。 */
+  ${naturalHeads('.eb-doc > .eb-page')} {
+    margin-block-start: 0 !important;
   }
 }
 .eb-doc .eb-frame > *:first-child { margin-block-start: 0; }
@@ -1445,6 +1521,105 @@ ${insideObjects('.eb-paper.boxed')} {
     return out.join('\n');
   }
   /**
+   * In the editor the document's styles are written with the app's id in front of
+   * them (stylesCss with a prefix), to win over the app's own rules for headings.
+   * But that also lifts them over the rules of DOC_CSS that are more particular than
+   * a style -- "the last thing in a box has no space under it", "the first block of
+   * the document has none above it" -- which in the saved file win over the style.
+   * A box with a paragraph style of 4pt below came out 6px taller on the screen
+   * than on paper, and everything under it moved (the Information sample, #416).
+   * Those rules are said again here with the same id in front, for the properties
+   * this document's styles set, so the screen ranks them as the file does.
+   */
+  const STYLE_PROPS = {
+    family: ['font-family'], size: ['font-size'], colour: ['color'], bold: ['font-weight'], italic: ['font-style'],
+    align: ['text-align'], lineHeight: ['line-height'], before: ['margin', 'margin-top', 'margin-block', 'margin-block-start'],
+    after: ['margin', 'margin-bottom', 'margin-block', 'margin-block-end'], underline: ['text-decoration', 'text-decoration-line'],
+    spacing: ['letter-spacing'], indent: ['text-indent'], fill: ['background', 'background-color'], radius: ['border-radius'],
+    marker: ['list-style', 'list-style-type'],
+  };
+  function selectorSpecificity(sel) {
+    let a = 0; let b = 0; let c = 0;
+    const add = (x) => { a += x[0]; b += x[1]; c += x[2]; };
+    const most = (list) => splitTop(list, ',').map((x) => selectorSpecificity(x.trim())).reduce((p, q) => (cmpSpec(q, p) > 0 ? q : p), [0, 0, 0]);
+    let s = String(sel);
+    s = s.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, '');
+    s = s.replace(/:(is|not|has|matches)\(((?:[^()]|\([^()]*\))*)\)/g, (m, f, inner) => { add(most(inner)); return ''; });
+    s = s.replace(/:nth-[a-z-]+\(((?:[^()]|\([^()]*\))*)\)/g, (m, inner) => { b += 1; const of = /\bof\s+(.*)$/.exec(inner); if (of) { add(most(of[1])); } return ''; });
+    s = s.replace(/::[a-z-]+/g, () => { c += 1; return ''; });
+    s = s.replace(/\[[^\]]*\]/g, () => { b += 1; return ''; });
+    s = s.replace(/#[\w-]+/g, () => { a += 1; return ''; });
+    s = s.replace(/\.[\w-]+/g, () => { b += 1; return ''; });
+    s = s.replace(/:[\w-]+/g, () => { b += 1; return ''; });
+    c += (s.match(/(^|[\s>+~])[a-z][a-z0-9]*/gi) || []).length;
+    return [a, b, c];
+  }
+  function cmpSpec(x, y) { return (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]); }
+  /** Split at a separator that is not inside brackets. */
+  function splitTop(text, sep) {
+    const out = []; let depth = 0; let at = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === '(' || ch === '[') { depth += 1; } else if (ch === ')' || ch === ']') { depth -= 1; }
+      else if (ch === sep && depth === 0) { out.push(text.slice(at, i)); at = i + 1; }
+    }
+    out.push(text.slice(at));
+    return out;
+  }
+  /** The top-level rules of a stylesheet (what is inside @media and the like is left out). */
+  function topRules(css) {
+    const text = String(css).replace(/\/\*[\s\S]*?\*\//g, '');
+    const out = []; let i = 0;
+    while (i < text.length) {
+      const open = text.indexOf('{', i);
+      if (open < 0) { break; }
+      const head = text.slice(i, open).trim();
+      let depth = 1; let j = open + 1;
+      while (j < text.length && depth) { if (text[j] === '{') { depth += 1; } else if (text[j] === '}') { depth -= 1; } j += 1; }
+      if (head && head[0] !== '@') { out.push({ sel: head, body: text.slice(open + 1, j - 1) }); }
+      i = j;
+    }
+    return out;
+  }
+  let docRulesCache = null;
+  function docRulesOverStyles(styles) {
+    const props = new Set();
+    STYLE_TARGETS.forEach((t) => {
+      const v = styles[t.key];
+      if (!styleHasAnything(v)) { return; }
+      Object.keys(STYLE_PROPS).forEach((k) => { if (v[k] !== '' && v[k] !== false && v[k] != null) { STYLE_PROPS[k].forEach((x) => props.add(x)); } });
+      if (v.pad !== '') { props.add('padding'); }
+      if (v.border) { props.add('border'); }
+    });
+    if (!props.size) { return ''; }
+    if (!docRulesCache) { docRulesCache = topRules(DOC_CSS); }
+    const wanted = (prop) => props.has(prop) || (props.has('padding') && prop.indexOf('padding') === 0)
+      || (props.has('border') && prop.indexOf('border') === 0 && prop !== 'border-radius');
+    const out = [];
+    docRulesCache.forEach((r) => {
+      const decls = splitTop(r.body, ';').map((d) => d.trim()).filter((d) => {
+        const k = d.split(':')[0].trim().toLowerCase();
+        return d.indexOf(':') > 0 && wanted(k);
+      });
+      if (!decls.length) { return; }
+      splitTop(r.sel, ',').map((x) => x.trim()).filter(Boolean).forEach((sel) => {
+        if (sel.indexOf('.eb-doc') < 0) { return; }
+        // What it is said of: the last step of the selector.
+        const parts = splitTop(sel.replace(/\s*([>+~])\s*/g, ' '), ' ').filter(Boolean);
+        const subject = parts[parts.length - 1] || '';
+        // Only what a style can be given: a paragraph, a heading, a list item, a cell
+        // or a caption -- named, or reached by * or by a class those are given. The
+        // marks the editor draws (the page-break mark, the box itself) are left to
+        // the editor's own rules.
+        if (!/^(p|h[1-6]|li|blockquote|pre|td|th|figcaption)\b|^\*|^\.(eb-toc-title|eb-drop[234])\b/i.test(subject)) { return; }
+        const floor = /^(td|th)\b/i.test(subject) ? [0, 2, 2] : [0, 1, 1];
+        if (cmpSpec(selectorSpecificity(sel), floor) <= 0) { return; }
+        out.push('#editbase-root ' + sel + ' { ' + decls.join('; ') + '; }');
+      });
+    });
+    return out.join('\n');
+  }
+  /**
    * The writer's own stylesheet. It goes into the file as it was typed, so anyone
    * opening the file gets the same page -- which is why the few things that would
    * reach outside the file, or out of the stylesheet altogether, are taken out:
@@ -1557,7 +1732,7 @@ ${insideObjects('.eb-paper.boxed')} {
   const MATHML_TAGS = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'ms', 'mtext', 'mspace', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot', 'mover', 'munder',
     'munderover', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded', 'mphantom', 'merror', 'menclose', 'mtable', 'mtr', 'mtd', 'mlabeledtr', 'maction', 'semantics', 'annotation', 'annotation-xml']);
   const ATTR_OK = new Set(['class', 'style', 'href', 'src', 'alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'span', 'start', 'type', 'lang', 'dir', 'id', 'datetime', 'data-label', 'data-url', 'data-wrap', 'data-wrap-gap', 'data-zoom', 'data-split', 'data-frame-height', 'data-frame-dir', 'data-size-dir', 'data-drawn', 'data-eb-draw', 'data-free-top', 'data-free-peg', 'data-free-page', 'data-eb-again', 'data-eb-formula', 'data-eb-numfmt', 'data-eb-value', 'data-eb-fxedit', 'data-eb-flowcut', 'data-eb-home', 'data-eb-top0', 'data-eb-id', 'data-eb-layer', 'data-eb-name', 'data-eb-hide', 'data-eb-tabs', 'display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'notation', 'columnalign', 'rowalign', 'scope']);
-  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-align-last|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|inline-size|block-size|min-inline-size|min-block-size|max-inline-size|max-block-size|margin-block|margin-block-start|margin-block-end|margin-inline|margin-inline-start|margin-inline-end|padding-block|padding-block-start|padding-block-end|padding-inline|padding-inline-start|padding-inline-end|border-block-start|border-block-end|border-inline-start|border-inline-end|border|border-top|border-right|border-bottom|border-left|border-top-width|border-top-style|border-top-color|border-right-width|border-right-style|border-right-color|border-bottom-width|border-bottom-style|border-bottom-color|border-left-width|border-left-style|border-left-color|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color)$/;
+  const STYLE_OK = /^(color|background-color|font-weight|font-style|font-size|font-family|text-decoration|text-decoration-line|text-align|text-align-last|text-emphasis|line-height|margin|margin-left|margin-right|margin-top|margin-bottom|padding|text-indent|padding-left|padding-right|padding-top|padding-bottom|width|height|max-width|inline-size|block-size|min-inline-size|min-block-size|max-inline-size|max-block-size|margin-block|margin-block-start|margin-block-end|margin-inline|margin-inline-start|margin-inline-end|padding-block|padding-block-start|padding-block-end|padding-inline|padding-inline-start|padding-inline-end|border-block-start|border-block-end|border-inline-start|border-inline-end|border|border-top|border-right|border-bottom|border-left|border-top-width|border-top-style|border-top-color|border-right-width|border-right-style|border-right-color|border-bottom-width|border-bottom-style|border-bottom-color|border-left-width|border-left-style|border-left-color|border-radius|border-color|border-width|border-style|border-collapse|z-index|vertical-align|letter-spacing|writing-mode|float|clear|break-before|break-after|break-inside|page-break-before|page-break-after|page-break-inside|column-count|column-gap|column-rule|orphans|widows|text-transform|font-variant|white-space|list-style-type|table-layout|position|left|top|right|bottom|min-width|min-height|max-height|box-sizing|overflow|overflow-x|overflow-y|aspect-ratio|object-fit|object-position|orphans|widows|opacity|transform|transform-origin|box-shadow|mix-blend-mode|shape-outside|shape-margin|background|background-image|background-size|background-repeat|background-position|background-clip|text-shadow|paint-order|-webkit-text-stroke|-webkit-text-stroke-width|-webkit-text-stroke-color|-webkit-background-clip|-webkit-text-fill-color|--eb-drop-gap)$/;
 
   /**
    * Split a style attribute into its declarations. Not on every semicolon: a
@@ -1592,7 +1767,14 @@ ${insideObjects('.eb-paper.boxed')} {
       // fetch something is dropped, which is the whole of the rule that was here
       // before -- it just could not tell the two apart.
       if (/expression|javascript:/i.test(val)) { return; }
-      if (/url\s*\(/i.test(val) && !/^url\(\s*["']?data:image\/[a-z+.-]+[,;]/i.test(val)) { return; }
+      // Every url() in the value, not only the first: "url(data:image/…), url(https://…)"
+      // passed, and the second one fetched a tracking pixel from wherever the
+      // document said (review 2026-10-04, 低4). An address can also be written
+      // without "url(" -- image-set(), src(), cross-fade() -- or the word itself
+      // with a CSS escape in it (u\72l); a backslash has no place in a value here.
+      if (/\\/.test(val)) { return; }
+      if (/(^|[^\w-])(?:-webkit-)?(?:image-set|image|src|cross-fade)\s*\(/i.test(val)) { return; }
+      if ((val.match(/url\s*\([^)]*/gi) || []).some((u) => !/^url\s*\(\s*["']?data:image\/[a-z+.-]+[,;]/i.test(u))) { return; }
       // A document may lay its own frames out; it may not pin anything to the
       // window, which in the editor means over the app's own chrome.
       //
@@ -1677,6 +1859,8 @@ ${insideObjects('.eb-paper.boxed')} {
     // not made here is opened (see unsupportedReport).
     const report = (opts && opts.report) || null;
     const count = (key) => { if (report) { report.tags[key] = (report.tags[key] || 0) + 1; } };
+    // Whether anything at all was changed: only then is the second reading below needed.
+    let changed = !!(container.querySelector && container.querySelector('[align], center, font'));
     presentationalToStyle(container);
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
     const drop = [];
@@ -1713,21 +1897,23 @@ ${insideObjects('.eb-paper.boxed')} {
       } else {
         Array.from(el.attributes).forEach((a) => {
           const an = a.name.toLowerCase();
-          if (an.startsWith('on')) { if (report) { report.handlers += 1; } el.removeAttribute(a.name); return; }
-          if (!ATTR_OK.has(an)) { el.removeAttribute(a.name); return; }
+          if (an.startsWith('on')) { if (report) { report.handlers += 1; } el.removeAttribute(a.name); changed = true; return; }
+          if (!ATTR_OK.has(an)) { el.removeAttribute(a.name); changed = true; return; }
           if (an === 'style') {
             const v = cleanStyle(a.value);
+            if (v !== a.value) { changed = true; }
             if (v) { el.setAttribute('style', v); } else { el.removeAttribute('style'); }
           }
           // class="" is litter: it survives a save, comes back, and makes two
           // copies of the same document look different.
-          if (an === 'class' && !String(a.value).trim()) { el.removeAttribute('class'); }
+          if (an === 'class' && !String(a.value).trim()) { el.removeAttribute('class'); changed = true; }
           if ((an === 'href' || an === 'src') && unsafeUrl(a.value)) {
             if (report) { report.jsLinks += 1; }
             el.removeAttribute(a.name);
+            changed = true;
           }
         });
-        el.removeAttribute('contenteditable');
+        if (el.hasAttribute('contenteditable')) { el.removeAttribute('contenteditable'); changed = true; }
       }
       el = walker.nextNode();
     }
@@ -1738,6 +1924,22 @@ ${insideObjects('.eb-paper.boxed')} {
       while (n.firstChild) { parent.insertBefore(n.firstChild, n); }
       parent.removeChild(n);
     });
+    if (drop.length || unwrap.length) { changed = true; }
+    // What is left goes into the page as text again (innerHTML), and a browser
+    // does not always read its own writing back as the same tree: an element that
+    // was harmless where it stood -- inside a tag it has since lost, in a
+    // namespace it has since left -- can come back as a script-bearing one. The
+    // classic mutation XSS. So whenever anything was taken out, the result is read
+    // back the way the page will read it, a <div> in this document, and checked
+    // once more by the same rules; what the second reading leaves is what is
+    // used (review 2026-10-04, 要確認10). A document that needed nothing taken
+    // out is not read twice.
+    if (changed && !(opts && opts.again)) {
+      const again = document.createElement('div');
+      again.innerHTML = container.innerHTML;
+      sanitiseInto(again, { found, report, again: true });
+      if (again.innerHTML !== container.innerHTML) { container.innerHTML = again.innerHTML; }
+    }
     return container;
   }
 
@@ -2334,8 +2536,9 @@ ${insideObjects('.eb-paper.boxed')} {
       + (art.any ? ' background-image: url("' + art.url + '"); background-size: ' + s.w + 'mm ' + s.h + 'mm;'
         + ' background-repeat: no-repeat; background-position: left top;' : '')
       + ' }\n'
-      // 紙の頭の字は紙の書き始めから。編集の画面も印刷もそう描く。
-      + '  body.eb-doc.eb-paged > .eb-page > *:nth-child(1 of :not(.eb-anchor)) { margin-block-start: 0; }\n'
+      // 自然にページが変わった紙の頭の字は紙の書き始めから。改ページ（印・前で改ページ・
+      // 後で改ページ）の後は段落前の間隔を残す。編集の画面も印刷もそう描く（#410）。
+      + naturalHeads('  body.eb-doc.eb-paged > .eb-page') + ' { margin-block-start: 0 !important; }\n'
       + '  body.eb-doc.eb-paged > .eb-page > div.eb-anchor:has(> [style*="--eb-st"]) { position: absolute;'
       + ' top: ' + m.top + 'mm; left: ' + m.left + 'mm; right: ' + m.right + 'mm; }\n'
       + '  body.eb-doc.eb-paged > .eb-page > div.eb-anchor > [style*="--eb-st"] { top: var(--eb-st) !important; }\n'
@@ -4915,6 +5118,9 @@ ${insideObjects('.eb-paper.boxed')} {
     return v;
   }
   const tidyNum = (x) => Math.round(x * 100) / 100;
+  // The AI assistant's width until it is set (the owner, 2026-10-06): the two bars
+  // together as they start (132px + 240px), the width it had before it had its own.
+  const AI_WIDTH_DEFAULT = 372;
   // 定規の単位（設定・初期値 cm）。mm＝1単位の長さ、step＝動かす刻み、minor・mid・big＝目盛り
   // （minor の何本ごとに中・大の目盛りと数字）。オーナー 2026-09-30「1pt 1mm 1cm 0.1インチ単位で
   // ルーラーを動かせるように」「pxが抜けていた」（BUGS #312）。
@@ -4962,6 +5168,7 @@ ${insideObjects('.eb-paper.boxed')} {
       pageBefore: s.getPropertyValue('break-before') === 'page',
       keepWithNext: s.getPropertyValue('break-after') === 'avoid',
       keepTogether: s.getPropertyValue('break-inside') === 'avoid',
+      clearPics: s.getPropertyValue('clear') === 'both',
       border: BORDER_STYLES.indexOf(s.getPropertyValue('border-top-style')) >= 0 ? s.getPropertyValue('border-top-style') : '',
       borderSides: borderSidesOf(s),
       borderWidth: unitOf(s.getPropertyValue('border-top-width'), 'pt'),
@@ -4969,6 +5176,8 @@ ${insideObjects('.eb-paper.boxed')} {
       fill: rgbToHex(s.getPropertyValue('background-color')) || '',
       pad: lengthIn(s.getPropertyValue('padding-top'), 'mm'),
       tabs: parseTabs(block.getAttribute('data-eb-tabs')),
+      dropLines: ((block.className || '').match(/\beb-drop([234])\b/) || [])[1] || '',
+      dropGap: lengthIn(s.getPropertyValue('--eb-drop-gap'), 'mm'),
     };
   }
   /** Which edges a paragraph's rule is drawn on, as the dialogue words it. */
@@ -4998,8 +5207,16 @@ ${insideObjects('.eb-paper.boxed')} {
    *   spacing (BUGS E6). LibreOffice changes only what was changed. Without the
    *   set, everything is written, as before.
    */
+  /** カーソル（選んだ範囲）のある写真の説明文。説明文は段落の設定の相手になる（Word の図表番号の段落と同じ）。 */
+  function captionAtCaret() {
+    const r = getRange();
+    const n = r ? (r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement) : null;
+    const cap = n && n.closest ? n.closest('figure.eb-img > figcaption') : null;
+    return cap && canvas() && canvas().contains(cap) ? cap : null;
+  }
   function setParagraphProps(v, changed) {
-    const blocks = selectedBlocks(true);
+    const cap = captionAtCaret();
+    const blocks = cap ? [cap] : selectedBlocks(true);
     if (!blocks.length) { return false; }
     const num = (x) => (x === '' || x == null || Number.isNaN(Number(x)) ? '' : Number(x));
     const did = (...keys) => !changed || keys.some((k) => changed.has(k));
@@ -5017,6 +5234,13 @@ ${insideObjects('.eb-paper.boxed')} {
       if (did('pageBefore')) { styleOrClear(block, 'break-before', v.pageBefore ? 'page' : ''); }
       if (did('keepWithNext')) { styleOrClear(block, 'break-after', v.keepWithNext ? 'avoid' : ''); }
       if (did('keepTogether')) { styleOrClear(block, 'break-inside', v.keepTogether ? 'avoid' : ''); }
+      // 横に回り込ませた写真の下から始める（Word の「文字列の折り返し」の改行・LibreOffice の「次の全幅の行」と同じ）
+      if (did('clearPics')) { styleOrClear(block, 'clear', v.clearPics ? 'both' : ''); }
+      if (did('dropLines')) {
+        ['eb-drop2', 'eb-drop3', 'eb-drop4'].forEach((k) => block.classList.remove(k));
+        if (['2', '3', '4'].indexOf(String(v.dropLines)) >= 0) { block.classList.add('eb-drop' + v.dropLines); }
+      }
+      if (did('dropGap')) { styleOrClear(block, '--eb-drop-gap', num(v.dropGap) === '' ? '' : num(v.dropGap) + 'mm'); }
       if (did('tabs')) {
         const tabs = formatTabs(v.tabs);
         if (tabs) { block.setAttribute('data-eb-tabs', tabs); } else { block.removeAttribute('data-eb-tabs'); }
@@ -5255,6 +5479,17 @@ ${insideObjects('.eb-paper.boxed')} {
         anchor.parentNode.insertBefore(node, rest);
         return node;
       }
+    }
+    // 写真・図形も、カーソルが段落の頭（前に字が無い）なら段落の前に入れる（Word・LibreOffice と同じく
+    // カーソルの所）。後ろに入れていたので、写真をその段落に回り込ませる手段が無かった（記事の複製で発見）。
+    if (node && !splits && anchor && range && range.collapsed && blocks.length === 1
+      && /^(P|H[1-6])$/.test(anchor.nodeName) && anchor.contains(range.startContainer)) {
+      const head = document.createRange();
+      head.setStart(anchor, 0);
+      head.setEnd(range.startContainer, range.startOffset);
+      const before = head.toString().replace(/[\s\u200b]/g, '') || head.cloneContents().querySelector('img, math');
+      const empty = !String(anchor.textContent || '').replace(/[\s\u200b]/g, '') && !anchor.querySelector('img, math');
+      if (!before && !empty) { anchor.parentNode.insertBefore(node, anchor); return node; }
     }
     if (anchor) {
       anchor.parentNode.insertBefore(node, anchor.nextSibling);
@@ -10045,6 +10280,10 @@ ${insideObjects('.eb-paper.boxed')} {
     // 34 where the printer made 33 33 33 33 (点検 L1). The last piece of a block
     // begins at the head of a page, so where everything after it stands is known
     // exactly from that piece's own size.
+    // 改ページの後の物がページの頭より下へ空ける段落前の間隔。paginate と同じ数え方にする ――
+    // ここで 0 と数えると、その間隔の分だけ後ろの段落を長く残し、ページの字が下の余白へ
+    // はみ出した（漢字一覧の3ページ目が 4.2mm・#410）。
+    const liftOf = (el) => (tate || el.classList.contains('eb-cont')) ? 0 : (parseFloat(window.getComputedStyle(el).marginTop) || 0);
     const landed = (i, base, pieces) => {
       pageTop = base + (pieces.length - 1) * step;
       shift = pageTop + m.span(pieces[pieces.length - 1]) - (top[i] + high[i]);
@@ -10075,11 +10314,13 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         shift += pageTop - from;
         t = pageTop + (t - from);
+        if (forced) { const lift = liftOf(el); shift += lift; t += lift; }
       }
       else if (forced && (t > pageTop + 0.5 || (blankPage && i > 0))) {
-        shift += (pageTop + step) - t;
+        const lift = liftOf(el);
+        shift += (pageTop + step + lift) - t;
         pageTop += step;
-        t = pageTop;
+        t = pageTop + lift;
         // A block that begins a page and is still longer than it is cut on that
         // page like any other. Left there, it was never looked at again.
         if (t + h <= pageTop + usable + foldSlack(el)) { continue; }
@@ -10398,6 +10639,11 @@ ${insideObjects('.eb-paper.boxed')} {
       //    sheet and left the page it came from empty.
       const carries = child.hasAttribute('data-frame-height');
       let wanted = 0;
+      // wanted のうち、ページの頭より下へ空けた段落前の間隔の分。次のページの頭（pageTop）は
+      // wanted からこれを引いた所：引かずに wanted をページの頭にしていたので、改ページの
+      // たびに間隔が1つずつ積み重なった（2・3・4ページ目の頭が 2.8・5.6・8.5mm 下がり、
+      // 印刷はどれも 2.8mm。見本の Information の3ページ目で発見・#410）。
+      let lift = 0;
       let branch = '';
       // A block that has drifted above the top of the page it is counted as being
       // on is dropped back on to it. A page the writer ASKED for is not drifting:
@@ -10431,10 +10677,10 @@ ${insideObjects('.eb-paper.boxed')} {
       // 頼まれた改ページの後の物は、戻した先でも上の間隔を空ける（次の2つ目の場合と同じ）。1ページ目が
       // 字でいっぱいで、改ページの印の後ろの物が既に紙と紙の継ぎ目に落ちていると、ここで紙の頭へ
       // 戻されて上の間隔が消え、間隔を足しても詰め物が同じだけ縮んで動かなかった（履歴書の2ページ目・#396）。
-      if (!(blankPage && afterFold) && top < pageTop - 0.5) { wanted = pageTop + (forced && !tate && !child.classList.contains('eb-cont') ? (parseFloat(window.getComputedStyle(child).marginTop) || 0) : 0); branch = '1 上へ戻す'; }
+      if (!(blankPage && afterFold) && top < pageTop - 0.5) { lift = forced && !tate && !child.classList.contains('eb-cont') ? (parseFloat(window.getComputedStyle(child).marginTop) || 0) : 0; wanted = pageTop + lift; branch = '1 上へ戻す'; }
       // 改ページの後の段落は、段落前の間隔をページの頭の後ろに空ける（Word・LibreOffice と同じ。
       // 頭に詰めると間隔が消え、退職証明書の別紙の「別　紙」が 7mm 上に出た・2026-10-02）。
-      else if (forced && (top > pageTop + 0.5 || (blankPage && index > 0))) { wanted = boundary + extra + blanks * step + (tate ? 0 : (parseFloat(window.getComputedStyle(child).marginTop) || 0)); branch = '2 次の紙へ'; }
+      else if (forced && (top > pageTop + 0.5 || (blankPage && index > 0))) { lift = tate ? 0 : (parseFloat(window.getComputedStyle(child).marginTop) || 0); wanted = boundary + extra + blanks * step + lift; branch = '2 次の紙へ'; }
       // "No longer than a page" allows the same slack as "fits": a piece the
       // editor cut ends at a line that fits by up to half a pixel, and read as
       // longer than a page it was never moved and ran on through the fold.
@@ -10479,7 +10725,7 @@ ${insideObjects('.eb-paper.boxed')} {
         c.insertBefore(spacer, spacerAt);
         put.push({ spacer: spacer, el: moverEl, wanted: wanted });
         shift += wanted - moverTop;
-        if (wanted > pageTop) { pageTop = wanted; }
+        if (wanted - lift > pageTop) { pageTop = wanted - lift; }
         // The sheets reached were counted from where this block lay BEFORE it was
         // moved. Usually the block after it counts again from its own place and
         // the tally catches up -- but the last block in the document has nothing
@@ -12077,7 +12323,7 @@ ${insideObjects('.eb-paper.boxed')} {
             kept += 1;
           } else {
             here.replaceWith(block.cloneNode(true));
-            ours.set(id, c.querySelector(':scope > [data-eb-id="' + id + '"]') || here);
+            ours.set(id, blockNamed(c, id) || here);
             taken += 1;
           }
         }
@@ -12119,7 +12365,7 @@ ${insideObjects('.eb-paper.boxed')} {
   /** And back to that character, wherever the block has got to. */
   function putCaretBack(c, mark) {
     if (!c || !mark) { return; }
-    const block = c.querySelector('[data-eb-id="' + mark.id + '"]');
+    const block = blockNamed(c, mark.id, true);
     if (!block) { return; }
     let left = mark.at;
     const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
@@ -12174,7 +12420,7 @@ ${insideObjects('.eb-paper.boxed')} {
   /** And back to that character, in whichever piece it now falls. */
   function putWholeCaretBack(c, mark) {
     if (!c || !mark) { return; }
-    const head = c.querySelector(':scope > [data-eb-id="' + mark.id + '"]');
+    const head = blockNamed(c, mark.id);
     if (!head) { putCaretBack(c, mark); return; }
     const pieces = cutPieces(head);
     let left = mark.at;
@@ -12631,7 +12877,26 @@ ${insideObjects('.eb-paper.boxed')} {
     const stops = caretStops(block);
     const text = stops.map((n) => n.textContent).join('');
     let where = chars;
-    if (/[A-Za-z0-9]/.test(text.charAt(where - 1) || '') && /[A-Za-z0-9]/.test(text.charAt(where) || '')) {
+    // Two letters either side of the cut are the middle of a word -- unless a line
+    // break (<br>, Shift+Enter) stands between them, which the joined text above
+    // does not show. "…Find and replace" + "Ctrl+Enter…" read as one word, and the
+    // cut went back to "Find and |replace" (#415).
+    const brAt = (pos) => {
+      let left = pos;
+      for (let i = 0; i + 1 < stops.length; i += 1) {
+        const len = stops[i].length;
+        if (left === len) {
+          const r = document.createRange();
+          r.setStartAfter(stops[i]);
+          r.setEndBefore(stops[i + 1]);
+          return !!r.cloneContents().querySelector('br');
+        }
+        if (left < len) { return false; }
+        left -= len;
+      }
+      return false;
+    };
+    if (/[A-Za-z0-9]/.test(text.charAt(where - 1) || '') && /[A-Za-z0-9]/.test(text.charAt(where) || '') && !brAt(where)) {
       const space = text.lastIndexOf(' ', where);
       if (space > 0 && where - space < 40) { where = space + 1; }
     }
@@ -13240,7 +13505,7 @@ ${insideObjects('.eb-paper.boxed')} {
    * turned the page into a grey slab lying over the text.
    */
   const DOC_CLASSES = new Set([
-    'eb-doc', 'eb-han', 'eb-dist', 'eb-tab', 'eb-tabset', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
+    'eb-doc', 'eb-han', 'eb-dist', 'eb-tab', 'eb-tabset', 'eb-drop2', 'eb-drop3', 'eb-drop4', 'eb-al-l', 'eb-al-c', 'eb-al-r', 'eb-al-j', 'eb-in1', 'eb-in2', 'eb-in3',
     'eb-box', 'eb-box-title', 'sq', 'dashed', 'thick', 'tint', 'note', 'borderless', 'rows',
     'eb-frame', 'eb-textbox', 'eb-cont', 'eb-anchor', 'eb-ink', 'eb-shadow', 'eb-flow', 'eb-gap',
     'eb-shape', 'eb-sh-rect', 'eb-sh-round', 'eb-sh-ellipse', 'eb-sh-line', 'eb-sh-arrow', 'eb-sh-draw',
@@ -13491,6 +13756,18 @@ ${insideObjects('.eb-paper.boxed')} {
       }
       seen.add(id);
     });
+  }
+  /**
+   * The block of that name, among $c's children (or anywhere under it, deep). The
+   * name goes into a selector, so it is written the way a selector needs it:
+   * names arrive from other people's screens and from files, and one with a
+   * quote in it used to break the selector -- or finish it early and pick
+   * another block (review 2026-10-04, 低6).
+   */
+  function blockNamed(c, id, deep) {
+    if (!c || id == null || id === '') { return null; }
+    const name = (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') ? CSS.escape(String(id)) : String(id).replace(/["\\\]]/g, '');
+    return c.querySelector((deep ? '' : ':scope > ') + '[data-eb-id="' + name + '"]');
   }
   /**
    * 行の中の枠（字を選んで作った塊・span.eb-frame）は廃止した。入っている文書は、開いたときに
@@ -15500,6 +15777,227 @@ ${insideObjects('.eb-paper.boxed')} {
 
   // ---- other apps on this server -------------------------------------------------
   /** A table of strings, as the document's own table markup. */
+  // ---- the AI assistant's answers ----------------------------------------------
+  /**
+   * An answer split into the words for the writer and the blocks meant for the
+   * editor: ```editbase-actions [...]``` (changes to the document) and
+   * ```editbase-read {...}``` (something to read first). A block that is not valid
+   * JSON is set aside and reported -- nothing is guessed from it.
+   */
+  function aiParse(text) {
+    const out = { text: String(text || ''), actions: null, read: null, bad: '' };
+    const grab = (kind) => {
+      const re = new RegExp('```[ \\t]*' + kind + '[^\\n]*\\n([\\s\\S]*?)```', 'i');
+      const m = out.text.match(re);
+      if (!m) { return undefined; }
+      out.text = (out.text.slice(0, m.index) + out.text.slice(m.index + m[0].length)).trim();
+      try { return JSON.parse(m[1]); } catch (e) { out.bad = kind; return null; }
+    };
+    const a = grab('editbase-actions');
+    if (a !== undefined && a !== null) { out.actions = (Array.isArray(a) ? a : [a]).filter((x) => x && typeof x === 'object'); }
+    const r = grab('editbase-read');
+    if (r && typeof r === 'object' && !Array.isArray(r)) { out.read = r; }
+    return out;
+  }
+
+  const AI_KINDS = ['p', 'h1', 'h2', 'h3', 'h4', 'blockquote'];
+  /** Where this tab keeps the token of its conversation with the AI (sessionStorage). */
+  const AI_CONV_KEY = 'editbase.ai.conversation';
+  const AI_ALIGN = { left: 'eb-al-l', center: 'eb-al-c', right: 'eb-al-r', justify: 'eb-al-j' };
+
+  /** Words with **bold**, *italic* and line breaks ("\n"), into an element. Never markup from the model. */
+  function aiFill(el, text) {
+    String(text == null ? '' : text).split('\n').forEach((line, i) => {
+      if (i) { el.appendChild(document.createElement('br')); }
+      const re = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+      let at = 0;
+      let m;
+      while ((m = re.exec(line))) {
+        if (m.index > at) { el.appendChild(document.createTextNode(line.slice(at, m.index))); }
+        const w = document.createElement(m[1] != null ? 'strong' : 'em');
+        w.textContent = m[1] != null ? m[1] : m[2];
+        el.appendChild(w);
+        at = m.index + m[0].length;
+      }
+      if (at < line.length) { el.appendChild(document.createTextNode(line.slice(at))); }
+    });
+    if (!el.firstChild || el.lastChild.nodeName === 'BR') { el.appendChild(document.createElement('br')); }
+  }
+
+  function aiSelect(el) {
+    const g = document.createRange();
+    g.selectNodeContents(el);
+    selectRange(g);
+  }
+
+  function aiBlock(b, pageBreakLabel) {
+    if (!b || typeof b !== 'object') { return null; }
+    const tag = String(b.tag || 'p').toLowerCase();
+    if (tag === 'pagebreak') {
+      const d = document.createElement('div');
+      d.className = 'eb-pagebreak';
+      d.setAttribute('data-label', pageBreakLabel || 'Page break');
+      return d;
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      const list = document.createElement(tag);
+      (Array.isArray(b.items) ? b.items : String(b.text || '').split('\n')).forEach((t) => {
+        const li = document.createElement('li');
+        aiFill(li, t);
+        list.appendChild(li);
+      });
+      return list.children.length ? list : null;
+    }
+    if (tag === 'table') {
+      const rows = (Array.isArray(b.rows) ? b.rows : []).filter(Array.isArray).map((r) => r.map((x) => (x == null ? '' : String(x))));
+      if (!rows.length) { return null; }
+      const table = tableFromRows(b.header ? rows[0] : [], b.header ? rows.slice(1) : rows, !!b.header);
+      headerGroup(table);
+      return table;
+    }
+    if (!AI_KINDS.includes(tag)) { return null; }
+    // A quotation is made by the editor's own command once it is in place, so it has
+    // the same markup as one made from the toolbar.
+    const el = document.createElement(tag === 'blockquote' ? 'p' : tag);
+    aiFill(el, b.text);
+    if (tag === 'blockquote') { el.setAttribute('data-eb-ai-quote', '1'); }
+    return el;
+  }
+
+  /** The last block the assistant's changes touched, for the caret to go to afterwards. */
+  let aiTouched = null;
+
+  /** One change the assistant asked for. False when it could not be made. */
+  function aiAct(c, a, pageBreakLabel) {
+    if (!a || typeof a !== 'object') { return false; }
+    const top = (n) => { while (n && n.parentNode !== c) { n = n.parentNode; } return n || null; };
+    const byId = (id) => (id ? top(c.querySelector('[data-eb-id="' + String(id).replace(/["\\\]]/g, '') + '"]')) : null);
+    const emptyP = (el) => el && el.nodeName === 'P' && !el.textContent.trim() && !el.querySelector('img, svg, math, table');
+    switch (a.do) {
+      case 'insert': {
+        const where = a.after == null ? 'end' : String(a.after);
+        let prev;
+        if (where === 'start') { prev = null; }
+        else if (where === 'end') {
+          // After the last thing written: not after an empty line left at the end.
+          prev = c.lastElementChild;
+          while (prev && (emptyP(prev) || prev.classList.contains('eb-pagespacer') || prev.classList.contains('eb-anchor'))) { prev = prev.previousElementSibling; }
+        } else if (where === 'caret') {
+          const r = getRange();
+          prev = r && c.contains(r.startContainer) ? top(r.startContainer) : c.lastElementChild;
+        } else {
+          prev = byId(where);
+          if (!prev) { return false; }
+        }
+        let made = 0;
+        (Array.isArray(a.blocks) ? a.blocks : []).forEach((b) => {
+          let el = aiBlock(b, pageBreakLabel);
+          if (!el) { return; }
+          if (prev) { prev.parentNode.insertBefore(el, prev.nextSibling); } else { c.insertBefore(el, c.firstChild); }
+          if (el.hasAttribute('data-eb-ai-quote')) {
+            el.removeAttribute('data-eb-ai-quote');
+            aiSelect(el);
+            setBlockType('BLOCKQUOTE');
+            const r = getRange();
+            el = (r && top(r.startContainer)) || el;
+          }
+          prev = el;
+          aiTouched = el;
+          made += 1;
+        });
+        return made > 0;
+      }
+      case 'replace': {
+        const el = byId(a.id);
+        if (!el || typeof a.text !== 'string') { return false; }
+        if (el.nodeName === 'UL' || el.nodeName === 'OL') {
+          el.textContent = '';
+          a.text.split('\n').filter((x) => x.trim()).forEach((x) => {
+            const li = document.createElement('li');
+            aiFill(li, x.replace(/^\s*[•・\-*]\s*/, ''));
+            el.appendChild(li);
+          });
+          return true;
+        }
+        if (!/^(P|H[1-6]|PRE)$/.test(el.nodeName)) { return false; }
+        el.textContent = '';
+        aiFill(el, a.text);
+        aiTouched = el;
+        return true;
+      }
+      case 'delete': {
+        const el = byId(a.id);
+        if (!el) { return false; }
+        el.remove();
+        if (!c.firstElementChild) {
+          const p = document.createElement('p');
+          p.appendChild(document.createElement('br'));
+          c.appendChild(p);
+        }
+        return true;
+      }
+      case 'kind': {
+        const el = byId(a.id);
+        const tag = String(a.tag || '').toLowerCase();
+        if (!el || !AI_KINDS.includes(tag)) { return false; }
+        aiSelect(el);
+        setBlockType(tag.toUpperCase());
+        return true;
+      }
+      case 'align': {
+        const el = byId(a.id);
+        const cls = AI_ALIGN[a.align];
+        if (!el || !cls) { return false; }
+        aiSelect(el);
+        setBlockClass('align', cls);
+        return true;
+      }
+      case 'format': {
+        const el = byId(a.id);
+        if (!el) { return false; }
+        let any = false;
+        ['bold', 'italic', 'underline'].forEach((k) => {
+          if (typeof a[k] !== 'boolean') { return; }
+          const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let n;
+          let all = true;
+          let some = false;
+          while ((n = tw.nextNode())) {
+            if (!n.data.trim()) { continue; }
+            some = true;
+            if (!closestMatching(n, INLINE_SPECS[k])) { all = false; }
+          }
+          if (some && a[k] !== all) { aiSelect(el); toggleInline(k); }
+          any = any || some;
+        });
+        const size = Number(a.size);
+        if (a.size != null && size >= 4 && size <= 200) { aiSelect(el); styleTextOrBlock('fontSize', (Math.round(size * 100) / 100) + 'pt'); any = true; }
+        const colour = typeof a.colour === 'string' ? a.colour : (typeof a.color === 'string' ? a.color : '');
+        if (/^#[0-9a-f]{3,8}$/i.test(colour) || /^[a-z]{3,20}$/i.test(colour)) { aiSelect(el); applyInlineStyle('color', colour); any = true; }
+        if (typeof a.font === 'string' && a.font.trim()) { aiSelect(el); styleTextOrBlock('fontFamily', fontStack(a.font.trim(), 'sans')); any = true; }
+        return any;
+      }
+      case 'findreplace': {
+        const find = String(a.find || '');
+        if (!find) { return false; }
+        const rep = String(a.replace == null ? '' : a.replace);
+        const tw = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+        const hits = [];
+        let n;
+        while ((n = tw.nextNode())) { if (n.data.includes(find)) { hits.push(n); } }
+        let count = 0;
+        for (const x of hits) {
+          if (a.all === false) { x.data = x.data.replace(find, rep); count = 1; break; }
+          count += x.data.split(find).length - 1;
+          x.data = x.data.split(find).join(rep);
+        }
+        return count > 0;
+      }
+      default:
+        return false;
+    }
+  }
+
   function tableFromRows(columns, rows, withHeader) {
     const table = document.createElement('table');
     table.className = 'eb-table';
@@ -16120,10 +16618,26 @@ ${insideObjects('.eb-paper.boxed')} {
     // （nonce）の無いプログラムは動かない。文書に埋め込んだプログラム（両側の回り込み
     // など）が止まり、画像と字が重なって印刷された（オーナー 2026-09-22、BUGS #48）。
     // この画面自身のプログラムに付いている印を、文書のプログラムにも付けて渡す。
-    let out = String(html).replace(/\sloading="lazy"/g, '');
-    const nonce = pageNonce();
-    if (nonce) { out = out.replace(/<script(?![^>]*\snonce=)(?=[\s>])/gi, '<script nonce="' + nonce + '"'); }
-    frame.srcdoc = out;
+    // 印を付けるのは EditBase 自身のプログラム（script#eb-script・本文が DOC_SCRIPT）だけ。
+    // それ以外の script は外す。文字列の置き換えでは属性値の中の「<script」にも当たり
+    // （点検 2026-10-04 低5）、どの script にも印が付いた（同 高1）。
+    frame.srcdoc = nonceOwnScript(String(html).replace(/\sloading="lazy"/g, ''), pageNonce());
+  }
+  /**
+   * The document as a page under this screen's content security policy: only
+   * EditBase's own program (script#eb-script whose text is DOC_SCRIPT) is given
+   * the nonce that lets it run; every other script is taken out. The same rule as
+   * DocumentCheck::nonceOwnScript on the server, read here with the browser's own
+   * parser, so "<script" inside an attribute value is not mistaken for a tag.
+   */
+  function nonceOwnScript(html, nonce) {
+    const dom = new DOMParser().parseFromString(String(html == null ? '' : html), 'text/html');
+    const own = DOC_SCRIPT.trim();
+    Array.from(dom.querySelectorAll('script')).forEach((sc) => {
+      if (sc.id !== 'eb-script' || String(sc.textContent || '').trim() !== own) { sc.remove(); return; }
+      if (nonce) { sc.setAttribute('nonce', nonce); }
+    });
+    return (dom.doctype ? '<!DOCTYPE ' + dom.doctype.name + '>\n' : '') + dom.documentElement.outerHTML;
   }
   /** この画面のプログラムに Nextcloud が付けた許可の印（nonce）。無ければ空。 */
   function pageNonce() {
@@ -16248,12 +16762,11 @@ ${insideObjects('.eb-paper.boxed')} {
     "Kind of marker": "Chooses the bullet or numbering style.",
     "Increase indent": "Indents the paragraph, or moves a list item one level in (Tab).",
     "Decrease indent": "Reduces the indent, or moves a list item one level out (Shift+Tab).",
-    "Insert": "Tables, pictures, frames and boxes.",
+    "Insert": "Tables, pictures, frames and boxes; page breaks, a table of contents, the header and footer, and rules.",
     "Insert table": "Inserts a table.",
     "Insert picture": "Inserts a picture from your Files.",
     "Text frame": "Draws a frame holding one paragraph; drag on the page to place it.",
     "Block frame": "Draws a frame that can hold several paragraphs and carries on to the next page.",
-    "Page layout": "Columns, header and footer, page breaks and a table of contents.",
     "Columns…": "Sets the chosen paragraphs in two or more columns.",
     "Header and footer…": "Text printed at the top and foot of every page, with page numbers.",
     "Page break": "Starts the following text on a new page.",
@@ -16410,6 +16923,8 @@ ${insideObjects('.eb-paper.boxed')} {
     more: I('<circle cx="3.2" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.8" cy="8" r="1.1" fill="currentColor" stroke="none"/>'),
     menu: I('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
     plus: I('<path d="M8 3.5v9M3.5 8h9"/>'),
+    saveTalk: I('<path d="M3 2.5h8l2 2v8.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5z"/><path d="M5.5 2.5v3h5v-3M5 13.5v-4h6v4"/>'),
+    sumTalk: I('<path d="M3 3.5h10M3 6.5h10M3 9.5h6M3 12.5h4"/><path d="M11.5 10v4M9.5 12l2 2 2-2"/>'),
     minus: I('<path d="M3.5 8h9"/>'),
     down: I('<path d="M4 6.5 8 10.5l4-4"/>'),
     paper: I('<path d="M3.5 1.8h6l3 3v9.4a.6.6 0 0 1-.6.6H3.5a.6.6 0 0 1-.6-.6V2.4a.6.6 0 0 1 .6-.6z"/><path d="M9.3 1.8v3.3h3.2"/>'),
@@ -16506,7 +17021,7 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </div>
     <div class="side-foot">
-      <button class="eb-btn ghost wide" @click="settingsOpen = true">⚙ {{ t('Settings') }}</button>
+      <button class="eb-btn ghost wide" @click="openSettings()">⚙ {{ t('Settings') }}</button>
     </div>
   </aside>
 
@@ -16572,6 +17087,9 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" @click="setSize(''); menu = ''">{{ t('As the paragraph style says') }}</button>
         </div>
       </span>
+      <span class="sep"></span>
+      <button class="eb-tb" @mousedown.prevent @click="openPara()" :title="t('Paragraph settings…')"><span class="b">¶</span></button>
+      <button class="eb-tb" @mousedown.prevent @click="openCols()" :title="t('Columns…')"><span v-html="icons.columns"></span></button>
       <span class="grow"></span>
       <button class="eb-tb" @mousedown.prevent @click="undo" :title="t('Undo') + ' (Ctrl+Z)'"><span v-html="icons.undo"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="redo" :title="t('Redo') + ' (Ctrl+Shift+Z)'"><span v-html="icons.redo"></span></button>
@@ -16582,38 +17100,11 @@ ${insideObjects('.eb-paper.boxed')} {
         <button class="eb-tb" @mousedown.prevent @click="stepZoom(10)" v-html="icons.plus"></button>
       </span>
       </span>
-      <div v-if="menuOpen" class="eb-modal-back" @click="menuOpen = false">
-        <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
-          <h3>{{ doc.title || t('Untitled document') }}</h3>
-          <div class="body" style="display:flex;flex-direction:column;gap:6px;padding-bottom:16px">
-            <template v-if="narrow">
-              <button class="eb-btn wide primary" @click="newDoc(); menuOpen = false">＋ {{ t('New document') }}</button>
-              <div class="eb-menu-docs" v-if="docs.length">
-                <button v-for="d in docs" :key="d.id" class="eb-btn wide ghost" :class="{ on: d.id === doc.id }" @click="openDoc(d.id); menuOpen = false">{{ d.title }}</button>
-              </div>
-              <div class="eb-menu-sep"></div>
-            </template>
-            <button class="eb-btn wide" v-if="doc.download !== false" @click="download">⬇ {{ t('Download a copy') }}</button>
-            <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
-            <button class="eb-btn wide" @click="runCheck(); menuOpen = false">🔍 {{ t('Check the document') }}</button>
-            <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- The page is running code the server has since replaced. Saying so is the
-         difference between "it is not fixed" and "reload and it is". -->
-    <div class="eb-newbuild" v-if="newBuild">
-      <span>{{ t('A newer EditBase is on the server. This page is still running the old one.') }}</span>
-      <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
-      <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
-    </div>
-    <!-- Down the left, in two columns, and outside the part that scrolls: on a
-         wide screen the room is at the sides, and the page wants the height.
-         The shelf of things to put on the page is at the foot of it. -->
-    <div class="eb-workarea">
-    <div class="eb-rail" v-if="doc.id">
+      <span class="headtools fmttools" v-if="doc.id">
+      <!-- The format of the words and of the paragraph, along the top, where
+           LibreOffice's formatting bar, Word's Home ribbon and Ichitaro's command
+           bar keep them (the owner, 2026-10-03, #421). The rail on the left is
+           left to what goes INTO the document and to the view. -->
       <button class="eb-tb" :class="{ on: fmt.bold }" @mousedown.prevent @click="inline('bold')" :title="t('Bold') + ' (Ctrl+B)'"><span class="b">B</span></button>
       <button class="eb-tb" :class="{ on: fmt.italic }" @mousedown.prevent @click="inline('italic')" :title="t('Italic') + ' (Ctrl+I)'"><span class="i">I</span></button>
       <button class="eb-tb" :class="{ on: fmt.underline }" @mousedown.prevent @click="inline('underline')" :title="t('Underline') + ' (Ctrl+U)'"><span class="u">U</span></button>
@@ -16655,6 +17146,43 @@ ${insideObjects('.eb-paper.boxed')} {
       <button class="eb-tb" @mousedown.prevent @click="indent(1)" :title="t('Increase indent')"><span v-html="icons.indent"></span></button>
       <button class="eb-tb" @mousedown.prevent @click="indent(-1)" :title="t('Decrease indent')"><span v-html="icons.outdent"></span></button>
       <span class="sep"></span>
+      <button class="eb-tb" :class="{ on: !!brush }" @mousedown.prevent @click="useBrush" :title="brush ? t('Put this format on the selection') : t('Copy the format at the cursor')"><span v-html="icons.brush"></span></button>
+      <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
+      <span class="sep"></span>
+      </span>
+      <div v-if="menuOpen" class="eb-modal-back" @click="menuOpen = false">
+        <div class="eb-modal" style="width:min(360px,100%)" @click.stop>
+          <h3>{{ doc.title || t('Untitled document') }}</h3>
+          <div class="body" style="display:flex;flex-direction:column;gap:6px;padding-bottom:16px">
+            <template v-if="narrow">
+              <button class="eb-btn wide primary" @click="newDoc(); menuOpen = false">＋ {{ t('New document') }}</button>
+              <div class="eb-menu-docs" v-if="docs.length">
+                <button v-for="d in docs" :key="d.id" class="eb-btn wide ghost" :class="{ on: d.id === doc.id }" @click="openDoc(d.id); menuOpen = false">{{ d.title }}</button>
+              </div>
+              <div class="eb-menu-sep"></div>
+            </template>
+            <button class="eb-btn wide" v-if="doc.download !== false" @click="download">⬇ {{ t('Download a copy') }}</button>
+            <button class="eb-btn wide" :class="{ on: review }" @click="review = !review; menuOpen = false">✎ {{ review ? t('Stop recording changes') : t('Record changes') }}</button>
+            <button class="eb-btn wide" @click="runCheck(); menuOpen = false">🔍 {{ t('Check the document') }}</button>
+            <button class="eb-btn wide" @click="lightenPictures(); menuOpen = false">🗜 {{ t('Make the pictures lighter') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- The page is running code the server has since replaced. Saying so is the
+         difference between "it is not fixed" and "reload and it is". -->
+    <div class="eb-newbuild" v-if="newBuild">
+      <span>{{ t('A newer EditBase is on the server. This page is still running the old one.') }}</span>
+      <button class="eb-btn primary" @click="reloadForNewBuild">{{ t('Save and reload') }}</button>
+      <button class="eb-btn ghost" @click="newBuild = false">{{ t('Later') }}</button>
+    </div>
+    <!-- Down the left, in two columns, and outside the part that scrolls: on a
+         wide screen the room is at the sides, and the page wants the height.
+         The shelf of things to put on the page is at the foot of it. -->
+    <div class="eb-workarea">
+    <div class="eb-rail" v-if="doc.id">
+      <div class="rail-cap">{{ t('Insert') }}</div>
       <!-- Three menus, not one. Everything used to hang off "Insert": the shapes,
            the pieces of the document and the things fetched from elsewhere all in
            one list of thirty. Shapes are shapes and brought-in things are brought
@@ -16671,17 +17199,14 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" :class="{ on: placing === 'frame' }" @click="armPlace('frame')"><span v-html="icons.box"></span>{{ t('Block frame') }}</button>
           <button v-for="b in boxKinds" :key="b.variant" class="eb-menu-item" :class="{ on: placing === 'box:' + b.variant }"
             @click="armPlace('box:' + b.variant)"><span v-html="icons.box"></span>{{ b.label }}</button>
-        </div>
-      </span>
-      <span class="eb-pop">
-        <button class="eb-tb text" :class="{ on: menu === 'layout' }" @mousedown.prevent @click="toggleMenu('layout')" :title="t('Page layout')">
-          <span v-html="icons.paper"></span><span class="lbl">{{ t('Page layout') }}</span><span class="caret" v-html="icons.down"></span>
-        </button>
-        <div class="eb-menu wide" v-if="menu === 'layout'" @mousedown.prevent>
-          <button class="eb-menu-item" @click="openCols()"><span v-html="icons.columns"></span>{{ t('Columns…') }}</button>
-          <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
+          <div class="eb-menu-sep"></div>
+          <!-- What LibreOffice's and Word's Insert hold as well: the page break, the
+               contents, the header and footer and a rule. They stood under a
+               "Page layout" button of their own, with the paper's own icon on it,
+               and read as settings (the owner, 2026-10-03, #421). -->
           <button class="eb-menu-item" @click="addPageBreak(); menu = ''"><span v-html="icons.pagebreak"></span>{{ t('Page break') }}</button>
           <button class="eb-menu-item" @click="openToc(); menu = ''"><span v-html="icons.doc"></span>{{ t('Table of contents…') }}</button>
+          <button class="eb-menu-item" @click="openRunning()"><span v-html="icons.header"></span>{{ t('Header and footer…') }}</button>
           <div class="eb-menu-sep"></div>
           <button v-for="r in rules" :key="r.cls" class="eb-menu-item" @click="addRule(r.cls); menu = ''"><span v-html="icons.rule"></span>{{ r.label }}</button>
         </div>
@@ -16698,6 +17223,20 @@ ${insideObjects('.eb-paper.boxed')} {
           <button class="eb-menu-item" @click="openNote()"><span v-html="icons.note"></span>{{ t('Note…') }}</button>
         </div>
       </span>
+      <span class="eb-pop">
+        <button class="eb-tb text" :class="{ on: menu === 'bring' }" @mousedown.prevent @click="toggleMenu('bring')" :title="t('Bring in')">
+          <span v-html="icons.link"></span><span class="lbl">{{ t('Bring in') }}</span><span class="caret" v-html="icons.down"></span>
+        </button>
+        <div class="eb-menu wide" v-if="menu === 'bring'" @mousedown.prevent>
+          <button class="eb-menu-item" @click="webOpen = true; menu = ''"><span v-html="icons.link"></span>{{ t('Bring in a web page…') }}</button>
+          <div class="eb-menu-sep" v-if="anySource"></div>
+          <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
+            <span v-html="icons.link"></span>{{ sourceLabel(key) }}
+          </button>
+          <div class="eb-menu-empty" v-if="!anySource">{{ t('Nothing to bring in: no app of ours is switched on.') }}</div>
+        </div>
+      </span>
+      <div class="rail-cap">{{ t('Drawing') }}</div>
       <span class="eb-pop">
         <button class="eb-tb text" :class="{ on: menu === 'shapes' }" @mousedown.prevent @click="toggleMenu('shapes')" :title="t('Shapes')">
           <span v-html="icons.shapes"></span><span class="lbl">{{ t('Shapes') }}</span><span class="caret" v-html="icons.down"></span>
@@ -16725,22 +17264,7 @@ ${insideObjects('.eb-paper.boxed')} {
           <div class="eb-menu-hint">{{ t('Slanted lines, arrows and brackets: drag from end to end. With a bracket, Tab while dragging puts the point there (Shift+Tab in the middle). Bent line: click each corner; click the last corner again or press Enter to finish.') }}</div>
         </div>
       </span>
-      <span class="eb-pop">
-        <button class="eb-tb text" :class="{ on: menu === 'bring' }" @mousedown.prevent @click="toggleMenu('bring')" :title="t('Bring in')">
-          <span v-html="icons.link"></span><span class="lbl">{{ t('Bring in') }}</span><span class="caret" v-html="icons.down"></span>
-        </button>
-        <div class="eb-menu wide" v-if="menu === 'bring'" @mousedown.prevent>
-          <button class="eb-menu-item" @click="webOpen = true; menu = ''"><span v-html="icons.link"></span>{{ t('Bring in a web page…') }}</button>
-          <div class="eb-menu-sep" v-if="anySource"></div>
-          <button v-for="key in sourceKeys" :key="key" class="eb-menu-item" @click="openSource(key)">
-            <span v-html="icons.link"></span>{{ sourceLabel(key) }}
-          </button>
-          <div class="eb-menu-empty" v-if="!anySource">{{ t('Nothing to bring in: no app of ours is switched on.') }}</div>
-        </div>
-      </span>
-      <button class="eb-tb" :class="{ on: !!brush }" @mousedown.prevent @click="useBrush" :title="brush ? t('Put this format on the selection') : t('Copy the format at the cursor')"><span v-html="icons.brush"></span></button>
-      <button class="eb-tb" @mousedown.prevent @click="clearFmt" :title="t('Clear formatting')"><span v-html="icons.clear"></span></button>
-      <span class="sep"></span>
+      <div class="rail-cap">{{ t('View') }}</div>
       <button class="eb-tb" :class="{ on: ruler }" v-if="!flow && !tategaki" @mousedown.prevent @click="ruler = !ruler" :title="t('Ruler')"><span v-html="icons.ruler"></span></button>
       <button class="eb-tb" :class="{ on: guides }" v-if="!flow" @mousedown.prevent @click="guides = !guides" :title="guides ? t('Hide the margin boundaries') : t('Show the margin boundaries')"><span v-html="icons.guides"></span></button>
       <button class="eb-tb" :class="{ on: palette }" v-if="!flow" @mousedown.prevent @click="palette = !palette" :title="palette ? t('Hide the shelf of things to put on the page') : t('Show the shelf of things to put on the page')"><span v-html="icons.palette"></span></button>
@@ -16840,7 +17364,7 @@ ${insideObjects('.eb-paper.boxed')} {
       <span class="sep"></span>
       <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('acceptAll')" :disabled="!changes">{{ t('Keep them all') }}</button>
       <button class="eb-tb text" @mousedown.prevent @click="reviewCmd('rejectAll')" :disabled="!changes">{{ t('Undo them all') }}</button>
-      <span class="hint">{{ t('{n} changes marked', { n: changes }) }}</span>
+      <span class="hint">{{ tn('%n change marked', '%n changes marked', changes) }}</span>
     </div>
 
     <div class="eb-toolbar sub" v-if="doc.id && fmt.image">
@@ -17053,6 +17577,10 @@ ${insideObjects('.eb-paper.boxed')} {
     <!-- The handles for the two panels, at the height of the eye: pointing left
          to pull a panel out, pointing right to push it away again. -->
     <div class="eb-tabs" v-if="doc.id">
+      <div class="tab ai" v-if="ai.show && !previewOpen && !layersOpen && !ai.open">
+        <button class="hnd" @click="aiToggle" :title="t('Show') + ' — ' + t('AI assistant')">▼</button>
+        <span class="lb">{{ t('AI') }}</span>
+      </div>
       <div class="tab">
         <span class="lb">{{ t('Preview bar') }}</span>
         <button class="hnd" @click="previewOpen = !previewOpen"
@@ -17065,16 +17593,92 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </div>
 
+    <!-- The right-hand column: the AI assistant on top (through AI-Hub, shut
+         until asked for, opened with the triangle -- the owner, 2026-10-03), the
+         pages and the layers below it. The assistant takes the top half. It has a
+         width of its own (Settings, and the edge dragged -- the owner, 2026-10-06);
+         the column is as wide as the assistant, or as the bars under it if they
+         are wider, and nothing squeezes the bars. -->
+    <div class="eb-rcol" v-if="doc.id && (previewOpen || layersOpen || (ai.show && ai.open))" :style="{ width: sideWidth() }">
+    <section class="eb-ai" v-if="ai.show && ai.open" :class="{ alone: !previewOpen && !layersOpen, 'is-drop': ai.drop }" :style="!previewOpen && !layersOpen ? { width: aiWidth() } : null"
+      @dragover="aiDragOver" @dragleave="aiDragLeave" @drop="aiDrop">
+      <!-- The edge between the paper and the assistant (the owner, 2026-10-06):
+           dragged, the column takes the width there and then and the paper gives
+           up the same; let go, the width is kept as Settings keeps it. A double
+           click puts back the width it starts at; with the keyboard, ← and → move
+           it 10px. -->
+      <div class="eb-ai-grip" role="separator" aria-orientation="vertical" tabindex="0"
+        :aria-valuenow="parseFloat(aiWidthValue())" :aria-valuemin="settings.aiU === '%' ? 15 : 240" :aria-valuemax="settings.aiU === '%' ? 60 : 1200" :aria-valuetext="aiWidthValue()"
+        :title="t('Drag to change the width; double-click to reset')" :aria-label="t('Drag to change the width; double-click to reset')"
+        @pointerdown="aiGripDown" @pointermove="aiGripMove" @pointerup="aiGripUp" @pointercancel="aiGripUp" @lostpointercapture="aiGripUp"
+        @dblclick="aiGripReset" @keydown="aiGripKey"></div>
+      <div class="head">
+        <span class="ttl">{{ t('AI assistant') }}</span>
+        <span class="grow"></span>
+        <span class="model" v-if="ai.model" :title="ai.model">{{ ai.model }}</span>
+        <!-- The conversation saved to Files as Markdown, as it stands or summed up by the AI
+             (the owner, 2026-10-06): AI-Hub/EditBase/ in the writer's Files. -->
+        <button class="eb-tb" @click="aiSave(false)" :disabled="!aiHasTalk() || ai.busy || !!ai.saving" :title="t('Save the conversation')" :aria-label="t('Save the conversation')"><span v-html="icons.saveTalk"></span></button>
+        <button class="eb-tb" @click="aiSave(true)" :disabled="!aiHasTalk() || ai.busy || !!ai.saving || !ai.ready" :title="t('Sum up the conversation and save it')" :aria-label="t('Sum up the conversation and save it')"><span v-html="icons.sumTalk"></span></button>
+        <button class="eb-tb" @click="aiClear" :disabled="ai.busy" :title="t('New conversation')" :aria-label="t('New conversation')"><span v-html="icons.plus"></span></button>
+      </div>
+      <div class="msgs" ref="aiMsgs">
+        <p class="hint" v-if="!ai.msgs.some((m) => !m.hidden)">{{ t('Ask how to do something in EditBase, or say what to change in this document.') }}</p>
+        <p class="hint" v-if="!ai.msgs.some((m) => !m.hidden) && ai.imagesOk">{{ t('You can also paste (Ctrl+V) or drop images here.') }}</p>
+        <!-- Each message can be copied as it stands (the owner, 2026-10-06): the button shows while
+             the pointer is on the message; images sent with a question are shown small above its words. -->
+        <template v-for="(m, i) in ai.msgs" :key="i">
+          <div class="msg" :class="m.role" v-if="!m.hidden">
+            <div class="eb-ai-imgs" v-if="m.images && m.images.length"><img v-for="(im, k) in m.images" :key="k" :src="im.url" :alt="im.name" :title="im.name"></div>
+            <div class="eb-bubble" v-html="aiHtml(m)"></div>
+            <div class="did" v-if="m.did">{{ m.did }}</div>
+            <button type="button" class="eb-ai-copy" v-if="aiHtml(m)" :class="{ done: m.copied }" :title="t('Copy')" :aria-label="t('Copy')" @click="aiCopy(m)">{{ m.copied ? '✓' : '📋' }}<span class="eb-ai-copied" v-if="m.copied" role="status">{{ t('Copied') }}</span></button>
+          </div>
+        </template>
+        <div class="msg assistant" v-if="ai.busy"><div class="eb-bubble busy">{{ ai.busyText || t('Thinking…') }}</div></div>
+        <p class="err" v-if="ai.error">{{ ai.error }}</p>
+        <p class="eb-ai-note" v-if="ai.note" role="status">{{ ai.note }}</p>
+        <p class="eb-ai-saving" v-if="ai.saving" role="status">{{ ai.saving === 'summary' ? t('Summing up the conversation…') : t('Saving the conversation…') }}</p>
+        <p class="eb-ai-saved" v-if="ai.saved" role="status">{{ t('Saved to {path}.', { path: ai.saved.path }) }}
+          <a :href="ai.saved.url" target="_blank" rel="noopener">{{ t('Open in Files') }}</a></p>
+      </div>
+      <div class="foot">
+        <!-- Images pasted (Ctrl+V) or dropped go with the next question: shown small here, × takes one off. -->
+        <div class="eb-ai-att" v-if="ai.images.length || ai.attNote">
+          <span class="eb-ai-thumb" v-for="(im, k) in ai.images" :key="im.id"><img :src="im.url" :alt="im.name" :title="im.name"><button type="button" :title="t('Remove image')" :aria-label="t('Remove image')" @click="aiUnattach(k)">×</button></span>
+          <p class="eb-ai-attnote" v-if="ai.attNote" role="alert">{{ ai.attNote }}</p>
+        </div>
+        <textarea v-model="ai.input" rows="2" :placeholder="ai.ready ? t('Message to the assistant…') : aiNotReady()" :disabled="!ai.ready"
+          @keydown="aiKey($event)" @paste="aiPaste" @compositionstart="ai.composing = true" @compositionend="ai.composing = false"></textarea>
+        <button class="eb-btn primary" @click="aiSend" :disabled="ai.busy || !ai.ready || (!ai.input.trim() && !ai.images.length)">{{ t('Send') }}</button>
+      </div>
+    </section>
+    <div class="eb-aibar" v-if="ai.show && (previewOpen || layersOpen || ai.open)">
+      <span class="lb">{{ t('AI assistant') }}</span>
+      <button class="hnd" @click="aiToggle" :title="(ai.open ? t('Hide') : t('Show')) + ' — ' + t('AI assistant')">{{ ai.open ? '▲' : '▼' }}</button>
+    </div>
+    <div class="eb-panels" v-if="previewOpen || layersOpen">
+
     <!-- The pages, down the right, beside the pile. Not a picture of the page --
          a plan of it: where the writing sits and where each object stands, drawn
          from their own measurements. It costs nothing to redraw and tells the
          writer at a glance what is on which page and what overlaps what. -->
-    <aside class="eb-preview" v-if="doc.id && previewOpen" @scroll.passive="paintSoon">
+    <!-- The left-hand edge of each bar (the owner, 2026-10-06), made and worked as
+         the assistant's edge is: dragged, the bar takes the width there and then;
+         let go, the width is kept as Settings keeps it; a double click puts back the
+         width it starts at; with the keyboard, ← and → move it 10px. Not inside the
+         bar: the Pages bar scrolls, and the edge has to stay where it is. -->
+    <div v-if="doc.id && previewOpen" class="eb-bar-grip preview" role="separator" aria-orientation="vertical" tabindex="0"
+      :aria-valuenow="parseFloat(barWidthValue('preview'))" :aria-valuemin="settings.previewU === '%' ? 3 : 60" :aria-valuemax="settings.previewU === '%' ? 60 : 1200" :aria-valuetext="barWidthValue('preview')"
+      :title="t('Drag to change the width; double-click to reset')" :aria-label="t('Drag to change the width; double-click to reset')"
+      @pointerdown="barGripDown('preview', $event)" @pointermove="barGripMove('preview', $event)" @pointerup="barGripUp('preview')" @pointercancel="barGripUp('preview')" @lostpointercapture="barGripUp('preview')"
+      @dblclick="barGripReset('preview')" @keydown="barGripKey('preview', $event)"></div>
+    <aside class="eb-preview" v-if="doc.id && previewOpen" @scroll.passive="paintSoon" :style="{ width: barWidth('preview') }">
       <div class="head">
         <span>{{ t('Pages') }}</span>
         <button class="eb-tb" @click="previewOpen = false" :title="t('Close')"><span v-html="icons.close"></span></button>
       </div>
-      <div class="pages">
+      <div class="pages" :ref="previewPagesRef">
         <button v-for="pg in preview" :key="pg.n" class="pg" draggable="true"
           @contextmenu.prevent.stop="pageCtx($event, pg.n)"
           :class="{ on: pg.n === pageNow, over: dropPage === pg.n, dragging: dragPage === pg.n }"
@@ -17102,7 +17706,12 @@ ${insideObjects('.eb-paper.boxed')} {
          A row dropped on a line stands there in the order; dropped on a layer it
          joins it. Nothing is worked out from where in a row the pointer happens
          to be, so what the writer aims at is what happens. -->
-    <aside class="eb-layers" v-if="doc.id && layersOpen" @keydown="layerKey($event)">
+    <div v-if="doc.id && layersOpen" class="eb-bar-grip layers" role="separator" aria-orientation="vertical" tabindex="0"
+      :aria-valuenow="parseFloat(barWidthValue('layers'))" :aria-valuemin="settings.layersU === '%' ? 3 : 60" :aria-valuemax="settings.layersU === '%' ? 60 : 1200" :aria-valuetext="barWidthValue('layers')"
+      :title="t('Drag to change the width; double-click to reset')" :aria-label="t('Drag to change the width; double-click to reset')"
+      @pointerdown="barGripDown('layers', $event)" @pointermove="barGripMove('layers', $event)" @pointerup="barGripUp('layers')" @pointercancel="barGripUp('layers')" @lostpointercapture="barGripUp('layers')"
+      @dblclick="barGripReset('layers')" @keydown="barGripKey('layers', $event)"></div>
+    <aside class="eb-layers" v-if="doc.id && layersOpen" @keydown="layerKey($event)" :style="{ width: barWidth('layers') }">
       <div class="head">
         <span>{{ t('Layers') }}</span>
         <span class="grow"></span>
@@ -17167,6 +17776,8 @@ ${insideObjects('.eb-paper.boxed')} {
       </div>
     </aside>
     </div>
+    </div>
+    </div>
 
     <div class="eb-status" v-if="doc.id">
       <span class="grow">{{ doc.name }}</span>
@@ -17174,8 +17785,8 @@ ${insideObjects('.eb-paper.boxed')} {
         <span class="dot" :class="{ writing: othersHere.some((p) => p.writing) }"></span>{{ othersHere.map((p) => p.name).join('、') }}
       </span>
       <span class="eb-readonly" v-if="doc.id && doc.writable === false">{{ t('Read only') }}</span>
-      <span>{{ t('{n} pages', { n: pageCount }) }}</span>
-      <span>{{ t('{n} characters', { n: counts }) }}</span>
+      <span>{{ tn('%n page', '%n pages', pageCount) }}</span>
+      <span>{{ tn('%n character', '%n characters', counts) }}</span>
       <span>{{ paperLabel }}</span>
     </div>
   </section>
@@ -17356,7 +17967,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <input type="text" v-model="docSet.title" :placeholder="t('Untitled document')"></div>
           <div class="eb-field"><label>{{ t('Description') }}</label>
             <textarea rows="3" v-model="docSet.head.description"></textarea>
-            <p class="eb-tip">{{ t('What search engines show under the title. {n} characters.', { n: docSet.head.description.length }) }}</p></div>
+            <p class="eb-tip">{{ tn('What search engines show under the title. %n character.', 'What search engines show under the title. %n characters.', docSet.head.description.length) }}</p></div>
           <div class="eb-row">
             <div class="eb-field"><label>{{ t('Keywords') }}</label>
               <input type="text" v-model="docSet.head.keywords" :placeholder="t('Separated by commas')"></div>
@@ -17530,7 +18141,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
           </div>
           <template v-if="src.detail">
-            <p class="eb-tip">{{ t('{name}: {c} columns, {r} rows', { name: src.detail.title, c: src.detail.columns.length, r: src.detail.rows.length }) }}</p>
+            <p class="eb-tip">{{ tn('{name}: %n column, {rows}', '{name}: %n columns, {rows}', src.detail.columns.length, { name: src.detail.title, rows: tn('%n row', '%n rows', src.detail.rows.length) }) }}</p>
             <label class="opt"><input type="checkbox" v-model="src.withHeader"> {{ t('First row is a header') }}</label>
             <div class="src-preview">
               <table class="eb-table">
@@ -17592,7 +18203,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <p class="hint" v-if="!src.items.length && !src.loading">{{ t('There is nothing here yet.') }}</p>
           </div>
           <template v-if="src.collection">
-            <p class="eb-tip">{{ t('{name}: {c} fields, {r} records', { name: src.collection.name, c: src.fields.length, r: src.records.length }) }}</p>
+            <p class="eb-tip">{{ tn('{name}: %n field, {records}', '{name}: %n fields, {records}', src.fields.length, { name: src.collection.name, records: tn('%n record', '%n records', src.records.length) }) }}</p>
             <div class="font-list">
               <button v-for="r in src.records" :key="r.id" class="fp-item" @click="insertRecord(r)">
                 <span class="nm">{{ recordName(r) }}</span>
@@ -17652,7 +18263,7 @@ ${insideObjects('.eb-paper.boxed')} {
       <div class="body">
         <p class="eb-tip" v-if="!merge.keys.length">{{ mergeHint }}</p>
         <template v-else>
-          <p class="eb-tip">{{ t('{n} records will be filled into {k} fields:', { n: merge.count, k: merge.keys.length }) }}</p>
+          <p class="eb-tip">{{ tn('%n record will be filled into {fields}:', '%n records will be filled into {fields}:', merge.count, { fields: tn('%n field', '%n fields', merge.keys.length) }) }}</p>
           <div class="chips"><span v-for="k in merge.keys" :key="k" class="chip">{{ fieldTag(k) }}</span></div>
           <label class="opt" style="margin-top:10px"><input type="radio" :value="false" v-model="merge.separate"> {{ t('One document, one page per record') }}</label>
           <label class="opt"><input type="radio" :value="true" v-model="merge.separate"> {{ t('A separate document per record') }}</label>
@@ -17714,7 +18325,7 @@ ${insideObjects('.eb-paper.boxed')} {
             <option value="all">{{ t('Every script') }}</option>
             <option v-for="sc in fontScripts" :key="sc" :value="sc">{{ scriptLabel(sc) }}</option>
           </select>
-          <span class="count">{{ t('{n} families', { n: fontResults.length }) }}</span>
+          <span class="count">{{ tn('%n family', '%n families', fontResults.length) }}</span>
         </div>
         <div class="font-list">
           <button class="font-item" :class="{ on: fontRole === 'selection' ? !fmt.family : !doc.paper.fonts[fontRole] }" @click="chooseFont('')">
@@ -17723,7 +18334,7 @@ ${insideObjects('.eb-paper.boxed')} {
           </button>
           <button v-for="f in fontPageItems" :key="f.f" class="font-item" :class="{ on: fontRole === 'selection' ? fmt.family === f.f : doc.paper.fonts[fontRole] === f.f }" @click="chooseFont(f.f)">
             <span class="nm" :style="{ fontFamily: fontPreviewStack(f.f) }">{{ f.f }}</span>
-            <span class="meta">{{ catLabel(f.c) }} · {{ t('{n} weights', { n: f.w.length }) }}</span>
+            <span class="meta">{{ catLabel(f.c) }} · {{ tn('%n weight', '%n weights', f.w.length) }}</span>
           </button>
           <p class="hint" v-if="!fontResults.length && fontsLoading">{{ t('Loading…') }}</p>
           <p class="hint" v-if="!fontResults.length && !fontsLoading">{{ t('No family matches that.') }}</p>
@@ -17738,72 +18349,59 @@ ${insideObjects('.eb-paper.boxed')} {
     </div>
   </div>
 
-  <!-- settings -->
+  <!-- settings: the dialog looks the same in every Base-series app (the owner, 2026-10-04).
+       NetBase's is the reference -- a head that says whose settings these are, tabs with an icon
+       each, one heading per tab, the theme as three pictured cards, and a quiet line of help under
+       each control. -->
   <div v-if="settingsOpen" class="eb-modal-back">
-    <div class="eb-modal eb-tabbed" @click.stop>
-      <h3>⚙ {{ t('Settings') }}</h3>
+    <div class="eb-modal eb-settings" @click.stop>
+      <div class="set-head">
+        <span class="ic big">⚙</span>
+        <div><strong>{{ t('Settings') }}</strong><div class="dim">{{ t('Applies to EditBase only, for your account.') }}</div></div>
+        <button type="button" class="set-close" :title="t('Close')" :aria-label="t('Close')" @click="cancelSettings()"><svg viewBox="0 0 24 24"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button>
+      </div>
       <div class="body">
-        <!-- スクロールしないと全部見えない画面はタブで分ける（オーナー 2026-10-01）。 -->
-        <div class="eb-fp-tabs" role="tablist">
-          <button v-for="tb in settingTabs" :key="tb.key" class="eb-fp-tab" :class="{ on: setTab === tb.key }" role="tab" @click="setTab = tb.key">{{ tb.label }}</button>
+        <div class="set-tabs" role="tablist">
+          <button v-for="tb in settingTabs" :key="tb.key" type="button" class="set-tab" :class="{ active: setTab === tb.key }" role="tab" :aria-selected="setTab === tb.key ? 'true' : 'false'" :title="tb.label" @click="setTab = tb.key"><span class="ic">{{ tb.icon }}</span>{{ tb.label }}</button>
         </div>
-        <template v-if="setTab === 'edit'">
-          <div class="eb-field">
-            <label>{{ t('Placement of a new object') }}</label>
-            <select v-model="settings.placement">
-              <option value="standard">{{ t('Place by the rules of HTML') }}</option>
-              <option value="free">{{ t('Place freely') }}</option>
+
+        <section class="set-group" v-show="setTab === 'view'">
+          <h3><span class="ic">🎨</span>{{ t('Appearance and language') }}</h3>
+          <div class="theme-picks">
+            <button v-for="opt in themeOptions" :key="opt.id" type="button" class="theme-pick" :class="{ active: settings.theme === opt.id }" @click="pickTheme(opt.id)">
+              <span class="swatch" :class="opt.id"><i class="bar"></i><i class="line"></i><i class="line short"></i></span>
+              <strong>{{ t(opt.label) }}</strong>
+              <span class="dim">{{ t(opt.hint) }}</span>
+              <span class="tick" v-if="settings.theme === opt.id">✓</span>
+            </button>
+          </div>
+          <p class="dim tiny">{{ t('Saved to your account, so it follows you to every browser you sign in from.') }}</p>
+
+          <h4>{{ t('Language') }}</h4>
+          <label class="fl">
+            <select v-model="settings.language">
+              <option value="auto">{{ t('Follow Nextcloud') }}</option>
+              <option v-for="l in settings.languages" :key="l.code" :value="l.code">{{ l.name }}</option>
             </select>
-            <p class="eb-tip">{{ settings.placement === 'free' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.') }}</p>
-          </div>
-          <div class="eb-field">
-            <label class="opt"><input type="checkbox" v-model="settings.gridNew"> {{ t('Start a new document on a grid of characters and lines') }}</label>
-            <label class="opt"><input type="checkbox" :checked="settings.tabKey === 'tab'" @change="settings.tabKey = $event.target.checked ? 'tab' : 'indent'"> {{ t('The Tab key puts in a tab that lines up the words') }}</label>
-            <label class="opt"><input type="checkbox" :checked="settings.cellEnter === 'para'" @change="settings.cellEnter = $event.target.checked ? 'para' : 'br'"> {{ t('Enter in a table cell starts a new paragraph (as in LibreOffice)') }}</label>
-            <p class="eb-tip">{{ t('The number of characters and lines is set in the paper setup, under Characters and lines.') }}</p>
-          </div>
-          <div class="eb-field">
-            <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
-            <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
-            <label class="opt"><input type="checkbox" v-model="settings.keyDelete"> {{ t('Let the Delete key delete an object frame') }}</label>
-            <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
-            <p class="eb-tip">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
-            <p class="eb-tip">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
-          </div>
-        </template>
-        <template v-if="setTab === 'view'">
-          <div class="eb-row">
-            <div class="eb-field">
-              <label>{{ t('Theme') }}</label>
-              <select v-model="settings.theme">
-                <option value="auto">{{ t('Follow Nextcloud') }}</option>
-                <option value="light">{{ t('Light') }}</option>
-                <option value="dark">{{ t('Dark') }}</option>
-              </select>
-            </div>
-            <div class="eb-field">
-              <label>{{ t('Language') }}</label>
-              <select v-model="settings.language">
-                <option value="auto">{{ t('Follow Nextcloud') }}</option>
-                <option v-for="l in settings.languages" :key="l.code" :value="l.code">{{ l.name }}</option>
-              </select>
-            </div>
-          </div>
-          <div class="eb-field">
-            <label class="opt"><input type="checkbox" v-model="settings.showSpaces"> {{ t('Show spaces (half-width, full-width and tabs)') }}</label>
-            <label class="opt"><input type="checkbox" v-model="settings.showGrid"> {{ t('Show the character grid') }}</label>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Unit for indents') }}</label>
+          </label>
+          <p class="dim tiny">{{ t('EditBase can speak a different language from the rest of Nextcloud.') }}</p>
+
+          <h4>{{ t('On the page') }}</h4>
+          <label class="opt"><input type="checkbox" v-model="settings.showSpaces"> {{ t('Show spaces (half-width, full-width and tabs)') }}</label>
+          <label class="opt"><input type="checkbox" v-model="settings.showGrid"> {{ t('Show the character grid') }}</label>
+
+          <h4>{{ t('Unit for indents') }}</h4>
+          <label class="fl">
             <select v-model="settings.indentUnit">
               <option value="pt">pt</option>
               <option value="mm">mm</option>
               <option value="ch">{{ t('characters') }}</option>
             </select>
-            <p class="eb-tip">{{ t('Used by the indents in the paragraph properties, and written into the file in that unit. Characters follow the size of the letters.') }}</p>
-          </div>
-          <div class="eb-field">
-            <label>{{ t('Unit for the ruler') }}</label>
+          </label>
+          <p class="dim tiny">{{ t('Used by the indents in the paragraph properties, and written into the file in that unit. Characters follow the size of the letters.') }}</p>
+
+          <h4>{{ t('Unit for the ruler') }}</h4>
+          <label class="fl">
             <select v-model="settings.rulerUnit">
               <option value="pt">pt</option>
               <option value="px">px</option>
@@ -17812,34 +18410,89 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="in">{{ t('inches') }}</option>
               <option value="col">{{ t('characters (counted in half-width)') }}</option>
             </select>
-            <p class="eb-tip">{{ t('The ruler is marked in this unit, and what is dragged on it moves 1 pt, 1 px, 1 mm, 1 cm or 0.1 inch at a time.') }}</p>
+          </label>
+          <p class="dim tiny">{{ t('The ruler is marked in this unit, and what is dragged on it moves 1 pt, 1 px, 1 mm, 1 cm or 0.1 inch at a time.') }}</p>
+
+          <h4>{{ t('Width of the Preview bar') }}</h4>
+          <div class="fl">
+            <span class="ai-widthbox">
+              <input type="number" step="1" :min="settings.previewU === '%' ? 3 : 60" :max="settings.previewU === '%' ? 60 : 1200" v-model.number="settings.previewW" :aria-label="t('Width of the Preview bar')">
+              <select v-model="settings.previewU" :aria-label="t('Width of the Preview bar')"><option value="px">px</option><option value="%">%</option></select>
+            </span>
           </div>
-        </template>
-        <template v-if="setTab === 'save'">
-          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
-          <div class="eb-field">
-            <label>{{ t('Save documents in') }}</label>
-            <input type="text" v-model="settings.folder">
-            <p class="eb-tip">{{ t('A folder in your own Files. Documents already saved elsewhere stay where they are.') }}</p>
+          <h4>{{ t('Width of the Layer bar') }}</h4>
+          <div class="fl">
+            <span class="ai-widthbox">
+              <input type="number" step="1" :min="settings.layersU === '%' ? 3 : 60" :max="settings.layersU === '%' ? 60 : 1200" v-model.number="settings.layersW" :aria-label="t('Width of the Layer bar')">
+              <select v-model="settings.layersU" :aria-label="t('Width of the Layer bar')"><option value="px">px</option><option value="%">%</option></select>
+            </span>
           </div>
-          <div class="eb-row">
-            <div class="eb-field">
-              <label>{{ t('Versions kept') }}</label>
-              <input type="number" min="0" max="99" step="1" v-model.number="settings.versionKeep">
+          <template v-if="ai.show">
+            <h4>{{ t('Width of the AI assistant') }}</h4>
+            <div class="fl">
+              <span class="ai-widthbox">
+                <input type="number" step="1" :min="settings.aiU === '%' ? 15 : 240" :max="settings.aiU === '%' ? 60 : 1200" v-model.number="settings.aiW" :aria-label="t('Width of the AI assistant')">
+                <select v-model="settings.aiU" :aria-label="t('Width of the AI assistant')"><option value="px">px</option><option value="%">%</option></select>
+              </span>
             </div>
-            <div class="eb-field">
-              <label>{{ t('A version is kept') }}</label>
+          </template>
+          <p class="dim tiny">{{ t('In pixels, or as a percentage of the width of the window.') }}</p>
+        </section>
+
+        <section class="set-group" v-show="setTab === 'edit'">
+          <h3><span class="ic">✏️</span>{{ t('Editing') }}</h3>
+
+          <h4>{{ t('Placement of a new object') }}</h4>
+          <label class="fl">
+            <select v-model="settings.placement">
+              <option value="standard">{{ t('Place by the rules of HTML') }}</option>
+              <option value="free">{{ t('Place freely') }}</option>
+            </select>
+          </label>
+          <p class="dim tiny">{{ settings.placement === 'free' ? t('Placed freely, with CSS and JavaScript.') : t('Placed by the rules of HTML.') }}</p>
+
+          <h4>{{ t('Characters and lines') }}</h4>
+          <label class="opt"><input type="checkbox" v-model="settings.gridNew"> {{ t('Start a new document on a grid of characters and lines') }}</label>
+          <label class="opt"><input type="checkbox" :checked="settings.tabKey === 'tab'" @change="settings.tabKey = $event.target.checked ? 'tab' : 'indent'"> {{ t('The Tab key puts in a tab that lines up the words') }}</label>
+          <label class="opt"><input type="checkbox" :checked="settings.cellEnter === 'para'" @change="settings.cellEnter = $event.target.checked ? 'para' : 'br'"> {{ t('Enter in a table cell starts a new paragraph (as in LibreOffice)') }}</label>
+          <p class="dim tiny">{{ t('The number of characters and lines is set in the paper setup, under Characters and lines.') }}</p>
+
+          <h4>{{ t('While typing') }}</h4>
+          <label class="opt"><input type="checkbox" :checked="spellcheck" @change="toggleSpellcheck"> {{ t('Check spelling while typing') }}</label>
+          <label class="opt"><input type="checkbox" :checked="autolink" @change="toggleAutolink"> {{ t('Turn an address into a link as it is typed') }}</label>
+          <label class="opt"><input type="checkbox" v-model="settings.keyDelete"> {{ t('Let the Delete key delete an object frame') }}</label>
+          <label class="opt"><input type="checkbox" v-model="pasteObject"> {{ t('Paste into a box of its own') }}</label>
+          <p class="dim tiny">{{ t('What is pasted arrives as an object with a box round it, ready to be put where it belongs. Hold Shift while pasting to put it straight into the writing as plain text.') }}</p>
+          <p class="dim tiny">{{ t('Spelling is checked by the browser itself, in the language it is set to. Shift+right-click reaches its suggestions.') }}</p>
+        </section>
+
+        <section class="set-group" v-show="setTab === 'save'">
+          <h3><span class="ic">💾</span>{{ t('Saving') }}</h3>
+          <label class="opt"><input type="checkbox" v-model="autosave"> {{ t('Save automatically while typing') }}</label>
+
+          <h4>{{ t('Save documents in') }}</h4>
+          <label class="fl"><input type="text" v-model="settings.folder" :aria-label="t('Save documents in')"></label>
+          <p class="dim tiny">{{ t('A folder in your own Files. Documents already saved elsewhere stay where they are.') }}</p>
+
+          <h4>{{ t('Versions') }}</h4>
+          <div class="fl-row">
+            <label class="fl short">
+              <span class="fl-label">{{ t('Versions kept') }}</span>
+              <input type="number" min="0" max="99" step="1" v-model.number="settings.versionKeep">
+            </label>
+            <label class="fl">
+              <span class="fl-label">{{ t('A version is kept') }}</span>
               <select v-model="settings.versionWhen">
                 <option value="manual">{{ t('When you save') }}</option>
                 <option value="auto">{{ t('Every time it is saved, autosave and all') }}</option>
               </select>
-            </div>
+            </label>
           </div>
-          <p class="eb-tip">{{ t('The version before each save is kept beside the document, named after it: 報告書.html keeps 報告書.#01, and the older ones shift down to #99. They are plain HTML and open in any browser. Nought keeps none.') }}</p>
-        </template>
+          <p class="dim tiny">{{ t('The version before each save is kept beside the document, named after it: 報告書.html keeps 報告書.#01, and the older ones shift down to #99. They are plain HTML and open in any browser. Nought keeps none.') }}</p>
+        </section>
       </div>
       <div class="foot">
-        <button class="eb-btn ghost" @click="settingsOpen = false">{{ t('Cancel') }}</button>
+        <button class="eb-btn ghost" @click="cancelSettings()">{{ t('Cancel') }}</button>
         <button class="eb-btn primary" @click="saveSettings">{{ t('Save') }}</button>
       </div>
     </div>
@@ -18511,7 +19164,7 @@ ${insideObjects('.eb-paper.boxed')} {
                 <option value="justify">{{ t('Justified') }}</option>
               </select>
             </div>
-            <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
+            <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="0.25" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
             <!-- 升目の文書：改行幅（1より小さい倍数）と行取り（大きい倍数）を、行送りの倍数で（BUGS #345）。 -->
             <div class="eb-field" v-if="paperGrid.on"><label>{{ t('Line spacing and lines taken (times the line pitch)') }}</label>
               <select v-model="para.lineGrid">
@@ -18533,7 +19186,16 @@ ${insideObjects('.eb-paper.boxed')} {
             <div class="eb-field"><label>{{ t('Indent right ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.right"></div>
             <div class="eb-field"><label>{{ t('First line ({unit})', { unit: indentUnitLabel }) }}</label><input type="number" min="-100" max="200" step="0.5" v-model="para.firstLine"></div>
           </div>
-          <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+<div class="eb-row">
+            <div class="eb-field"><label>{{ t('Drop cap') }}</label>
+              <select v-model="para.dropLines">
+                <option value="">{{ t('None') }}</option>
+                <option value="2">{{ tn('%n line', '%n lines', 2) }}</option><option value="3">{{ tn('%n line', '%n lines', 3) }}</option><option value="4">{{ tn('%n line', '%n lines', 4) }}</option>
+              </select></div>
+            <div class="eb-field"><label>{{ t('Space to the text (mm)') }}</label><input type="number" min="0" max="20" step="0.1" v-model="para.dropGap" :disabled="!para.dropLines" placeholder="1"></div>
+          </div>
+                    <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+          <label class="opt"><input type="checkbox" v-model="para.clearPics"> {{ t('Start below the pictures beside it') }}</label>
           <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
           <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
           <label class="opt"><input type="checkbox" v-model="para.noLoneLines"> {{ t('Never leave one line of it alone on a page') }}</label>
@@ -18805,7 +19467,7 @@ ${insideObjects('.eb-paper.boxed')} {
     <!-- レイヤーの見出しの右クリック：そのレイヤーを中の物ごと削除（確かめてから。Ctrl+Z で戻せる） -->
     <template v-else-if="ctx.layerBand !== null">
       <div class="hd">{{ t('Layer') }}</div>
-      <button class="ci danger" :disabled="!ctx.layerBandCount" @click="closeCtx(); deleteLayerBand(ctx.layerBand)">{{ t('Delete this layer ({n} things)', { n: ctx.layerBandCount }) }}</button>
+      <button class="ci danger" :disabled="!ctx.layerBandCount" @click="closeCtx(); deleteLayerBand(ctx.layerBand)">{{ tn('Delete this layer (%n thing)', 'Delete this layer (%n things)', ctx.layerBandCount) }}</button>
     </template>
     <template v-else>
     <button class="ci" :disabled="!ctx.selection && !frame.on" @click="ctxDo('cut')"><span>{{ t('Cut') }}</span><span class="s k">Ctrl+X</span></button>
@@ -19115,7 +19777,7 @@ ${insideObjects('.eb-paper.boxed')} {
               <option value="justify">{{ t('Justified') }}</option>
             </select>
           </div>
-          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="1" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
+          <div class="eb-field"><label>{{ t('Line height') }}</label><input type="number" min="0.25" max="4" step="0.05" v-model="para.lineHeight" :placeholder="t('From the paper setup')"></div>
           <div class="eb-field" v-if="paperGrid.on"><label>{{ t('Line spacing and lines taken (times the line pitch)') }}</label>
             <select v-model="para.lineGrid">
               <option value="">{{ t('Standard (one line)') }}</option>
@@ -19168,7 +19830,16 @@ ${insideObjects('.eb-paper.boxed')} {
           </div>
           <div class="eb-field"><label>{{ t('Inner margin (mm)') }}</label><input type="number" min="0" max="40" step="0.5" v-model="para.pad"></div>
         </div>
-        <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+<div class="eb-row">
+          <div class="eb-field"><label>{{ t('Drop cap') }}</label>
+            <select v-model="para.dropLines">
+              <option value="">{{ t('None') }}</option>
+              <option value="2">{{ tn('%n line', '%n lines', 2) }}</option><option value="3">{{ tn('%n line', '%n lines', 3) }}</option><option value="4">{{ tn('%n line', '%n lines', 4) }}</option>
+            </select></div>
+          <div class="eb-field"><label>{{ t('Space to the text (mm)') }}</label><input type="number" min="0" max="20" step="0.1" v-model="para.dropGap" :disabled="!para.dropLines" placeholder="1"></div>
+        </div>
+                <label class="opt"><input type="checkbox" v-model="para.pageBefore"> {{ t('Start a new page before this paragraph') }}</label>
+          <label class="opt"><input type="checkbox" v-model="para.clearPics"> {{ t('Start below the pictures beside it') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepWithNext"> {{ t('Keep with the next paragraph') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.keepTogether"> {{ t('Do not split this paragraph across pages') }}</label>
         <label class="opt"><input type="checkbox" v-model="para.noLoneLines"> {{ t('Never leave one line of it alone on a page') }}</label>
@@ -19224,7 +19895,7 @@ ${insideObjects('.eb-paper.boxed')} {
           <button v-for="g in emoji.groups" :key="g.key" class="eb-emoji-tab" :class="{ on: emojiTab === g.key }"
             @click="emojiTab = g.key" :title="t(g.key)">{{ g.tab }}</button>
         </div>
-        <div class="eb-emoji-cat">{{ emojiQuery ? t('{n} found', { n: emojiShown.length }) : t(emojiTab) }}</div>
+        <div class="eb-emoji-cat">{{ emojiQuery ? tn('%n found', '%n found', emojiShown.length) : t(emojiTab) }}</div>
         <div v-if="emojiLoading" class="eb-tip">{{ t('Fetching…') }}</div>
         <div class="eb-emoji-grid">
           <button v-for="em in emojiShown" :key="em" class="eb-emoji-btn" @click="pickEmoji(em)" :title="emojiName(em)">{{ em }}</button>
@@ -19354,7 +20025,7 @@ ${insideObjects('.eb-paper.boxed')} {
         runBandOn: false,
         runBandWhich: '',
         savedAt: 0,
-        settings: { folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual', placement: 'standard', keyDelete: false, showSpaces: false, indentUnit: 'pt', rulerUnit: 'cm', gridNew: false, showGrid: false, tabKey: 'indent', cellEnter: 'br' },
+        settings: { previewW: 132, previewU: 'px', layersW: 240, layersU: 'px', aiW: AI_WIDTH_DEFAULT, aiU: 'px', folder: 'EditBase', theme: 'auto', language: 'auto', languages: [], versionKeep: 10, versionWhen: 'manual', placement: 'standard', keyDelete: false, showSpaces: false, indentUnit: 'pt', rulerUnit: 'cm', gridNew: false, showGrid: false, tabKey: 'indent', cellEnter: 'br' },
         autosave: true,
         guides: true,
         colour: '#111111',
@@ -19382,6 +20053,14 @@ ${insideObjects('.eb-paper.boxed')} {
         build: '', newBuild: false,
         layersOpen: false, layers: [],
         previewOpen: false, preview: [], pageNow: 1,
+        // The AI assistant: shown only when AI-Hub is there and the administrator
+        // allows this person; always shut when the editor opens.
+        ai: { show: false, ready: false, reason: '', model: '', read: [], search: false, open: false,
+          msgs: [], input: '', busy: false, busyText: '', error: '', composing: false, ask: 0,
+          // images waiting to go with the next question; whether this AI connection takes images
+          images: [], attNote: '', drop: false, imagesOk: false,
+          // the conversation's token on the server (kept per tab), saving to Files and what was saved
+          conv: '', saving: '', saved: null, note: '' },
         dragLayer: -1, dropLayer: -1, dropLevel: null, dropGap: null, dragBand: null, extraLayers: [],
         dragPage: 0, dropPage: 0,
         placing: '', placeBox: null, ruleBand: null, ruleLine: 'solid', rulePoly: null, railWatch: null, railWatched: null, railPending: false,
@@ -19415,7 +20094,14 @@ ${insideObjects('.eb-paper.boxed')} {
         // 定規の「字」の目盛りに使う、カーソルのある段落の文字の大きさ（px）。
         rulerFontPx: 0,
         // 設定の画面のタブ（編集・表示と単位・保存）。
-        setTab: 'edit',
+        setTab: 'view',
+        settingsSaved: null,
+        // the three theme cards, worded as NetBase words them
+        themeOptions: [
+          { id: 'auto', label: 'Default (match Nextcloud)', hint: 'Follows whatever theme Nextcloud is using' },
+          { id: 'light', label: 'Light', hint: 'Always light, whatever Nextcloud does' },
+          { id: 'dark', label: 'Dark', hint: 'Always dark, whatever Nextcloud does' },
+        ],
         // 文書のスタイルの画面のタブ。
         stTab: 'letters',
         // ヘッダーとフッターの画面のタブ。
@@ -19434,8 +20120,8 @@ ${insideObjects('.eb-paper.boxed')} {
           border: '', borderWidth: '', borderColour: '#666666', radius: '', fill: '', opacity: '', rotate: '', vpos: '', shadow: false, keep: false,
         },
         paraOpen: false,
-        para: { align: '', lineHeight: '', lineGrid: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
-          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '', tabs: [] },
+        para: { align: '', lineHeight: '', lineGrid: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false, clearPics: false,
+          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '', tabs: [], dropLines: '', dropGap: '' },
         // 段落の画面（表の欄の段落）のタブ：'para' インデントと間隔・'tabs' タブ
         paraTab: 'para',
         // 今の段落のタブ位置（ルーラーに出す）と、ルーラーを押して置くタブの種類
@@ -19575,7 +20261,12 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       settingTabs() {
         this.i18nTick;
-        return [{ key: 'edit', label: this.t('Editing') }, { key: 'view', label: this.t('Display and units') }, { key: 'save', label: this.t('Saving') }];
+        // The look first, as in the other Base-series apps; an icon on each, as NetBase has.
+        return [
+          { key: 'view', icon: '🎨', label: this.t('Appearance and language') },
+          { key: 'edit', icon: '✏️', label: this.t('Editing') },
+          { key: 'save', icon: '💾', label: this.t('Saving') },
+        ];
       },
       indentUnitLabel() {
         this.i18nTick;
@@ -19837,7 +20528,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.i18nTick;   // read, so a change of language works it out again
         if (this.cssBad) { return this.t('None of it could be read as CSS.'); }
         if (!this.cssRules) { return ''; }
-        return this.t('{n} rules in use', { n: this.cssRules });
+        return this.tn('%n rule in use', '%n rules in use', this.cssRules);
       },
       cssHint() { return 'h2 { color: #1f3a5f; }'; },
       /** The controls for where a border goes, drawn as the border they make. */
@@ -20168,6 +20859,7 @@ ${insideObjects('.eb-paper.boxed')} {
     },
     methods: {
       t: T,
+      tn(singular, plural, count, vars) { return TN(singular, plural, count, vars); },
       notify(msg, ms) {
         this.toast = msg;
         clearTimeout(this._toastTimer);
@@ -20313,7 +21005,7 @@ ${insideObjects('.eb-paper.boxed')} {
         this.closeCtx();
         if (!g || !g.key) { return; }
         const inside = (this.docs || []).filter((d) => (d.folder || '') === g.key || String(d.folder || '').indexOf(g.key + '/') === 0).length;
-        if (inside) { this.notify(this.t('The category "{name}" still has {n} documents in it. Move or delete them first.', { name: g.label, n: inside })); return; }
+        if (inside) { this.notify(this.tn('The category "{name}" still has %n document in it. Move or delete it first.', 'The category "{name}" still has %n documents in it. Move or delete them first.', inside, { name: g.label })); return; }
         if (!window.confirm(this.t('Delete the category "{name}"?', { name: g.label }))) { return; }
         try {
           await api('folders?path=' + encodeURIComponent(g.key), { method: 'DELETE' });
@@ -20908,7 +21600,7 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         let overwritten = 0;
         before.forEach((was, id) => {
-          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
+          const el = blockNamed(c, id);
           if (!el || el.outerHTML !== was) { overwritten += 1; }
         });
         this.heldBack = got.kept;
@@ -20917,11 +21609,12 @@ ${insideObjects('.eb-paper.boxed')} {
         this.recount();
         this.$nextTick(() => { this.refreshLayers(); this.refreshPreview(); });
         if (overwritten) {
-          this.notify(this.t('Somebody else has written over {n} paragraphs you had just written. Ctrl+Z brings yours back.', { n: overwritten }));
+          this.notify(this.tn('Somebody else has written over %n paragraph you had just written. Ctrl+Z brings yours back.', 'Somebody else has written over %n paragraphs you had just written. Ctrl+Z brings yours back.', overwritten));
         } else if (got.taken) {
           this.notify(got.kept
-            ? this.t('{n} paragraphs were taken from the other person; {k} you are writing in were kept.', { n: got.taken, k: got.kept })
-            : this.t('{n} paragraphs came in from the other person.', { n: got.taken }));
+            ? this.tn('%n paragraph was taken from the other person; {kept}.', '%n paragraphs were taken from the other person; {kept}.', got.taken,
+              { kept: this.tn('%n you are writing in was kept', '%n you are writing in were kept', got.kept) })
+            : this.tn('%n paragraph came in from the other person.', '%n paragraphs came in from the other person.', got.taken));
         }
       },
       /**
@@ -21032,7 +21725,7 @@ ${insideObjects('.eb-paper.boxed')} {
         items.forEach((item) => {
           (item.blocks || []).forEach((b) => {
             if (!b.id || b.id === mineNow) { return; }
-            const here = c.querySelector(':scope > [data-eb-id="' + b.id + '"]');
+            const here = blockNamed(c, b.id);
             // A paragraph this screen has cut at a page foot is taken or taken away
             // whole: the pieces after the first are this screen's, and go with it.
             const pieces = here && here.parentNode === c ? cutPieces(here) : [];
@@ -21059,7 +21752,7 @@ ${insideObjects('.eb-paper.boxed')} {
               // this screen has that one cut. One whose place cannot be found here
               // is not put at the end of the document, where it used to go and be
               // saved (review D16): it comes with their next save, in its place.
-              const prev = c.querySelector(':scope > [data-eb-id="' + b.after + '"]');
+              const prev = blockNamed(c, b.after);
               if (!prev || prev.parentNode !== c) { return; }
               const run = cutPieces(prev);
               run[run.length - 1].after(fresh);
@@ -21089,7 +21782,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const wanted = {};
         this.othersHere.forEach((p, i) => {
           if (!p.block) { return; }
-          const block = c.querySelector(':scope > [data-eb-id="' + p.block + '"]');
+          const block = blockNamed(c, p.block);
           if (!block) { return; }
           // Their caret is drawn wherever it is; the paragraph is only held while
           // they are actually writing in it.
@@ -21116,14 +21809,14 @@ ${insideObjects('.eb-paper.boxed')} {
         // A paragraph cut at a page foot is held, and let go of, in all its pieces.
         Object.keys(this.live.locks).forEach((id) => {
           if (wanted[id]) { return; }
-          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
+          const el = blockNamed(c, id);
           if (el) {
             cutPieces(el).forEach((k) => { k.removeAttribute('contenteditable'); k.classList.remove('eb-lockedby'); k.removeAttribute('data-eb-who'); });
           }
           delete this.live.locks[id];
         });
         Object.keys(wanted).forEach((id) => {
-          const el = c.querySelector(':scope > [data-eb-id="' + id + '"]');
+          const el = blockNamed(c, id);
           if (!el) { return; }
           cutPieces(el).forEach((k) => {
             k.setAttribute('contenteditable', 'false');
@@ -22003,7 +22696,8 @@ ${insideObjects('.eb-paper.boxed')} {
       /** The document's own styles, in a sheet of their own after the built-in one. */
       applyDocStyles() {
         this.applyPrintPage();
-        const css = stylesCss(normaliseStyles(this.doc.styles), '#editbase-root ');
+        const styles = normaliseStyles(this.doc.styles);
+        const css = stylesCss(styles, '#editbase-root ') + '\n' + docRulesOverStyles(styles);
         let el = document.getElementById('eb-doc-styles');
         if (!el) {
           el = document.createElement('style');
@@ -22149,7 +22843,8 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         const v = Number(pt);
         if (!(v >= 4 && v <= 200)) { this.refreshState(); return; }
-        const val = (Math.round(v * 2) / 2) + 'pt';
+        // 0.01pt まで（級数の 14級＝9.92pt など。0.5pt に丸めていたので印刷物の字の大きさに合わせられなかった）。
+        const val = (Math.round(v * 100) / 100) + 'pt';
         const obj = this.objectText();
         if (obj) { this.textRun(() => styleObjectBlocks(obj, 'fontSize', val)); return; }
         this.textRun(() => styleTextOrBlock('fontSize', val));
@@ -22179,6 +22874,673 @@ ${insideObjects('.eb-paper.boxed')} {
       },
       stepZoom(d) { this.zoomSetByHand = true; this.zoom = Math.min(200, Math.max(25, this.zoom + d)); },
       clearHighlight() { this.textRun(() => clearMarks()); },
+      /** A bar's width as it is kept: "132px" or "15%" (of the window), held within sense. */
+      barWidthValue(k) {
+        const u = this.settings[k + 'U'] === '%' ? '%' : 'px';
+        const d = k === 'preview' ? 132 : 240;
+        let n = Number(this.settings[k + 'W']);
+        if (!(n > 0)) { n = u === '%' ? 15 : d; }
+        n = u === '%' ? Math.min(60, Math.max(3, n)) : Math.min(1200, Math.max(60, n));
+        return (Math.round(n * 100) / 100) + u;
+      },
+      /** The same as CSS: a percentage is of the window's width. */
+      barWidth(k) { return this.barWidthValue(k).replace(/%$/, 'vw'); },
+      /** The AI assistant's own width as it is kept: "372px" or "30%" (of the window),
+       *  held within sense -- pixels 240-1200, a percentage 15-60, as in the other Base
+       *  apps (the owner, 2026-10-06). */
+      aiWidthValue() {
+        const u = this.settings.aiU === '%' ? '%' : 'px';
+        let n = Number(this.settings.aiW);
+        if (!(n > 0)) { n = u === '%' ? 30 : AI_WIDTH_DEFAULT; }
+        n = u === '%' ? Math.min(60, Math.max(15, n)) : Math.min(1200, Math.max(240, n));
+        return (Math.round(n * 100) / 100) + u;
+      },
+      /** The same as CSS: a percentage is of the window's width. */
+      aiWidth() { return this.aiWidthValue().replace(/%$/, 'vw'); },
+      /** The right-hand column is as wide as the bars open in it, said outright: worked
+       *  out by the browser from what is inside, the Layer bar counted 135px of its
+       *  240 and the column ran past the edge of the window. With the assistant open
+       *  it is as wide as the assistant, or as the bars if they are wider. */
+      sideWidth() {
+        const open = [this.previewOpen ? this.barWidth('preview') : '', this.layersOpen ? this.barWidth('layers') : ''].filter(Boolean);
+        if (!open.length) { return this.aiWidth(); }
+        const bars = open.length === 1 ? open[0] : 'calc(' + open.join(' + ') + ')';
+        return this.ai.show && this.ai.open ? 'max(' + this.aiWidth() + ', ' + bars + ')' : bars;
+      },
+      // ---- the edge between the paper and the AI assistant (the owner, 2026-10-06) ----
+      // Dragged, the column takes the width the pointer leaves it, in the unit the
+      // setting is kept in (a percentage stays a percentage of the window's width),
+      // within the limits Settings allows, never past the column's own 70% of the
+      // window and never narrower than the bars open under it. Let go, it is kept
+      // where Settings keeps it. A double click puts back the width it starts at;
+      // ← → move it 10px.
+      aiGripDown(e) {
+        if (e.button !== 0) { return; }
+        this._aiGrip = { x: e.clientX, w: e.currentTarget.parentElement.getBoundingClientRect().width, was: this.aiWidthValue() };
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* the moves still come while the pointer is over it */ }
+        document.documentElement.classList.add('eb-col-resizing');
+        e.preventDefault();
+      },
+      aiGripMove(e) {
+        if (this._aiGrip) { this.aiGripPx(this._aiGrip.w + this._aiGrip.x - e.clientX); }
+      },
+      aiGripUp() {
+        const g = this._aiGrip;
+        if (!g) { return; }
+        this._aiGrip = null;
+        document.documentElement.classList.remove('eb-col-resizing');
+        if (this.aiWidthValue() !== g.was) { this.aiGripSave(); }
+      },
+      aiGripPx(px) {
+        const win = window.innerWidth || document.documentElement.clientWidth || 1000;
+        const bars = ['preview', 'layers'].filter((k) => this[k + 'Open']).reduce((sum, k) => {
+          const v = this.barWidthValue(k);
+          return sum + (v.endsWith('%') ? parseFloat(v) / 100 * win : parseFloat(v));
+        }, 0);
+        px = Math.max(Math.min(px, win * 0.7), bars);
+        const u = this.settings.aiU === '%' ? '%' : 'px';
+        let n = u === '%' ? px / win * 100 : Math.round(px);
+        n = u === '%' ? Math.min(60, Math.max(15, n)) : Math.min(1200, Math.max(240, n));
+        this.settings.aiW = Math.round(n * 100) / 100;
+        this.settings.aiU = u;
+      },
+      aiGripKey(e) {
+        const d = { ArrowLeft: 10, ArrowRight: -10 }[e.key];
+        if (!d) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        this.aiGripPx(e.currentTarget.parentElement.getBoundingClientRect().width + d);
+        clearTimeout(this._aiGripT);
+        this._aiGripT = setTimeout(() => this.aiGripSave(), 400);
+      },
+      aiGripReset() { this.settings.aiW = AI_WIDTH_DEFAULT; this.settings.aiU = 'px'; this.aiGripSave(); },
+      async aiGripSave() {
+        clearTimeout(this._aiGripT);
+        try { await api('settings', { method: 'POST', body: { aiWidth: this.aiWidthValue() } }); } catch (e) { /* kept on this page at least */ }
+      },
+      // ---- the left-hand edges of the Pages bar and the Layer bar (the owner, 2026-10-06) ----
+      // Worked as the assistant's edge is. Dragged, the bar takes the width the
+      // pointer leaves it, in the unit the setting is kept in, within the limits
+      // Settings allows and never past the column's 70% of the window. The bar
+      // standing at the column's own edge never goes narrower than the assistant
+      // above it: the column cannot, so the edge would stop and the number would
+      // still change. Let go, it is kept where Settings keeps it.
+      barGripPx(k, px) {
+        const win = window.innerWidth || document.documentElement.clientWidth || 1000;
+        const toPx = (v) => (v.endsWith('%') ? parseFloat(v) / 100 * win : parseFloat(v));
+        const shown = (key) => {
+          const el = this.$el && this.$el.querySelector('.eb-panels > .eb-' + key);
+          return !!(el && el.getBoundingClientRect().width);
+        };
+        const other = k === 'preview' ? 'layers' : 'preview';
+        const others = this[other + 'Open'] && shown(other) ? toPx(this.barWidthValue(other)) : 0;
+        const first = k === 'layers' ? !(this.previewOpen && shown('preview')) : true;
+        const low = first && this.ai.show && this.ai.open ? toPx(this.aiWidthValue()) - others : 0;
+        px = Math.max(Math.min(px, win * 0.7 - others), low);
+        const u = this.settings[k + 'U'] === '%' ? '%' : 'px';
+        let n = u === '%' ? px / win * 100 : Math.round(px);
+        n = u === '%' ? Math.min(60, Math.max(3, n)) : Math.min(1200, Math.max(60, n));
+        this.settings[k + 'W'] = Math.round(n * 100) / 100;
+        this.settings[k + 'U'] = u;
+      },
+      /** The bar a grip is the edge of, and its width on the screen now. */
+      barGripWidth(e) {
+        const bar = e.currentTarget.nextElementSibling;
+        return bar ? bar.getBoundingClientRect().width : 0;
+      },
+      barGripDown(k, e) {
+        if (e.button !== 0) { return; }
+        const el = e.currentTarget;
+        this._barGrip = { k, el, x: e.clientX, w: this.barGripWidth(e), was: this.barWidthValue(k) };
+        try { el.setPointerCapture(e.pointerId); } catch (err) { /* the moves still come while the pointer is over it */ }
+        el.classList.add('on');
+        document.documentElement.classList.add('eb-col-resizing', 'eb-bar-resizing');
+        e.preventDefault();
+      },
+      barGripMove(k, e) {
+        const g = this._barGrip;
+        if (g && g.k === k) { this.barGripPx(k, g.w + g.x - e.clientX); }
+      },
+      barGripUp(k) {
+        const g = this._barGrip;
+        if (!g || g.k !== k) { return; }
+        this._barGrip = null;
+        g.el.classList.remove('on');
+        document.documentElement.classList.remove('eb-col-resizing', 'eb-bar-resizing');
+        if (this.barWidthValue(k) !== g.was) { this.barGripSave(k); }
+      },
+      barGripKey(k, e) {
+        const d = { ArrowLeft: 10, ArrowRight: -10 }[e.key];
+        if (!d) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        this.barGripPx(k, this.barGripWidth(e) + d);
+        clearTimeout(this._barGripT);
+        this._barGripT = setTimeout(() => this.barGripSave(k), 400);
+      },
+      barGripReset(k) { this.settings[k + 'W'] = k === 'preview' ? 132 : 240; this.settings[k + 'U'] = 'px'; this.barGripSave(k); },
+      async barGripSave(k) {
+        clearTimeout(this._barGripT);
+        try { await api('settings', { method: 'POST', body: { [k + 'Width']: this.barWidthValue(k) } }); } catch (e) { /* kept on this page at least */ }
+      },
+      /**
+       * The little pages follow the bar's width (the owner, 2026-10-06): one down
+       * the bar as before, as wide as it, as LibreOffice Impress draws its slides.
+       * The copy in each was made small for the width it had when it was drawn, so
+       * a wider bar left it in the top left corner of a bigger frame. Whatever
+       * changes the width -- the edge dragged, Settings, the window -- the copies
+       * are made the new size at once and drawn again when it stops.
+       */
+      previewPagesRef(el) {
+        if (el === this._pvEl) { return; }
+        if (this._pvRO && this._pvEl) { this._pvRO.unobserve(this._pvEl); }
+        this._pvEl = el || null;
+        this._pvW = 0;
+        if (!el || typeof ResizeObserver !== 'function') { return; }
+        if (!this._pvRO) {
+          this._pvRO = new ResizeObserver(() => {
+            const box = this._pvEl;
+            const w = box ? box.clientWidth : 0;
+            if (!w || w === this._pvW) { return; }
+            const had = this._pvW;
+            this._pvW = w;
+            if (!had) { return; }
+            this.rescalePreview();
+            this.paintSoon();
+          });
+        }
+        this._pvRO.observe(el);
+      },
+      /** The copies already in the little pages, made the size of their frames again. */
+      rescalePreview() {
+        const sheets = sheetsOnScreen();
+        const first = sheets.length ? sheets[0].getBoundingClientRect().width : 0;
+        if (!first || !this._pvEl) { return; }
+        Array.from(this._pvEl.querySelectorAll('.pg .sheet .mini')).forEach((cell) => {
+          const copy = cell.firstChild;
+          if (!copy || !copy.style || !copy._ebOff) { return; }
+          const w = cell.getBoundingClientRect().width;
+          if (!w) { return; }
+          copy.style.transform = 'scale(' + (w / first) + ') translate('
+            + round1(-copy._ebOff.x) + 'px, ' + round1(-copy._ebOff.y) + 'px)';
+        });
+      },
+      // ---- the AI assistant (through AI-Hub; the owner, 2026-10-03) ----
+      // It answers in words, and says in a block at the end of its answer what it
+      // wants done to the document (editbase-actions) or what it wants to read
+      // (editbase-read). The editor carries the list out as one step that Ctrl+Z
+      // takes back, and reads only what the administrator allows -- read only.
+      async aiLoad() {
+        try {
+          const st = await api('ai/status');
+          Object.assign(this.ai, { show: !!st.show, ready: !!st.ready, reason: st.reason || '', model: st.model || '',
+            read: Array.isArray(st.read) ? st.read : [], search: !!st.search, imagesOk: !!st.images });
+        } catch (e) { this.ai.show = false; }
+        if (this.ai.show && this.doc.id) { await this.aiRestore(); }
+      },
+      // ---- the conversation lasts while this tab is open and the writer stays logged in
+      // (the owner, 2026-10-06). Each document has its own, as before; its token is kept in
+      // this tab's sessionStorage, so a reload goes on with it and a new tab starts afresh.
+      // AI-Hub keeps what was said, for the login it was said in, so after logging out and
+      // in again it starts afresh too.
+      aiConvKey() { return AI_CONV_KEY + ':' + (this.doc.id || 0); },
+      aiConvToken(make) {
+        let id = this.ai.conv;
+        if (!id && this.doc.id) { try { id = window.sessionStorage.getItem(this.aiConvKey()) || ''; } catch (e) { id = ''; } }
+        if (!id && make && this.doc.id) {
+          const bytes = new Uint8Array(16);
+          (window.crypto || {}).getRandomValues ? window.crypto.getRandomValues(bytes) : bytes.forEach((b, i) => { bytes[i] = Math.floor(Math.random() * 256); });
+          id = 'eb' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+          try { window.sessionStorage.setItem(this.aiConvKey(), id); } catch (e) { /* kept for this page only */ }
+        }
+        this.ai.conv = id;
+        return id;
+      },
+      /** Another document (or the first one opened): its own conversation, if this tab has one. */
+      aiSwitchDoc(id) {
+        this.ai.ask += 1;
+        Object.assign(this.ai, { msgs: [], busy: false, busyText: '', error: '', conv: '', saved: null, saving: '', note: '' });
+        if (id && this.ai.show) { this.aiRestore(); }
+      },
+      /** What AI-Hub still keeps of this document's conversation in this tab, back on the screen. */
+      async aiRestore() {
+        const id = this.aiConvToken(false);
+        if (!id || this.ai.msgs.length) { return; }
+        try {
+          const r = await api('?app=editbase&conversation=' + encodeURIComponent(id), { base: HUB });
+          const turns = Array.isArray(r && r.turns) ? r.turns : [];
+          if (!this.ai.msgs.length && this.ai.conv === id) {
+            this.ai.msgs = turns.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string')
+              .map((m) => (m.role === 'user' && m.text.indexOf('What the editor read for ') === 0
+                ? { role: 'user', text: m.text, hidden: true } : { role: m.role, text: m.text, did: '' }));
+            this.aiScroll();
+          }
+        } catch (e) { /* nothing to show: a new conversation */ }
+      },
+      /** Whether there is anything said yet that could be saved. */
+      aiHasTalk() { return this.ai.msgs.some((m) => !m.hidden); },
+      /**
+       * Save the conversation to Files as Markdown (AI-Hub/EditBase/…), or have the AI sum
+       * it up once and save the summary. AI-Hub does both, from what it keeps.
+       */
+      async aiSave(summary) {
+        const id = this.aiConvToken(false);
+        if (!id || !this.aiHasTalk() || this.ai.busy || this.ai.saving) { return; }
+        this.ai.error = '';
+        this.ai.saved = null;
+        this.ai.saving = summary ? 'summary' : 'plain';
+        this.aiScroll();
+        try {
+          let file = null;
+          if (!summary) {
+            file = await api('/save', { base: HUB, method: 'POST', body: { app: 'editbase', conversation: id } });
+          } else {
+            const r = await api('/summary', { base: HUB, method: 'POST', body: { app: 'editbase', conversation: id } });
+            if (!r || !r.id) { throw new Error((r && r.error) || 'not-ready'); }
+            const until = Date.now() + 10 * 60 * 1000;
+            while (Date.now() < until && !file) {
+              await new Promise((res) => setTimeout(res, 1500));
+              const x = await api('/result/' + encodeURIComponent(r.id), { base: HUB });
+              if (x.state === 'running') { continue; }
+              if (x.state === 'done' && x.file) { file = x.file; break; }
+              throw new Error(x.error || x.state);
+            }
+            if (!file) { throw new Error('timeout'); }
+          }
+          if (!file || !file.path) { throw new Error('not-saved'); }
+          this.ai.saved = { path: file.path, url: file.url || '' };
+        } catch (e) {
+          const m = String((e && e.message) || e || '');
+          this.ai.error = m === 'empty' || m === 'HTTP 404' ? this.t('There is nothing kept of this conversation to save.')
+            : (summary && ['busy', 'not-ready', 'timeout'].indexOf(m) >= 0 ? this.aiError(e) : this.t('The conversation could not be saved.'));
+        } finally {
+          this.ai.saving = '';
+          this.aiScroll();
+        }
+      },
+      aiNotReady() {
+        return {
+          'no-key': this.t('AI-Hub has no API key yet.'),
+          'no-cli': this.t('AI-Hub\'s command line tool is not set up.'),
+          'no-model': this.t('AI-Hub has no model chosen yet.'),
+          'no-store': this.t('AI-Hub cannot keep an answer on this server.'),
+        }[this.ai.reason] || this.t('The assistant is not ready.');
+      },
+      aiToggle() {
+        this.ai.open = !this.ai.open;
+        if (this.ai.open) {
+          this.$nextTick(() => { const ta = this.$el && this.$el.querySelector('.eb-ai textarea'); if (ta) { ta.focus(); } this.aiScroll(); });
+        }
+      },
+      /** A new conversation. An answer still on its way to the old one is dropped. */
+      aiClear() {
+        this.ai.ask += 1;
+        const id = this.aiConvToken(false);
+        if (id) { api('/forget', { base: HUB, method: 'POST', body: { app: 'editbase', conversation: id } }).catch(() => {}); }
+        try { window.sessionStorage.removeItem(this.aiConvKey()); } catch (e) { /* nothing kept */ }
+        Object.assign(this.ai, { msgs: [], busy: false, busyText: '', error: '', conv: '', saved: null, note: '' });
+      },
+      aiKey(e) {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !this.ai.composing && e.keyCode !== 229) {
+          e.preventDefault();
+          this.aiSend();
+        }
+      },
+      aiScroll() { this.$nextTick(() => { const box = this.$refs.aiMsgs; if (box) { box.scrollTop = box.scrollHeight; } }); },
+      // ---- copying a message, and images with a question (the owner, 2026-10-06) ----
+      /**
+       * Copy one message as it stands on the screen: the person's own words, or the answer's
+       * text without the blocks meant for the editor (Markdown marks and all). The clipboard API where the browser offers it,
+       * otherwise a hidden text box and the copy command.
+       */
+      async aiCopy(m) {
+        const text = m && m.role === 'assistant' ? aiParse(m.text).text : String((m && m.text) || '');
+        let ok = false;
+        try {
+          if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+        } catch (e) { ok = false; }
+        if (!ok) {
+          const prev = document.activeElement;
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0;';
+          document.body.appendChild(ta);
+          ta.select();
+          try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+          document.body.removeChild(ta);
+          if (prev && prev.focus) { try { prev.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+        }
+        if (!ok) { return; }
+        m.copied = (m.copied || 0) + 1;
+        const mark = m.copied;
+        setTimeout(() => { if (m.copied === mark) { m.copied = 0; } }, 1500);
+      },
+      /** A pasted image goes with the question; pasted words are pasted as ever (text from Word or Excel brings a picture of itself too). */
+      aiPaste(e) {
+        const cd = e.clipboardData;
+        const files = Array.from((cd && cd.files) || []);
+        if (!files.length) { return; }
+        let text = '';
+        try { text = cd.getData('text/plain') || ''; } catch (err) { text = ''; }
+        if (text.trim()) { return; }
+        e.preventDefault();
+        this.aiAddFiles(files);
+      },
+      aiHasFiles(e) {
+        const types = e.dataTransfer && e.dataTransfer.types;
+        return !!types && Array.from(types).includes('Files');
+      },
+      aiDragOver(e) {
+        if (!this.aiHasFiles(e)) { return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        this.ai.drop = true;
+      },
+      aiDragLeave(e) {
+        if (!e.currentTarget || !e.currentTarget.contains(e.relatedTarget)) { this.ai.drop = false; }
+      },
+      aiDrop(e) {
+        this.ai.drop = false;
+        if (!this.aiHasFiles(e)) { return; }
+        e.preventDefault();
+        this.aiAddFiles(Array.from(e.dataTransfer.files || []));
+      },
+      /**
+       * Add images to the question: PNG, JPEG, GIF or WebP, up to 4, at most 5 MB each. A photo
+       * longer than 2000px is made smaller here first; anything refused says why under the
+       * thumbnails. AI-Hub checks all of it again on the server.
+       */
+      async aiAddFiles(files) {
+        const MAX_N = 4;
+        const MAX_BYTES = 5 * 1024 * 1024;
+        const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+        this.ai.attNote = '';
+        if (!this.ai.ready) { return; }
+        if (!this.ai.imagesOk) { this.ai.attNote = this.t('This AI connection cannot send images.'); return; }
+        for (const f of files) {
+          if (!TYPES.includes(f.type)) { this.ai.attNote = this.t('Only PNG, JPEG, GIF and WebP images can be sent.'); continue; }
+          if (this.ai.images.length >= MAX_N) { this.ai.attNote = this.t('Up to 4 images can be sent at once.'); break; }
+          let img = null;
+          try { img = await this.aiPrepImage(f, MAX_BYTES); } catch (e) { this.ai.attNote = this.t('The image could not be read.'); continue; }
+          if (!img) { this.ai.attNote = this.t('An image can be at most 5 MB.'); continue; }
+          if (this.ai.images.length >= MAX_N) { this.ai.attNote = this.t('Up to 4 images can be sent at once.'); break; }
+          this.ai.images.push(img);
+        }
+        this.aiScroll();
+      },
+      /** One image, ready to send: made smaller if its long side is over 2000px; null when it is still over the size limit. */
+      async aiPrepImage(file, maxBytes) {
+        const LONG = 2000;
+        let blob = file;
+        const src = URL.createObjectURL(file);
+        try {
+          const im = await new Promise((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = src; });
+          const w = im.naturalWidth; const h = im.naturalHeight;
+          if (!w || !h) { throw new Error('unreadable'); }
+          if (Math.max(w, h) > LONG) {
+            const k = LONG / Math.max(w, h);
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+            const g = c.getContext('2d');
+            const encode = (type) => new Promise((resolve) => c.toBlob(resolve, type, 0.9));
+            g.drawImage(im, 0, 0, c.width, c.height);
+            blob = await encode(file.type === 'image/jpeg' || file.type === 'image/webp' ? file.type : 'image/png');
+            if (blob && blob.size > maxBytes && blob.type !== 'image/jpeg') {
+              // A photo kept as PNG can still be too large: as JPEG, on white (JPEG has no transparency).
+              g.globalCompositeOperation = 'destination-over';
+              g.fillStyle = '#fff';
+              g.fillRect(0, 0, c.width, c.height);
+              blob = await encode('image/jpeg');
+            }
+            if (!blob) { throw new Error('unreadable'); }
+          }
+        } finally { URL.revokeObjectURL(src); }
+        if (blob.size > maxBytes) { return null; }
+        const url = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(blob); });
+        const comma = url.indexOf(',');
+        return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), name: file.name || '', type: blob.type || file.type, size: blob.size, url, data: url.slice(comma + 1) };
+      },
+      aiUnattach(k) {
+        this.ai.images.splice(k, 1);
+        this.ai.attNote = '';
+      },
+      /** The answer as the writer sees it: without the blocks meant for the editor, a little markdown. */
+      aiHtml(m) {
+        const src = m.role === 'assistant' ? aiParse(m.text).text : String(m.text || '');
+        let h = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        h = h.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
+          .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+          .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+          .replace(/(^|[\s(（])(https?:\/\/[^\s<)"）]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+        return h.replace(/\n/g, '<br>');
+      },
+      /** What the model is shown of the open document: each paragraph by its id, kind and words. */
+      aiContext() {
+        const c = canvas();
+        const out = { title: this.doc.title || this.doc.name || '', paper: '', blocks: [], selection: '', caret: '' };
+        const p = normalisePaper(this.doc.paper);
+        out.paper = [p.size, p.orientation, 'margins ' + [p.margin.top, p.margin.right, p.margin.bottom, p.margin.left].join('/') + ' mm',
+          p.vertical ? 'vertical writing' : ''].filter(Boolean).join(', ');
+        if (!c) { return out; }
+        const r = getRange();
+        if (r && c.contains(r.startContainer)) {
+          out.selection = r.collapsed ? '' : r.toString().slice(0, 2000);
+          let n = r.startContainer;
+          while (n && n.parentNode !== c) { n = n.parentNode; }
+          if (n && n.getAttribute) { out.caret = n.getAttribute('data-eb-id') || ''; }
+        }
+        const kids = Array.from(c.children).filter((el) => !el.classList.contains('eb-pagespacer') && !el.classList.contains('eb-anchor'));
+        for (let i = 0; i < kids.length; i += 1) {
+          const el = kids[i];
+          const id = el.getAttribute('data-eb-id') || '';
+          let kind = el.tagName.toLowerCase();
+          let text = '';
+          if (el.classList.contains('eb-pagebreak')) { kind = 'page break'; }
+          else if (kind === 'ul' || kind === 'ol') { text = Array.from(el.children).map((li) => '• ' + li.textContent.trim()).join(' '); }
+          else if (kind === 'table') { text = Array.from(el.rows || []).slice(0, 40).map((tr) => Array.from(tr.cells).map((td) => td.textContent.trim()).join(' | ')).join(' / '); }
+          else if (kind === 'figure') { kind = 'picture'; const cap = el.querySelector('figcaption'); const img = el.querySelector('img'); text = (cap && cap.textContent.trim()) || (img && img.getAttribute('alt')) || ''; }
+          else { text = el.textContent; }
+          // A paragraph a page foot cut in two is still one paragraph.
+          while (el.hasAttribute(FLOWCUT) && kids[i + 1]) { i += 1; text += kids[i].textContent; if (!kids[i].hasAttribute(FLOWCUT)) { break; } }
+          if (!id) { continue; }
+          out.blocks.push({ id, kind, text: text.replace(/\s+/g, ' ').trim().slice(0, 1500) });
+        }
+        return out;
+      },
+      aiError(e) {
+        const m = String((e && e.message) || e || '');
+        if (m === 'busy') { return this.t('Too many questions at once. Wait a moment and ask again.'); }
+        if (m === 'not-ready') { return this.aiNotReady(); }
+        if (m === 'not-allowed') { return this.t('The administrator has not allowed the assistant for you.'); }
+        if (m === 'timeout') { return this.t('No answer came back in time.'); }
+        if (m === 'no-images') { return this.t('This AI connection cannot send images.'); }
+        if (m === 'too-many-images') { return this.t('Up to 4 images can be sent at once.'); }
+        if (m === 'image-too-large') { return this.t('An image can be at most 5 MB.'); }
+        if (m === 'image-type') { return this.t('Only PNG, JPEG, GIF and WebP images can be sent.'); }
+        return this.t('The assistant could not answer: {e}', { e: m });
+      },
+      async aiSend() {
+        const text = this.ai.input.trim();
+        const images = this.ai.images.slice();
+        if ((!text && !images.length) || this.ai.busy || !this.ai.ready) { return; }
+        this.ai.input = '';
+        this.ai.error = '';
+        this.ai.images = [];
+        this.ai.attNote = '';
+        this.ai.saved = null;
+        this.ai.note = '';
+        this.ai.msgs.push({ role: 'user', text, images: images.map((im) => ({ url: im.url, name: im.name })) });
+        this.aiScroll();
+        await this.aiRound(text, 0, images);
+      },
+      /** One question and its answer; a reading goes round again with what was read. Images go with the first round only. */
+      async aiRound(message, round, images = []) {
+        const ticket = this.ai.ask;
+        // A turn that had images says how many; the images themselves go with their own question only.
+        const history = this.ai.msgs.slice(0, -1).map((m) => (m.images && m.images.length ? { role: m.role, text: m.text, images: m.images.length } : { role: m.role, text: m.text }));
+        this.ai.busy = true;
+        if (!round) { this.ai.busyText = ''; }
+        this.aiScroll();
+        let answer = null;
+        let fresh = false;
+        try {
+          const r = await api('ai/ask', { method: 'POST', body: { history, message, context: this.aiContext(), conversation: this.aiConvToken(true),
+            images: images.map((im) => ({ type: im.type, data: im.data })) } });
+          if (!r || !r.id) { throw new Error((r && r.error) || 'not-ready'); }
+          const until = Date.now() + 10 * 60 * 1000;
+          while (Date.now() < until) {
+            await new Promise((res) => setTimeout(res, 1500));
+            if (ticket !== this.ai.ask) { return; }
+            const x = await api('ai/result/' + encodeURIComponent(r.id));
+            if (x.state === 'running') { continue; }
+            if (x.state === 'done') { answer = String(x.text || ''); fresh = !!x.fresh; break; }
+            throw new Error(x.error || x.state);
+          }
+          if (answer === null) { throw new Error('timeout'); }
+        } catch (e) {
+          if (ticket === this.ai.ask) { this.ai.busy = false; this.ai.busyText = ''; this.ai.error = this.aiError(e); this.aiScroll(); }
+          return;
+        }
+        if (ticket !== this.ai.ask) { return; }
+        // AI-Hub no longer kept the conversation (a new login, or twelve hours unused): what the
+        // screen still showed before this question is gone from the AI too, so it goes from here.
+        if (fresh && !round && this.ai.msgs.length > 1) {
+          this.ai.msgs = this.ai.msgs.slice(-1);
+          this.ai.note = this.t('The earlier conversation had ended, so this one starts afresh.');
+        }
+        const parsed = aiParse(answer);
+        const msg = { role: 'assistant', text: answer, did: '' };
+        this.ai.msgs.push(msg);
+        if (parsed.read && round < 6) {
+          this.ai.busyText = this.aiReadLabel(parsed.read);
+          const found = await this.aiRead(parsed.read);
+          if (ticket !== this.ai.ask) { return; }
+          msg.did = this.aiReadDone(parsed.read);
+          const follow = 'What the editor read for ' + JSON.stringify(parsed.read) + ':\n' + found;
+          this.ai.msgs.push({ role: 'user', text: follow, hidden: true });
+          return this.aiRound(follow, round + 1);
+        }
+        if (parsed.actions && parsed.actions.length) { msg.did = this.aiApply(parsed.actions); }
+        else if (parsed.bad) { msg.did = this.t('The assistant\'s list of changes could not be read, so nothing was changed.'); }
+        this.ai.busy = false;
+        this.ai.busyText = '';
+        this.aiScroll();
+      },
+      aiReadLabel(q) {
+        const s = String(q.source || '');
+        return { documents: this.t('Reading the list of documents…'), document: this.t('Reading another document…'),
+          regibase: this.t('Reading RegiBase…'), formulabase: this.t('Reading FormulaBase…'), netbase: this.t('Reading NetBase…') }[s]
+          || this.t('Reading…');
+      },
+      aiReadDone(q) {
+        const s = String(q.source || '');
+        return { documents: this.t('Read the list of documents.'), document: this.t('Read another document.'),
+          regibase: this.t('Read RegiBase.'), formulabase: this.t('Read FormulaBase.'), netbase: this.t('Read NetBase.') }[s]
+          || this.t('Read.');
+      },
+      /** Read what the assistant asked for, if the administrator allows it. Never writes. */
+      async aiRead(q) {
+        const s = String(q.source || '');
+        const app = (s === 'documents' || s === 'document') ? 'editbase' : s;
+        if (!this.ai.read.includes(app)) { return 'Not allowed: the administrator has not let the assistant read ' + app + '.'; }
+        const lines = [];
+        try {
+          if (s === 'documents') {
+            (this.docs || []).forEach((d) => lines.push('- ' + d.name + (d.folder ? ' (category ' + d.folder + ')' : '')));
+          } else if (s === 'document') {
+            const d = (this.docs || []).find((x) => x.name === q.name || x.name === q.name + '.html' || x.title === q.name);
+            if (!d) { return 'No document of that name.'; }
+            const r = await api('documents/' + d.id);
+            const html = String(r.content || r.html || '').replace(/<\/(p|h[1-6]|li|tr|div|blockquote|table|figure)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
+            const body = new DOMParser().parseFromString(html, 'text/html').body;
+            lines.push(String(body ? body.textContent : '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 12000));
+          } else if (s === 'regibase' && q.collection == null) {
+            (((await api('regibase/collections')) || {}).collections || []).forEach((x) => lines.push('- id ' + x.id + ': ' + x.name + ' (' + x.count + ' records)'));
+          } else if (s === 'regibase') {
+            const r = await api('regibase/collections/' + Number(q.collection));
+            const fields = r.fields || [];
+            const words = String(q.query || '').toLowerCase().trim();
+            let recs = r.records || [];
+            if (words) { recs = recs.filter((x) => fields.some((f) => String((x.data || {})[f.key] || '').toLowerCase().includes(words))); }
+            lines.push('Collection "' + (r.name || '') + '", ' + recs.length + ' records' + (recs.length > 80 ? ' (the first 80)' : '') + ':');
+            recs.slice(0, 80).forEach((x) => lines.push('- ' + fields.map((f) => f.label + ': ' + String((x.data || {})[f.key] == null ? '' : (x.data || {})[f.key]).slice(0, 300))
+              .filter((t) => !/: $/.test(t)).join('; ')));
+          } else if (s === 'formulabase' && q.collection == null) {
+            (((await api('formulabase/collections')) || {}).collections || []).forEach((x) => lines.push('- id ' + x.id + ': ' + x.name));
+          } else if (s === 'formulabase') {
+            (((await api('formulabase/collections/' + Number(q.collection) + '/formulas')) || {}).formulas || []).slice(0, 200)
+              .forEach((f) => lines.push('- ' + f.name + ': ' + f.expression + (f.unit ? ' [' + f.unit + ']' : '') + (f.description ? ' — ' + String(f.description).slice(0, 200) : '')));
+          } else if (s === 'netbase') {
+            const res = await fetch(BASE.replace(/editbase\/$/, 'netbase/') + 'api/devices', { credentials: 'same-origin', headers: { requesttoken: requestToken() } });
+            if (!res.ok) { return 'NetBase could not be read (' + res.status + ').'; }
+            const devs = ((await res.json()) || {}).devices || [];
+            devs.slice(0, 300).forEach((d) => lines.push('- ' + Object.keys(d).filter((k) => ['string', 'number'].includes(typeof d[k]) && String(d[k]) !== '' && String(d[k]).length < 120
+              && !/^(id|uid|user|created|updated|first_seen|last_seen|seen|raw|json)$/i.test(k)).map((k) => k + ': ' + d[k]).join('; ')));
+          } else {
+            return 'Unknown source.';
+          }
+        } catch (e) {
+          return 'The reading failed: ' + String((e && e.message) || e);
+        }
+        return lines.length ? lines.join('\n') : '(nothing)';
+      },
+      /** Carry out the assistant's list of changes, as one step that Ctrl+Z takes back. */
+      aiApply(actions) {
+        const c = canvas();
+        if (!c || !Array.isArray(actions)) { return ''; }
+        let done = 0;
+        let failed = 0;
+        let fonts = false;
+        let paperDone = false;
+        aiTouched = null;
+        this.run(() => {
+          joinFlowCuts(c);
+          actions.forEach((a) => {
+            let ok = false;
+            try {
+              if (a && a.do === 'paper') { ok = this.aiPaper(a); paperDone = paperDone || ok; }
+              else { ok = aiAct(c, a, this.t('Page break')); }
+              if (ok && a.do === 'format' && a.font) { fonts = true; }
+            } catch (e) { ok = false; }
+            if (ok) { done += 1; } else { failed += 1; }
+          });
+        });
+        if (fonts) { this.applyDocFonts(); }
+        // The caret goes to the end of what was changed last -- not left wherever the
+        // focus put it, which was on the first picture of the page, its box up.
+        if (aiTouched && c.contains(aiTouched)) {
+          const g = document.createRange();
+          g.selectNodeContents(aiTouched);
+          g.collapse(false);
+          selectRange(g);
+          this.refreshState();
+          const shown = aiTouched;
+          this.$nextTick(() => { try { shown.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* gone already */ } });
+        }
+        this.$nextTick(() => this.repaginate());
+        const said = [];
+        if (done === 1) { said.push(this.t('Made one change. Ctrl+Z undoes it.')); }
+        else if (done) { said.push(this.t('Made {n} changes. Ctrl+Z undoes them.', { n: done })); }
+        if (paperDone) { said.push(this.t('The paper setup was changed too. Ctrl+Z does not undo that: change it back in Paper setup.')); }
+        if (failed === 1) { said.push(this.t('One of the changes could not be made.')); }
+        else if (failed) { said.push(this.t('{n} of the changes could not be made.', { n: failed })); }
+        return said.join(' ');
+      },
+      aiPaper(a) {
+        const p = Object.assign({}, this.doc.paper);
+        let ok = false;
+        if (typeof a.size === 'string' && a.size) { p.size = a.size; ok = true; }
+        if (a.orientation === 'portrait' || a.orientation === 'landscape') { p.orientation = a.orientation; ok = true; }
+        if (a.margin && typeof a.margin === 'object') {
+          const m = Object.assign({}, p.margin || {});
+          ['top', 'right', 'bottom', 'left'].forEach((k) => { const v = Number(a.margin[k]); if (a.margin[k] != null && v >= 0 && v <= 100) { m[k] = v; ok = true; } });
+          p.margin = m;
+        }
+        if (ok) { this.doc.paper = p; }
+        return ok;
+      },
       // ---- the other apps on this server ----
       async loadSources() {
         try {
@@ -22459,7 +23821,7 @@ ${insideObjects('.eb-paper.boxed')} {
           }
           this.mergeOpen = false;
           await this.loadDocs();
-          this.notify(this.t('{n} documents made', { n: this.merge.separate ? rows.length : 1 }));
+          this.notify(this.tn('%n document made', '%n documents made', this.merge.separate ? rows.length : 1));
         } catch (e) {
           this.notify(this.t('The merge failed: {msg}', { msg: e.message }));
         } finally { this.merge.busy = false; }
@@ -22551,7 +23913,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const done = hits.length;
         if (bar && bar.isConnected) { bar.focus(); }
         this.runFind();
-        this.notify(this.t('{n} replaced', { n: done }));
+        this.notify(this.tn('%n replaced', '%n replaced', done));
       },
 
       /**
@@ -22924,7 +24286,7 @@ ${insideObjects('.eb-paper.boxed')} {
             });
           });
           if (under) {
-            found.push({ what: this.t('{n} lines of writing run under {name}, which is set to keep them clear.', { n: under, name: named(el) }), el, page: pageOf(or) });
+            found.push({ what: this.tn('%n line of writing runs under {name}, which is set to keep it clear.', '%n lines of writing run under {name}, which is set to keep them clear.', under, { name: named(el) }), el, page: pageOf(or) });
           }
         });
         // A frame holding more than it can show.
@@ -22990,6 +24352,13 @@ ${insideObjects('.eb-paper.boxed')} {
         } catch (e) { this.notify(this.t('Could not read the versions: {msg}', { msg: e.message })); }
       },
       async restoreVersion(number) {
+        // The question below promises that what is there now is kept. With versions
+        // switched off it cannot be, and the server refuses (review 2026-10-04, 中3);
+        // said here first, in the same words, rather than after the question.
+        if (Number(this.settings.versionKeep) < 1) {
+          this.notify(this.t('Could not put it back: {msg}', { msg: this.t('versions are switched off, so what is in the document now cannot be kept; nothing was put back') }), 9000);
+          return;
+        }
         if (!window.confirm(this.t('Put version #{n} back? What is in the document now is kept as a version of its own.', { n: String(number).padStart(2, '0') }))) { return; }
         const id = this.vers.id;
         const doc = this.doc;
@@ -24699,9 +26068,11 @@ ${insideObjects('.eb-paper.boxed')} {
             // 回り込みの種類が同じなら、字と反対の側の外側の余白（左に寄せた物の左の余白）は書き手の
             // もの：残す。両側とも消していたので、物のプロパティで左の余白を入れても、OK のたびに
             // 消えて物が動かなかった（賃金台帳の「氏名・性別」の表・#396）。字の側は「文字との間隔」。
+            // 種類が変わったら、前の回り込みの間隔（字の側の余白）だけを外す。両側を外していたので、
+            // 同じ画面で入れた左の外側の余白（写真を用紙の端へ張り出させる −4.76mm など）が消えた。
             if (prevMode !== mode) {
-              obj.style.removeProperty('margin-left');
-              obj.style.removeProperty('margin-right');
+              if (prevMode === 'right') { obj.style.removeProperty('margin-right'); }
+              if (prevMode === 'left') { obj.style.removeProperty('margin-left'); }
             }
             if (mode === 'right') {
               obj.style.cssFloat = 'left';
@@ -25493,7 +26864,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const [a, b] = ends();
           if (a.x === b.x && a.y === b.y) { this.ruleBand = null; return; }
           const art = this.drawArtFor(dk, f, [a, b], brace);
-          art.label = f.on ? this.t('{c} columns × {l} lines', { c: r3(Math.abs(b.x - a.x) / f.sx), l: r3(Math.abs(b.y - a.y) / f.sy) }) : this.t('{w} × {h} mm', { w: r3(Math.abs(b.x - a.x)), h: r3(Math.abs(b.y - a.y)) });
+          art.label = f.on ? this.tn('%n column × {lines}', '%n columns × {lines}', r3(Math.abs(b.x - a.x) / f.sx), { lines: this.tn('%n line', '%n lines', r3(Math.abs(b.y - a.y) / f.sy)) }) : this.t('{w} × {h} mm', { w: r3(Math.abs(b.x - a.x)), h: r3(Math.abs(b.y - a.y)) });
           this.drawPreview(f, art);
         };
         const move = (ev) => { to = snap(ev.clientX, ev.clientY); paint(); };
@@ -25642,7 +27013,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const b = toPx({ x: Math.max(from.x, to.x), y: Math.max(from.y, to.y) });
           const w = Math.abs(to.x - from.x); const h = Math.abs(to.y - from.y);
           const label = f.on
-            ? this.t('{c} columns × {l} lines', { c: r3(w / f.sx), l: r3(h / f.sy) })
+            ? this.tn('%n column × {lines}', '%n columns × {lines}', r3(w / f.sx), { lines: this.tn('%n line', '%n lines', r3(h / f.sy)) })
             : this.t('{w} × {h} mm', { w: r3(w), h: r3(h) });
           this.ruleBand = {
             x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y, erase, label,
@@ -26271,9 +27642,14 @@ ${insideObjects('.eb-paper.boxed')} {
           const kind = objectKind(el);
           const holds = el.matches && el.matches(LAYER_HOLDERS);
           const key = el.getAttribute('data-eb-id') || ('k' + id);
+          // A page break and an added blank page are marks in the writing, not frames:
+          // with no kind of their own they were listed as "Block frame (empty)"
+          // (the owner, 2026-10-03, the QuickManual sample, #418).
+          const mark = el.classList.contains('eb-pagebreak') ? this.t('Page break')
+            : (el.classList.contains('eb-blankpage') ? this.t('Blank page') : '');
           return {
-            id, depth, key, kind: this.nameOfKind(kind),
-            name: this.layerName(el, kind),
+            id, depth, key, kind: mark || this.nameOfKind(kind),
+            name: mark ? '' : this.layerName(el, kind),
             named: el.hasAttribute('data-eb-name'),
             // Only a thing standing on the paper has a place in the pile. Writing
             // in the flow is listed -- it is on the page -- but there is nothing
@@ -26502,7 +27878,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const all = [];
         lv.forEach((v, el) => { if (v === level) { all.push(el); } });
         if (!all.length) { return; }
-        if (!window.confirm(this.t('Delete the {n} things on this layer? You can bring them back with Ctrl+Z.', { n: all.length }))) { return; }
+        if (!window.confirm(this.tn('Delete the %n thing on this layer? You can bring it back with Ctrl+Z.', 'Delete the %n things on this layer? You can bring them back with Ctrl+Z.', all.length))) { return; }
         history.push(true);
         all.forEach((el) => { if (el.isConnected) { deleteObject(el); } });
         const L = Object.assign({}, (this.doc.paper && this.doc.paper.layers) || {});
@@ -26850,6 +28226,12 @@ ${insideObjects('.eb-paper.boxed')} {
         }
         // 同じ行を続けて二度押したら、名前の書き換え。一度目で物を選ぶと一覧が描き直さ
         // れ、ブラウザのダブルクリックは届かないことがあるので、自分で数える。
+        // 改ページ・白紙のページの行：本文の中のその印を選んで見せるだけ（名前は付けない）
+        if (el0 && (el0.classList.contains('eb-pagebreak') || el0.classList.contains('eb-blankpage'))) {
+          if (el0.classList.contains('eb-pagebreak')) { pickBreak(el0); }
+          try { el0.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* gone already */ }
+          return;
+        }
         const now = Date.now();
         if (lastPick.id === id && now - lastPick.at < 500) { lastPick.at = 0; this.startRename(id); return; }
         lastPick.id = id;
@@ -27323,6 +28705,7 @@ ${insideObjects('.eb-paper.boxed')} {
           const off = offsetOf(i);
           copy.style.transform = 'scale(' + scale + ') translate('
             + round1(-off.x) + 'px, ' + round1(-off.y) + 'px)';
+          copy._ebOff = off;
           cell.textContent = '';
           cell.appendChild(copy);
         });
@@ -27854,8 +29237,8 @@ ${insideObjects('.eb-paper.boxed')} {
           kept.push(el);
         });
         if (kept.length) {
-          this.notify(this.t('{n} of them run on past this page, so they were left as they are',
-            { n: kept.length }));
+          this.notify(this.tn('%n of them runs on past this page, so it was left as it is',
+            '%n of them run on past this page, so they were left as they are', kept.length));
         }
         // A document with nothing in it cannot be written in: leave a line.
         if (!c.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre')) {
@@ -27994,8 +29377,8 @@ ${insideObjects('.eb-paper.boxed')} {
           if (x.kids.length === x.peg.children.length) { x.peg.remove(); } else { x.kids.forEach((k) => k.remove()); }
         });
         if (kept.length) {
-          this.notify(this.t('{n} of them run on past this page, so they were left as they are',
-            { n: kept.length }));
+          this.notify(this.tn('%n of them runs on past this page, so it was left as it is',
+            '%n of them run on past this page, so they were left as they are', kept.length));
         }
         // A document with nothing in it cannot be written in: leave a line.
         if (!c.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre')) {
@@ -28866,6 +30249,17 @@ ${insideObjects('.eb-paper.boxed')} {
 
       // ---- paragraph, contents, characters --------------------------------------
       openPara() {
+        // 写真の説明文の中なら、説明文の段落の設定（写真そのものではなく）
+        const cap = captionAtCaret();
+        if (cap) {
+          const now = paragraphProps(cap, this.settings.indentUnit);
+          ctxRange = getRange() ? getRange().cloneRange() : null;
+          if (now) { this.para = Object.assign({}, now); }
+          paraOpened = JSON.stringify(this.para);
+          this.paraTab = 'para';
+          this.paraOpen = true;
+          return;
+        }
         // 段落の設定は「段落のプロパティ」の「インデントと間隔」のタブにまとめた（BUGS #308）。
         const block = cutHead(selectedBlocks(true)[0]);
         // 表の欄（td・th）は段落ではない：欄の中の字の段落の設定は、段落の画面で開く（欄を
@@ -28907,7 +30301,7 @@ ${insideObjects('.eb-paper.boxed')} {
         const inU = (mm) => tidyNum(mmToUnit(mm, unit, fpx));
         const room = inU(roomMm);
         v.unit = unit;
-        [['lineHeight', 1, 4], ['before', 0, 200], ['after', 0, 200], ['left', inU(-100), room], ['right', inU(-100), room],
+        [['lineHeight', 0.25, 4], ['before', 0, 200], ['after', 0, 200], ['left', inU(-100), room], ['right', inU(-100), room],
           ['firstLine', inU(-100), room], ['pad', 0, 40], ['borderWidth', 0.25, 20]].forEach(([k, lo, hi]) => {
           if (v[k] === '' || v[k] == null) { return; }
           const n = Number(String(v[k]).replace(/[０-９．－]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)));
@@ -28933,8 +30327,8 @@ ${insideObjects('.eb-paper.boxed')} {
         this.repaginate();
       },
       clearPara() {
-        this.para = { align: '', lineHeight: '', lineGrid: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false,
-          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '', tabs: [] };
+        this.para = { align: '', lineHeight: '', lineGrid: '', before: '', after: '', left: '', right: '', firstLine: '', pageBefore: false, keepWithNext: false, keepTogether: false, noLoneLines: false, clearPics: false,
+          border: '', borderSides: 'all', borderWidth: '', borderColour: '#666666', fill: '', pad: '', tabs: [], dropLines: '', dropGap: '' };
       },
       /** タブ位置を1つ足す（最後の位置の 10mm 先・種類は最後と同じ）。 */
       addTabStop() {
@@ -29370,6 +30764,26 @@ ${insideObjects('.eb-paper.boxed')} {
 
       // ---- settings ----
       docLang() { return (document.documentElement.lang || 'ja').slice(0, 5); },
+      openSettings() {
+        // what the theme was when the dialog opened, so Cancel can put it back after a preview
+        this.settingsSaved = { theme: this.settings.theme };
+        this.settingsOpen = true;
+      },
+      // A theme card shows its colours the moment it is picked, as the other Base-series
+      // apps do; Save keeps it, Cancel puts the old one back.
+      pickTheme(id) {
+        if (!this.themeOptions.some((o) => o.id === id)) { return; }
+        this.settings.theme = id;
+        this.applyTheme(id);
+      },
+      cancelSettings() {
+        this.settingsOpen = false;
+        if (this.settingsSaved && this.settingsSaved.theme !== this.settings.theme) {
+          this.settings.theme = this.settingsSaved.theme;
+          this.applyTheme(this.settings.theme);
+        }
+        this.settingsSaved = null;
+      },
       async saveSettings() {
         try {
           await api('settings', { method: 'POST', body: {
@@ -29384,6 +30798,9 @@ ${insideObjects('.eb-paper.boxed')} {
             showGrid: this.settings.showGrid ? '1' : '0',
             tabKey: this.settings.tabKey,
             cellEnter: this.settings.cellEnter,
+            previewWidth: this.barWidthValue('preview'),
+            layersWidth: this.barWidthValue('layers'),
+            aiWidth: this.aiWidthValue(),
           } });
           this.applyTheme(this.settings.theme);
           await this.applyLanguage(this.settings.language);
@@ -29416,6 +30833,7 @@ ${insideObjects('.eb-paper.boxed')} {
           try {
             const r = await api('i18n/' + encodeURIComponent(lang));
             i18nOverride = (r && r.translations) ? r.translations : {};
+            i18nLang = lang;
           } catch (e) { i18nOverride = null; }
         }
         this.i18nTick += 1;
@@ -29731,6 +31149,11 @@ ${insideObjects('.eb-paper.boxed')} {
           this.settings.showGrid = s.showGrid === '1';
           this.settings.tabKey = s.tabKey === 'tab' ? 'tab' : 'indent';
           this.settings.cellEnter = s.cellEnter === 'para' ? 'para' : 'br';
+          [['preview', s.previewWidth, 132], ['layers', s.layersWidth, 240], ['ai', s.aiWidth, AI_WIDTH_DEFAULT]].forEach(([k, w, d]) => {
+            const m = /^(\d+(?:\.\d+)?)(px|%)$/.exec(String(w || ''));
+            this.settings[k + 'W'] = m ? Number(m[1]) : d;
+            this.settings[k + 'U'] = m ? m[2] : 'px';
+          });
           if (s.paper) { try { this.defaultPaper = normalisePaper(JSON.parse(s.paper)); } catch (e) { /* keep the built-in default */ } }
           if (s.docOrder) { try { this.docOrder = JSON.parse(s.docOrder) || {}; } catch (e) { this.docOrder = {}; } }
           if (s.folderColours) { try { this.catColours = JSON.parse(s.folderColours) || {}; } catch (e) { this.catColours = {}; } }
@@ -29741,6 +31164,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if (this.settings.language && this.settings.language !== 'auto') { await this.applyLanguage(this.settings.language); }
         await this.loadDocs();
         this.loadSources();
+        this.aiLoad();
         // The category that was open last time, if it is still a category.
         const drawer = window.localStorage.getItem('eb-cat') || '';
         if (drawer && this.docGroups.some((g) => g.key === drawer)) { this.openCat = drawer; }
@@ -29771,7 +31195,7 @@ ${insideObjects('.eb-paper.boxed')} {
         if ((v === '' || v == null || !(n > 0)) && this.fprops.border && this.fprops.border !== 'none') { this.fprops.border = 'none'; }
         else if (n > 0 && (!this.fprops.border || this.fprops.border === 'none')) { this.fprops.border = 'solid'; }
       },
-      'doc.id'(id) { this.$nextTick(() => this.syncRuler());
+      'doc.id'(id) { this.$nextTick(() => this.syncRuler()); this.aiSwitchDoc(id);
         if (id) { window.localStorage.setItem('eb-last-doc', String(id)); }
         // What was found belongs to the document it was found in (BUGS E2).
         this.find.hits = [];
@@ -30284,6 +31708,75 @@ ${insideObjects('.eb-paper.boxed')} {
         delete el.dataset.tipOrig;
         delete el.dataset.tipFor;
       });
+      // The browser's own tooltip is drawn just under the pointer, and the pointing
+      // hand covered it (the owner, 2026-10-03, #419): on the left tool column, where
+      // the buttons have no words, nothing could be read. The editor draws the
+      // tooltip itself instead, under the button and clear of the pointer, after a
+      // moment. The title is lent to it while the pointer is there and given back
+      // when it leaves -- the same title, so whatever looks a button up by it still
+      // finds it.
+      let hoverEl = null;
+      let hoverTimer = 0;
+      let hoverY = 0;
+      const hoverBox = () => {
+        let box = document.getElementById('eb-hovertip');
+        if (!box) {
+          box = document.createElement('div');
+          box.id = 'eb-hovertip';
+          box.setAttribute('role', 'tooltip');
+          tipRoot.appendChild(box);
+        }
+        return box;
+      };
+      const hoverHide = () => {
+        window.clearTimeout(hoverTimer);
+        const box = document.getElementById('eb-hovertip');
+        if (box) { box.classList.remove('on'); }
+      };
+      const hoverShow = (el) => {
+        const text = el.dataset.ebTip || '';
+        if (!text || !el.isConnected) { return; }
+        const box = hoverBox();
+        box.textContent = text;
+        box.classList.add('on');
+        const r = el.getBoundingClientRect();
+        const w = box.offsetWidth;
+        const h = box.offsetHeight;
+        // Under the button, and lower than the tip of the pointing hand (about 26px).
+        let top = Math.max(r.bottom + 6, hoverY + 26);
+        if (top + h > window.innerHeight - 4) { top = Math.max(4, r.top - h - 6); }
+        const left = Math.min(Math.max(4, r.left + r.width / 2 - w / 2), window.innerWidth - w - 4);
+        box.style.top = top + 'px';
+        box.style.left = left + 'px';
+      };
+      tipRoot.addEventListener('mouseover', (e) => {
+        hoverY = e.clientY;
+        const el = e.target && e.target.closest ? e.target.closest('[title], [data-eb-tip]') : null;
+        if (!el || !tipRoot.contains(el) || el.closest('#eb-canvas, .eb-doc, #eb-hovertip')) { return; }
+        const title = el.getAttribute('title');
+        if (title) {
+          // What the button was called before the description above was added to it.
+          if (el.dataset.ebTipOrig === undefined) { el.dataset.ebTipOrig = el.dataset.tipOrig !== undefined ? el.dataset.tipOrig : title; }
+          el.dataset.ebTip = title;
+          el.removeAttribute('title');
+        }
+        if (hoverEl === el) { return; }
+        hoverHide();
+        hoverEl = el;
+        hoverTimer = window.setTimeout(() => hoverShow(el), 450);
+      });
+      tipRoot.addEventListener('mousemove', (e) => { hoverY = e.clientY; }, { passive: true });
+      tipRoot.addEventListener('mouseout', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('[data-eb-tip]') : null;
+        if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) { return; }
+        hoverHide();
+        if (hoverEl === el) { hoverEl = null; }
+        const orig = el.dataset.ebTipOrig;
+        if (orig) { el.setAttribute('title', orig); } else { el.removeAttribute('title'); }
+        delete el.dataset.ebTip;
+        delete el.dataset.ebTipOrig;
+      });
+      ['mousedown', 'keydown', 'wheel'].forEach((ev) => tipRoot.addEventListener(ev, hoverHide, { passive: true }));
       document.addEventListener('selectionchange', () => {
         const r = getRange();
         // The last run of words the writer actually chose. Clicking into a box on
@@ -30535,6 +32028,8 @@ ${insideObjects('.eb-paper.boxed')} {
     runs() { return planRuns; },
   };
   window.__eb_splitBlockAt = splitBlockAt;
+  window.__eb_aiParse = aiParse;
+  window.__eb_docRulesOverStyles = docRulesOverStyles;
   // the paste path, so the tests can drive it without a clipboard event
   window.__eb_pasteHtmlAt = pasteHtmlAt;
   window.__eb_webToDocument = webToDocument;
@@ -30577,6 +32072,11 @@ ${insideObjects('.eb-paper.boxed')} {
   // rather than in Chrome in ten minutes.
   window.__eb_chain = { chainOf, chainLead, chainKind, chainable, continuationOf, isCont };
   window.__eb_frameText = frameText;
+  // The sanitiser, the style cleaner and the print page's script rule, so the
+  // review's checks (2026-10-04) can hand them markup without a clipboard or a printer.
+  window.__eb_sanitiseHtml = sanitiseHtml;
+  window.__eb_cleanStyle = cleanStyle;
+  window.__eb_nonceOwnScript = nonceOwnScript;
   window.__eb_familiesInBody = familiesInBody;
   window.__eb_stylesCss = stylesCss;
   window.__eb_setColumnWidths = setColumnWidths;

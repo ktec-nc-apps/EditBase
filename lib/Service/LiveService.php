@@ -90,18 +90,20 @@ class LiveService {
 		$items = is_array($rec['items'] ?? null) ? $rec['items'] : [];
 		$people = is_array($rec['people'] ?? null) ? $rec['people'] : [];
 
-		// What this person has just written.
+		// What this person has just written. A paragraph's name is the short word
+		// nameBlocks() in the editor gives it, and nothing else is passed on as one
+		// (review 2026-10-04, 低6): the other screens put the name into a selector.
 		$clean = [];
 		foreach ($blocks as $block) {
 			if (!is_array($block)) {
 				continue;
 			}
-			$id = (string)($block['id'] ?? '');
+			$id = self::blockName($block['id'] ?? '');
 			$html = (string)($block['html'] ?? '');
 			if ($id === '' || strlen($html) > self::MAX_BLOCK) {
 				continue;
 			}
-			$clean[] = ['id' => $id, 'html' => $html, 'gone' => !empty($block['gone']), 'after' => (string)($block['after'] ?? '')];
+			$clean[] = ['id' => $id, 'html' => $html, 'gone' => !empty($block['gone']), 'after' => self::blockName($block['after'] ?? '')];
 		}
 		if ($clean !== []) {
 			$seq += 1;
@@ -121,7 +123,7 @@ class LiveService {
 		$people[$userId] = [
 			'at' => $now,
 			'wrote' => $wrote,
-			'block' => (string)($where['block'] ?? ''),
+			'block' => self::blockName($where['block'] ?? ''),
 			'caret' => (int)($where['caret'] ?? 0),
 			'writing' => !empty($where['writing']),
 		];
@@ -148,6 +150,11 @@ class LiveService {
 			'items' => $since <= 0 ? [] : $out,
 			'people' => $this->describePeople($people, $userId),
 		];
+	}
+
+	/** A paragraph's name as the editor writes it (letters, digits, - and _), or nothing. */
+	public static function blockName(mixed $id): string {
+		return is_string($id) && preg_match('/^[\w-]{1,64}$/', $id) ? $id : '';
 	}
 
 	/** Say that this person has gone. */

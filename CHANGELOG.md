@@ -3,6 +3,38 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-10-08
+
+### Added
+- An AI assistant, through the AI-Hub app: a chat above the Pages and Layers bars that
+  knows EditBase, changes the open document when asked (every change undoable with
+  Ctrl+Z) and reads from the other apps of the series only as the administrator allows.
+  Administration settings → EditBase → AI assistant: on or off, who may use it, what it
+  may read, web search. Shown only when AI-Hub is installed.
+- The widths of the Preview bar and the Layer bar can be set in px or % (Settings → View).
+- Tooltips of their own on every button, so the pointer never hides the caption.
+- Bundled samples: body text 12 pt (US GSA Section 508 guidance), and "More apps from
+  KTEC" gives each app a page of its own, AI-Hub included.
+- The AI conversation can be saved to Files as Markdown, as it stands or summed up by the
+  AI (two small buttons in the assistant's head; AI-Hub/EditBase/ in the writer's Files).
+  The conversation of each document lasts while the tab is open and the writer stays
+  logged in: a reload goes on with it, a new tab or a new login starts afresh.
+
+### Changed
+- The toolbar follows LibreOffice, Microsoft Office and Ichitaro: text and paragraph
+  formatting in a second row of the top bar; the left column holds Insert (page break,
+  table of contents, header and footer, rules among it), Drawing and View; the
+  "Page layout" menu is gone.
+- After a forced page break the paragraph's space above is kept, as in LibreOffice; at
+  a natural page break it is dropped.
+
+### Fixed
+- Counts on the screen take the singular for one ("1 page", "1 Seite", "1 caractère"),
+  in every language, through Nextcloud's plural forms.
+- An unedited bundled sample is recognised by its text, not its bytes, so one that was
+  merely opened and saved is still replaced when a new version ships.
+- A page fold never cut inside a word across a line break.
+
 ## [0.2.0] — 2026-10-02
 
 Built and checked by laying out five Japanese government forms (an employment

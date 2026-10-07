@@ -5,8 +5,13 @@ declare(strict_types=1);
 return [
 	'routes' => [
 		['name' => 'page#index', 'url' => '/', 'verb' => 'GET'],
-		['name' => 'preview#show', 'url' => '/preview/{id}', 'verb' => 'GET'],
 		['name' => 'preview#posted', 'url' => '/preview', 'verb' => 'POST'],
+
+		// the AI assistant (through AI-Hub)
+		['name' => 'ai#status', 'url' => '/api/ai/status', 'verb' => 'GET'],
+		['name' => 'ai#ask', 'url' => '/api/ai/ask', 'verb' => 'POST'],
+		['name' => 'ai#result', 'url' => '/api/ai/result/{id}', 'verb' => 'GET'],
+		['name' => 'ai#saveAdmin', 'url' => '/api/ai/admin', 'verb' => 'POST'],
 
 		// settings & translations
 		['name' => 'api#getSettings', 'url' => '/api/settings', 'verb' => 'GET'],

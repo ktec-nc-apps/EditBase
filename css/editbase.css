@@ -166,7 +166,16 @@
 @media (max-width: 1400px) {
   .eb-topbar .eb-btn .lbl { display: none; }
 }
-.eb-topbar .headtools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.eb-topbar .headtools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1 1 100%; }
+/* The format of the words and the paragraph: a row of its own under the row of
+   the styles, as LibreOffice's Formatting bar stands under its Standard bar
+   (the owner, 2026-10-03, #421). On a phone it is one strip that scrolls sideways. */
+.eb-topbar .fmttools { padding-top: 2px; }
+@media (max-width: 620px) {
+  .eb-topbar .fmttools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .eb-topbar .fmttools::-webkit-scrollbar { display: none; }
+  .eb-topbar .fmttools > * { flex: 0 0 auto; }
+}
 .eb-topbar .title-input {
   flex: 1 1 auto; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text);
   font-size: 16px; font-weight: 700; padding: 6px 8px; border-radius: 8px;
@@ -991,6 +1000,16 @@
 #editbase-root .eb-rail .eb-tb.text .lbl,
 #editbase-root .eb-rail .eb-tb.text .caret { display: none; }
 .eb-rail .sep { flex: 1 1 100%; height: 1px; background: var(--border); margin: 2px 2px; }
+/* The name of each group of the rail, so the column of icons can be read at a
+   glance (the owner, 2026-10-03, #421): what goes into the document, what is
+   drawn, and what is shown. */
+.eb-rail .rail-cap {
+  flex: 1 1 100%; font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
+  padding: 6px 3px 1px; border-top: 1px solid var(--border); margin-top: 2px;
+  -webkit-user-select: none; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.eb-rail .rail-cap:first-child { border-top: 0; margin-top: 0; padding-top: 2px; }
+#editbase-root .eb-rail.tight .rail-cap { font-size: 9px; padding: 4px 2px 0; }
 /* Four columns is the limit; when even four will not stand in a short window the
    buttons themselves come in a size, rather than the rail growing a scrollbar. */
 .eb-rail.tight { width: calc(var(--rail-cols, 2) * 34px + 10px); }
@@ -1116,6 +1135,168 @@
 @media print {
   .eb-tabs { display: none !important; }
 }
+
+/* The right-hand column: the AI assistant on top, the pages and the layers below
+   (the owner, 2026-10-03). The assistant takes the top half; with neither bar open
+   it stands alone, the whole height. It has a width of its own (the owner,
+   2026-10-06): the column is as wide as the assistant, or as the bars if they are
+   wider. */
+.eb-rcol { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; max-width: 70vw; }
+.eb-panels { flex: 1 1 0; display: flex; min-height: 0; }
+/* The bars keep the widths they are given (Settings, View); nothing squeezes them.
+   Under an assistant wider than they are, the last of them takes what is over. */
+.eb-panels > .eb-preview, .eb-panels > .eb-layers { height: auto; flex: 0 0 auto; }
+/* The first of them, not the last: its left-hand edge is the column's, so the edge
+   that is dragged is the one that moves (the owner, 2026-10-06). With the last
+   taking it, dragging the Pages bar's edge only took width off the Layer bar. */
+.eb-panels > aside:first-of-type { flex-grow: 1; }
+/* The left-hand edges of the two bars (the owner, 2026-10-06): the same strip as
+   the assistant's edge, between the bars rather than inside them -- the Pages bar
+   scrolls, and the strip has to stay where it is. It takes no room of its own. */
+#editbase-root .eb-bar-grip {
+  position: relative; flex: 0 0 8px; width: 8px; margin: 0 -6px 0 -2px; z-index: 6; align-self: stretch;
+  cursor: col-resize; touch-action: none; outline: none;
+}
+#editbase-root .eb-bar-grip::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 1px; width: 2px; background: transparent; transition: background .15s;
+}
+#editbase-root .eb-bar-grip:hover::after, #editbase-root .eb-bar-grip:focus-visible::after,
+#editbase-root .eb-bar-grip.on::after { background: var(--primary); }
+@media (max-width: 1250px) { #editbase-root .eb-bar-grip.preview { display: none; } }
+@media (max-width: 1050px) { #editbase-root .eb-bar-grip.layers { display: none; } }
+@media print { #editbase-root .eb-bar-grip { display: none !important; } }
+.eb-ai {
+  flex: 0 0 50%; min-height: 0; display: flex; flex-direction: column; position: relative;
+  background: var(--surface); border-left: 1px solid var(--border); font-size: 13px;
+}
+/* The edge between the paper and the assistant (the owner, 2026-10-06): a thin
+   strip over the column's left border. Pointed at, it shows the resize cursor and
+   a line in the accent colour; dragged, it sets the assistant's width. */
+#editbase-root .eb-ai-grip {
+  position: absolute; top: 0; bottom: 0; left: -2px; width: 8px; z-index: 6;
+  cursor: col-resize; touch-action: none; outline: none;
+}
+#editbase-root .eb-ai-grip::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 1px; width: 2px; background: transparent; transition: background .15s;
+}
+#editbase-root .eb-ai-grip:hover::after, #editbase-root .eb-ai-grip:focus-visible::after,
+html.eb-col-resizing:not(.eb-bar-resizing) #editbase-root .eb-ai-grip::after { background: var(--primary); }
+html.eb-col-resizing, html.eb-col-resizing * { cursor: col-resize !important; -webkit-user-select: none !important; user-select: none !important; }
+.eb-ai.alone { flex: 1 1 auto; }
+.eb-ai .head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; font-weight: 700; color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+/* One row, never two, down to the narrowest the assistant can be (240px): the
+   model's name gives way (cut with an ellipsis, whole in its tooltip); the title
+   keeps its width -- shrunk by the fraction of a pixel the sum leaves over, it was
+   cut short as well -- and the button never shrinks (the owner, 2026-10-06). */
+.eb-ai .head > * { flex: 0 0 auto; }
+.eb-ai .head .ttl { flex: 0 0 auto; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eb-ai .head .grow { flex: 1 1 0; min-width: 0; }
+.eb-ai .head .model { flex: 0 100 auto; min-width: 3em; font-weight: 400; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eb-ai .msgs { flex: 1 1 auto; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.eb-ai .hint { color: var(--muted); margin: 4px 0; }
+.eb-ai .msg { display: flex; flex-direction: column; max-width: 92%; }
+.eb-ai .msg.user { align-self: flex-end; align-items: flex-end; }
+.eb-ai .msg.assistant { align-self: flex-start; }
+.eb-ai .eb-bubble { padding: 6px 10px; border-radius: 10px; line-height: 1.55; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.eb-ai .eb-bubble:empty { display: none; }
+.eb-ai .msg.user .eb-bubble { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
+.eb-ai .msg.assistant .eb-bubble { background: var(--surface-2); }
+.eb-ai .eb-bubble.busy { color: var(--muted); }
+.eb-ai .eb-bubble code { font-size: 12px; }
+.eb-ai .did { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.eb-ai .err { color: #c62828; margin: 2px 0; }
+/* Saving the conversation to Files (the owner, 2026-10-06): two small buttons in the
+   head, beside "new conversation", and a line under the messages that says where it went. */
+#editbase-root .eb-ai .head .eb-tb { min-width: 26px; height: 26px; padding: 0 4px; }
+#editbase-root .eb-ai .head .eb-tb:disabled { opacity: .4; cursor: default; }
+#editbase-root .eb-ai .head .eb-tb:disabled:hover { background: transparent; border-color: transparent; }
+.eb-ai .head { gap: 4px; }
+.eb-ai .eb-ai-saving, .eb-ai .eb-ai-note { color: var(--muted); margin: 2px 0; font-size: 12.5px; }
+.eb-ai .eb-ai-saved { margin: 2px 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.eb-ai .eb-ai-saved a { color: var(--primary); text-decoration: underline; white-space: nowrap; }
+.eb-ai .foot { display: flex; gap: 6px; align-items: flex-end; padding: 6px 8px; border-top: 1px solid var(--border); }
+#editbase-root .eb-ai .foot textarea {
+  flex: 1 1 auto; min-height: 38px; max-height: 140px; resize: vertical; font: inherit;
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--surface); color: inherit;
+}
+/* Copying a message, and images with a question (the owner, 2026-10-06). The copy button sits
+   beside the message -- left of the person's, right of the answer's -- and shows while the
+   pointer is on the message (always, faintly, where there is no pointer to hover with). */
+#editbase-root .eb-ai .msg { position: relative; max-width: calc(100% - 34px); }
+#editbase-root .eb-ai-copy {
+  position: absolute; bottom: 0; box-sizing: border-box; width: 28px; height: 28px; min-width: 0; min-height: 0; margin: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 13px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+#editbase-root .eb-ai .msg.assistant .eb-ai-copy { left: calc(100% + 4px); }
+#editbase-root .eb-ai .msg.user .eb-ai-copy { right: calc(100% + 4px); }
+#editbase-root .eb-ai .msg:hover .eb-ai-copy, #editbase-root .eb-ai-copy:focus-visible, #editbase-root .eb-ai-copy.done { opacity: 1; }
+#editbase-root .eb-ai-copy:hover { color: var(--text); border-color: var(--primary); }
+#editbase-root .eb-ai-copy.done { color: var(--primary); border-color: var(--primary); }
+@media (hover: none) { #editbase-root .eb-ai-copy { opacity: .75; } }
+#editbase-root .eb-ai-copied {
+  position: absolute; bottom: 3px; white-space: nowrap; pointer-events: none;
+  padding: 2px 7px; border-radius: 4px; font-size: 11.5px; line-height: 1.5; background: var(--text); color: var(--surface);
+}
+/* the label sits beside the button, over the message's corner: never past the panel's edge, nor above the first message */
+#editbase-root .eb-ai .msg.assistant .eb-ai-copied { right: calc(100% + 4px); }
+#editbase-root .eb-ai .msg.user .eb-ai-copied { left: calc(100% + 4px); }
+#editbase-root .eb-ai-imgs { display: flex; flex-wrap: wrap; gap: 4px; margin: 1px 0 4px; white-space: normal; }
+#editbase-root .eb-ai-imgs img { display: block; max-width: 140px; max-height: 140px; border-radius: 6px; object-fit: contain; background: var(--surface); }
+#editbase-root .eb-ai .foot { flex-wrap: wrap; }
+/* the box and Send stay on one line, the thumbnails above them */
+#editbase-root .eb-ai .foot textarea { flex-basis: 0; min-width: 0; }
+#editbase-root .eb-ai-att { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+#editbase-root .eb-ai-thumb {
+  position: relative; width: 56px; height: 56px; flex: 0 0 56px; box-sizing: border-box; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+}
+#editbase-root .eb-ai-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+#editbase-root .eb-ai-thumb button {
+  position: absolute; top: 2px; right: 2px; box-sizing: border-box; width: 20px; height: 20px; min-width: 0; min-height: 0; margin: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, .62); color: #fff; font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
+}
+#editbase-root .eb-ai-thumb button:hover, #editbase-root .eb-ai-thumb button:focus-visible { background: var(--danger, #c00); }
+#editbase-root .eb-ai-attnote { flex: 1 0 100%; margin: 0; color: var(--danger); font-size: 12.5px; }
+#editbase-root .eb-ai.is-drop { outline: 2px dashed var(--primary); outline-offset: -4px; }
+#editbase-root .eb-ai .msg.user .eb-ai-imgs { margin: 0 0 3px; padding: 5px; border-radius: 10px; background: color-mix(in srgb, var(--primary) 14%, var(--surface)); }
+/* The handle: a strip across the column, its triangle pointing the way the
+   assistant opens -- down to open it, up to shut it. */
+.eb-aibar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 8px; height: 22px;
+  background: var(--surface); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); -webkit-user-select: none; user-select: none;
+}
+.eb-ai + .eb-aibar { border-top: 1px solid var(--border); }
+#editbase-root .eb-aibar .hnd {
+  padding: 0 12px; height: 18px; border: 0; border-radius: 0 0 6px 6px;
+  background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1;
+}
+#editbase-root .eb-aibar .hnd:hover, #editbase-root .eb-tabs .tab.ai .hnd:hover { background: var(--primary); color: #fff; }
+/* With neither bar open, the handle waits at the top of the strip of handles. */
+#editbase-root .eb-widthbox { display: inline-flex; gap: 4px; align-items: center; }
+#editbase-root .eb-widthbox input { width: 80px; }
+.eb-tabs .tab.ai { flex: 0 0 auto; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+#editbase-root .eb-tabs .tab.ai .hnd { margin: 4px 0 0; padding: 6px 0; border-radius: 0 0 6px 6px; }
+@media print {
+  .eb-rcol, .eb-ai, .eb-aibar { display: none !important; }
+}
+
+/* The tooltip of a button, drawn by the editor under the button and clear of the
+   pointer (the browser's own was hidden under the pointing hand, #419). */
+#eb-hovertip {
+  position: fixed; z-index: 100000; display: none; pointer-events: none;
+  max-width: 360px; padding: 6px 9px; border-radius: 6px;
+  background: rgba(30, 41, 59, .96); color: #fff; font-size: 12.5px; line-height: 1.45;
+  white-space: pre-line; box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+}
+#eb-hovertip.on { display: block; }
+@media print { #eb-hovertip { display: none !important; } }
 
 /* Dragging a row or a page: what is being carried, and where it would land. */
 /* The row is dragged by the pointer itself, so the browser must not take the
@@ -1737,3 +1918,104 @@
   display: flex; align-items: flex-end; justify-content: flex-start;
 }
 .eb-tabrow { align-items: flex-end; }
+
+/* ---------- settings dialog: the look shared by the Base-series apps ----------
+   NetBase's settings dialog is the reference (the owner, 2026-10-04): a head that
+   says whose settings these are, tabs with an icon each, one heading per tab, the
+   theme as three pictured cards, and a quiet line of help under each control. The
+   rules below are the same in every app, so the dialogs read as one family. */
+#editbase-root .set-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+#editbase-root .set-head .ic.big { font-size: 28px; line-height: 1; flex: 0 0 auto; font-family: inherit; }
+/* One width for the dialog in every app: NetBase's. */
+#editbase-root .modal:has(> .set-head), #editbase-root .eb-modal:has(> .set-head) { width: min(660px, 94vw); max-width: 100%; }
+#editbase-root .set-head > div { flex: 1 1 auto; min-width: 0; }
+#editbase-root .set-head strong { display: block; font-size: 17px; font-weight: 700; color: var(--text); }
+#editbase-root .set-head .dim { font-size: 12.5px; color: var(--muted); }
+#editbase-root .set-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; line-height: 1; }
+#editbase-root .set-close:hover { color: var(--primary); border-color: var(--primary); }
+#editbase-root .set-close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; display: block; }
+#editbase-root .set-group > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 0; border: 0; font-size: 15.5px; font-weight: 700; color: var(--text); }
+#editbase-root .set-group > h3 .ic { font-size: 16px; line-height: 1; }
+/* A sub-heading needs air above it or it reads as a caption of the paragraph it
+   sits under; only the one right after the tab's own title sits close to it. */
+#editbase-root .set-group h4 { margin: 0 0 8px; padding: 22px 0 0; font-size: 12.5px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
+#editbase-root .set-group > h3 + h4 { padding-top: 4px; }
+#editbase-root .set-group .fl { display: flex; flex-direction: column; gap: 5px; margin: 0 0 4px; min-width: 0; }
+#editbase-root .set-group .fl-label { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+#editbase-root .set-group .fl > input, #editbase-root .set-group .fl > select, #editbase-root .set-group .fl > textarea,
+#editbase-root .set-group .fl-row > input, #editbase-root .set-group .fl-row > select,
+#editbase-root .set-group .ai-widthbox > input, #editbase-root .set-group .ai-widthbox > select {
+  width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 14px; outline: none; margin: 0; box-sizing: border-box;
+}
+#editbase-root .set-group input:focus, #editbase-root .set-group select:focus, #editbase-root .set-group textarea:focus { border-color: var(--primary); }
+/* An explanation is meant to be read, not squinted at: quiet, under the thing it explains. */
+#editbase-root .set-group p.dim { margin: 6px 0 0; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
+#editbase-root .set-group p.dim + p.dim { margin-top: 4px; }
+#editbase-root .set-group p.dim b { color: var(--text); }
+#editbase-root .set-group p.dim b.on { color: var(--accent, var(--primary)); }
+#editbase-root .set-group .fl-row { display: flex; gap: 12px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+#editbase-root .set-group .fl-row > .fl { flex: 1 1 auto; margin: 0; }
+#editbase-root .set-group .fl-row > .fl.short { flex: 0 0 110px; }
+#editbase-root .set-group .fl-row.inline { margin-top: 8px; font-size: 13px; }
+#editbase-root .set-group .fl-row.inline > input, #editbase-root .set-group .fl-row.inline > select { width: auto; }
+#editbase-root .set-group .fl-row.inline > input.short { width: 88px; }
+#editbase-root .set-group .fl-row > .grow { flex: 1 1 auto; min-width: 0; width: auto; }
+#editbase-root .set-group .fl-row.range > input[type=range] { flex: 1 1 auto; width: auto; padding: 0; border: 0; background: transparent; accent-color: var(--primary); }
+#editbase-root .set-group .fl-row.range > .pct { min-width: 40px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+#editbase-root .set-group .fl-row.act { align-items: center; }
+#editbase-root .set-group .fl-row.act > .btn { min-width: 190px; }
+#editbase-root .set-group .fl-row.act > .dim { flex: 1 1 200px; font-size: 12.5px; line-height: 1.5; }
+#editbase-root .set-group .opt { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+#editbase-root .set-group .opt input { margin: 0; accent-color: var(--primary); }
+#editbase-root .set-group .ai-widthbox { display: inline-flex; gap: 6px; align-items: center; }
+#editbase-root .set-group .ai-widthbox > input { width: 110px; }
+#editbase-root .set-group .ai-widthbox > select { width: 80px; }
+/* The theme as three pictured cards: a miniature of the app (title bar, two lines of
+   text), with 'auto' split down the middle. The picked one carries a tick. */
+#editbase-root .theme-picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+#editbase-root .theme-pick {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 12px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface);
+  color: var(--text); text-align: left; font: inherit; font-size: 13.5px; cursor: pointer; margin: 0; width: 100%;
+}
+#editbase-root .theme-pick:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+#editbase-root .theme-pick.active { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); }
+#editbase-root .theme-pick strong { font-weight: 700; }
+#editbase-root .theme-pick .dim { font-size: 12px; line-height: 1.35; color: var(--muted); }
+#editbase-root .theme-pick .tick { position: absolute; top: 8px; right: 10px; color: var(--primary); font-weight: 800; }
+#editbase-root .theme-pick .swatch {
+  width: 100%; height: 46px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 4px;
+  padding: 6px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; position: relative; box-sizing: border-box;
+}
+#editbase-root .theme-pick .swatch i { display: block; border-radius: 2px; }
+#editbase-root .theme-pick .swatch i.bar { height: 8px; width: 60%; }
+#editbase-root .theme-pick .swatch i.line { height: 5px; width: 100%; }
+#editbase-root .theme-pick .swatch i.line.short { width: 70%; }
+#editbase-root .theme-pick .swatch.light { background: #f4f6fb; }
+#editbase-root .theme-pick .swatch.light i.bar { background: #2563eb; }
+#editbase-root .theme-pick .swatch.light i.line { background: #cbd5e1; }
+#editbase-root .theme-pick .swatch.dark { background: #0b1220; }
+#editbase-root .theme-pick .swatch.dark i.bar { background: #4f8cff; }
+#editbase-root .theme-pick .swatch.dark i.line { background: #334565; }
+#editbase-root .theme-pick .swatch.auto { background: linear-gradient(105deg, #f4f6fb 0 50%, #0b1220 50% 100%); }
+#editbase-root .theme-pick .swatch.auto i.bar { background: linear-gradient(105deg, #2563eb 0 50%, #4f8cff 50% 100%); }
+#editbase-root .theme-pick .swatch.auto i.line { background: linear-gradient(105deg, #cbd5e1 0 50%, #334565 50% 100%); }
+/* The settings dialog's own frame and its tabs (the same strip of tabs as the other Base apps). */
+#editbase-root .eb-modal.eb-settings { display: flex; flex-direction: column; overflow: hidden; }
+#editbase-root .eb-modal.eb-settings .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px; }
+#editbase-root .eb-modal.eb-settings .foot { border-top: 1px solid var(--border); padding: 14px 18px; }
+#editbase-root .set-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 2px solid var(--primary); margin: 0 0 18px; }
+#editbase-root .set-tab {
+  flex: 1 1 auto; min-width: 0; position: relative;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  background: color-mix(in srgb, var(--border) 85%, var(--surface-2)); color: var(--text);
+  border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; margin: 0 -1px -1px 0;
+  padding: 10px 14px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#editbase-root .set-tab:hover { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); color: var(--primary); }
+#editbase-root .set-tab.active { background: var(--surface); color: var(--primary); border-color: var(--border); z-index: 1; }
+#editbase-root .set-tab.active::after { content: ""; position: absolute; left: -1px; right: -1px; bottom: -2px; height: 2px; background: var(--primary); }
+#editbase-root .set-tab .ic { flex: 0 0 auto; font-size: 15px; line-height: 1; }
+@media (max-width: 560px) { #editbase-root .set-tab { flex: 1 1 100%; border-radius: 0; margin-right: 0; } }

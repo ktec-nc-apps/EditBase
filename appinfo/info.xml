@@ -23,6 +23,7 @@ Features:
 - Frames that carry their writing on into the next page, cut at the line rather than at the edge of the paper
 - Mathematics written as native MathML — no images, no external renderer
 - Formulas made in FormulaBase inserted into the document as they are
+- An AI assistant, through the AI-Hub app: a chat beside the pages that knows EditBase, changes the open document when asked (every change undoable with Ctrl+Z) and reads from the other apps of the series only as the administrator allows
 - Styles for each kind of block, and the document's own stylesheet for anything they cannot say
 - A check over the document that finds what is wrong with the page before it is printed
 - Find and replace, recorded changes, mail merge, and an undo history kept by the editor itself
@@ -46,11 +47,12 @@ EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript �
 - ページに入りきらない枠は、用紙の端ではなく行の切れ目で分けて、次ページの枠に文章を続けます
 - 数式はネイティブのMathMLで記述 ― 画像も外部レンダラーも使いません
 - FormulaBase で作った式を、そのまま文書に挿入できます
+- AI-Hub アプリを通した AI アシスタント。EditBase を知っているチャットがページの横に出て、頼めば開いている文書を直し（すべて Ctrl+Z で戻せます）、同じシリーズのほかのアプリは管理者が許した範囲でだけ読みます
 - 種類ごとのスタイル設定と、それでは書けないものを直接書くための文書専用スタイルシート
 - 印刷する前にページの不具合を見つける「文書の点検」
 - 検索と置換、変更履歴、差し込み印刷、エディタ自身が保持する取り消し履歴
 - HTML5 と CSS が先。JavaScript はそれで無理なこと（オブジェクトの両側への回り込み・画像のエフェクト付きの拡大・表計算）にだけ使い、文書ごとに入り切りできます]]></description>
-	<version>0.2.0</version>
+	<version>0.3.0</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
 	<namespace>EditBase</namespace>
@@ -67,6 +69,10 @@ EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript �
 	<dependencies>
 		<nextcloud min-version="30" max-version="35"/>
 	</dependencies>
+	<settings>
+		<admin>OCA\EditBase\Settings\AiAdmin</admin>
+		<admin-section>OCA\EditBase\Settings\AiSection</admin-section>
+	</settings>
 	<navigations>
 		<navigation>
 			<name>EditBase</name>

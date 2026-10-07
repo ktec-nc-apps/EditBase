@@ -284,10 +284,15 @@ class Connectors {
 	 * @return array<int, array<string, mixed>>
 	 */
 	public function events(string $userId, string $from, string $to, string $calendarKey = ''): array {
+		// A date that cannot be read is the request's fault, not the server's (低7).
+		try {
+			$start = new \DateTimeImmutable($from);
+			$end = new \DateTimeImmutable($to);
+		} catch (\Throwable) {
+			throw new \InvalidArgumentException('the date range could not be read');
+		}
 		$this->need('calendar', $userId);
 		$manager = Server::get(ICalendarManager::class);
-		$start = new \DateTimeImmutable($from);
-		$end = new \DateTimeImmutable($to);
 		$out = [];
 		foreach ($manager->getCalendarsForPrincipal('principals/users/' . $userId) as $calendar) {
 			if ($calendarKey !== '' && (string)$calendar->getKey() !== $calendarKey) {

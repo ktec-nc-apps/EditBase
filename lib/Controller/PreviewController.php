@@ -9,11 +9,10 @@ declare(strict_types=1);
 
 namespace OCA\EditBase\Controller;
 
-use OCA\EditBase\Service\DocumentService;
+use OCA\EditBase\Service\DocumentCheck;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
-use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
 use OCP\AppFramework\Http\DataDisplayResponse;
 use OCP\AppFramework\Http\Response;
@@ -27,13 +26,17 @@ use OC\Security\CSP\ContentSecurityPolicyNonceManager;
  * so what the program does (the enlarging of photographs) can be seen.
  *
  * Nextcloud's pages allow no script without its nonce, so the document's own
- * <script> elements are given it; nothing else in the file is changed.
+ * program -- EditBase's, known by its fingerprint -- is given it; any other
+ * script in the file is taken out, and nothing else in the file is changed.
+ *
+ * Only what the editor posts is shown. A GET of the saved file by its id used to
+ * be shown too, with the nonce given to every script in it: a script written into
+ * a shared .html ran in whoever followed the link (review 2026-10-04, 高1).
  */
 class PreviewController extends Controller {
 	public function __construct(
 		string $appName,
 		IRequest $request,
-		private DocumentService $documents,
 		private IUserSession $userSession,
 		private ContentSecurityPolicyNonceManager $nonces,
 	) {
@@ -57,24 +60,8 @@ class PreviewController extends Controller {
 		return $this->page($html);
 	}
 
-	#[NoAdminRequired]
-	#[NoCSRFRequired]
-	public function show(int $id): Response {
-		$user = $this->userSession->getUser();
-		if ($user === null) {
-			return new DataDisplayResponse('', Http::STATUS_FORBIDDEN);
-		}
-		try {
-			$doc = $this->documents->get($user->getUID(), $id);
-		} catch (\Throwable $e) {
-			return new DataDisplayResponse('', Http::STATUS_NOT_FOUND);
-		}
-		return $this->page((string)($doc['content'] ?? ''));
-	}
-
 	private function page(string $html): Response {
-		$nonce = $this->nonces->getNonce();
-		$html = (string)preg_replace('/<script\b(?![^>]*\bnonce=)/i', '<script nonce="' . htmlspecialchars($nonce, ENT_QUOTES) . '"', $html);
+		$html = DocumentCheck::nonceOwnScript($html, $this->nonces->getNonce());
 		$response = new DataDisplayResponse($html, Http::STATUS_OK, ['Content-Type' => 'text/html; charset=utf-8']);
 		$csp = new ContentSecurityPolicy();
 		$csp->addAllowedStyleDomain('https://fonts.googleapis.com');

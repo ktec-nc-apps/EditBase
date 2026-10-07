@@ -9,6 +9,7 @@ use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\FilesMetadata\IFilesMetadataManager;
 use OCP\IConfig;
 
@@ -71,12 +72,22 @@ class VersionService {
 	 * Put the document as it stands now into #01, shifting what was there down.
 	 * Called before the new content is written, so #01 is always the version
 	 * before the save that has just happened.
+	 *
+	 * Says whether a version was taken. None is when versions are off, when the
+	 * row holds another document's, and for a document that is not this account's
+	 * to copy (review 2026-10-04, 中2): one shared without the right to download
+	 * (review S3 -- a version is a copy), and one shared on its own, whose parent
+	 * here is the reader's own home folder, so the version would stand there as a
+	 * copy the owner never sees.
 	 */
-	public function take(File $file, int $keep): void {
+	public function take(File $file, int $keep): bool {
 		if ($keep < 1) {
-			return;
+			return false;
 		}
 		$folder = $file->getParent();
+		if (!Downloads::allowed($file) || $this->standsAlone($file)) {
+			return false;
+		}
 		$stem = $this->stem($file->getName());
 		$of = $file->getId();
 		// A place in the row held by another document's version is not this one's
@@ -85,7 +96,7 @@ class VersionService {
 		for ($i = 1; $i <= $keep; $i++) {
 			$node = $this->slot($folder, $stem, $i);
 			if ($node !== null && !$this->belongs($node, $of)) {
-				return;
+				return false;
 			}
 		}
 		// The last one falls off the end.
@@ -101,6 +112,22 @@ class VersionService {
 			$node->move($folder->getPath() . '/' . $this->name($stem, $i + 1));
 		}
 		$this->mark($folder->newFile($this->name($stem, 1), $file->getContent()), $of);
+		return true;
+	}
+
+	/**
+	 * Whether the document is a mount point of its own: a single file shared with
+	 * this account, which Nextcloud mounts at a path in their home folder. Its
+	 * parent is then not the folder it lives in.
+	 */
+	private function standsAlone(File $file): bool {
+		try {
+			$mount = rtrim($file->getMountPoint()->getMountPoint(), '/');
+			return $mount !== '' && $mount === rtrim($file->getPath(), '/');
+		} catch (\Throwable) {
+			// A node that cannot say where it is mounted is taken as an ordinary file.
+			return false;
+		}
 	}
 
 	/**
@@ -140,11 +167,19 @@ class VersionService {
 
 	/**
 	 * Put a version back. What is there now becomes #01 first, so that going back
-	 * can itself be gone back on.
+	 * can itself be gone back on -- and when it cannot be kept, nothing is put
+	 * back: the screen promises that what is there now is kept, and it used to be
+	 * written over all the same when versions were off or the row was another
+	 * document's (review 2026-10-04, 中3).
 	 */
 	public function restore(File $file, int $number, int $keep): string {
 		$content = $this->read($file, $number);
-		$this->take($file, $keep);
+		if ($keep < 1) {
+			throw new NotPermittedException('versions are switched off, so what is in the document now cannot be kept; nothing was put back');
+		}
+		if (!$this->take($file, $keep)) {
+			throw new NotPermittedException('what is in the document now could not be kept as a version, so nothing was put back');
+		}
 		$file->putContent($content);
 		return $content;
 	}

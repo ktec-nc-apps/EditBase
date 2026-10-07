@@ -55,6 +55,10 @@ class DocumentService {
 		if ($name === '' || !$this->isSafePath($name)) {
 			throw new \InvalidArgumentException('invalid folder name');
 		}
+		// The name must be a folder's, or a place where one can be made. The name
+		// of a file was accepted, and every listing after it failed with "not
+		// permitted" until the setting was changed back (review 2026-10-04, 低9).
+		$this->fileInTheWay($this->rootFolder->getUserFolder($userId), $name);
 		$this->config->setUserValue($userId, Application::APP_ID, 'folder', $name);
 		return $name;
 	}
@@ -71,7 +75,28 @@ class DocumentService {
 		} catch (NotFoundException) {
 			// fall through and create it
 		}
+		// A file put there since the name was set: said plainly, not as "not permitted".
+		$this->fileInTheWay($userFolder, $path);
 		return $userFolder->newFolder($path);
+	}
+
+	/**
+	 * Refuse a folder path that runs into a file: at the path itself, or at any
+	 * folder on the way to it.
+	 */
+	private function fileInTheWay(Folder $userFolder, string $path): void {
+		$walk = '';
+		foreach (explode('/', $path) as $part) {
+			$walk = $walk === '' ? $part : $walk . '/' . $part;
+			try {
+				$node = $userFolder->get($walk);
+			} catch (NotFoundException) {
+				return;
+			}
+			if (!($node instanceof Folder)) {
+				throw new \InvalidArgumentException('there is a file called ' . $walk . ' there already');
+			}
+		}
 	}
 
 	/**

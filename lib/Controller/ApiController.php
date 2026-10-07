@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\EditBase\Controller;
 
 use OCA\EditBase\AppInfo\Application;
+use OCA\EditBase\Service\SampleService;
 use OCA\EditBase\Service\DocumentService;
 use OCA\EditBase\Service\Connectors;
 use OCA\EditBase\Service\FileBrowser;
@@ -25,6 +26,7 @@ use OCP\IConfig;
 use OCP\IRequest;
 use OCP\IUserSession;
 use OCP\L10N\IFactory;
+use Psr\Log\LoggerInterface;
 
 class ApiController extends Controller {
 	private const ALLOWED_THEMES = ['auto', 'dark', 'light'];
@@ -42,6 +44,8 @@ class ApiController extends Controller {
 		private IConfig $config,
 		private IFactory $l10nFactory,
 		private WebFetch $web,
+		private SampleService $samples,
+		private LoggerInterface $logger,
 	) {
 		parent::__construct(Application::APP_ID, $request);
 	}
@@ -67,7 +71,15 @@ class ApiController extends Controller {
 		} catch (\InvalidArgumentException $e) {
 			return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		} catch (\Throwable $e) {
-			return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_INTERNAL_SERVER_ERROR);
+			// The app's own sentences (a plain RuntimeException: "somebody else is
+			// saving this document…") are for the screen. Anything else -- a database
+			// error, a library's -- is for the log: its words can carry paths and
+			// queries, and they used to be handed to the browser (review 2026-10-04, 低7).
+			if ($e::class === \RuntimeException::class) {
+				return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_INTERNAL_SERVER_ERROR);
+			}
+			$this->logger->error('EditBase: ' . $e->getMessage(), ['app' => Application::APP_ID, 'exception' => $e]);
+			return new JSONResponse(['error' => 'something went wrong on the server; the log says what'], Http::STATUS_INTERNAL_SERVER_ERROR);
 		}
 	}
 
@@ -100,6 +112,11 @@ class ApiController extends Controller {
 				// What the Tab key does outside a table: 'indent' (as before) or 'tab' (a tab that lines the words up).
 				'tabKey' => $this->config->getUserValue($uid, Application::APP_ID, 'tabKey', 'indent'),
 				'cellEnter' => $this->config->getUserValue($uid, Application::APP_ID, 'cellEnter', 'br'),
+				'previewWidth' => $this->config->getUserValue($uid, Application::APP_ID, 'previewWidth', '132px'),
+				'layersWidth' => $this->config->getUserValue($uid, Application::APP_ID, 'layersWidth', '240px'),
+				// The AI assistant's own width (the owner, 2026-10-06); until it is set, the
+				// two bars together as they start, the width it had before.
+				'aiWidth' => $this->config->getUserValue($uid, Application::APP_ID, 'aiWidth', '372px'),
 				// What colour each category is drawn in, as the writer chose.
 				'folderColours' => $this->config->getUserValue($uid, Application::APP_ID, 'folderColours', ''),
 				'docOrder' => $this->config->getUserValue($uid, Application::APP_ID, 'docOrder', ''),
@@ -166,6 +183,26 @@ class ApiController extends Controller {
 			$tabKey = $this->request->getParam('tabKey');
 			if ($tabKey === 'indent' || $tabKey === 'tab') {
 				$this->config->setUserValue($uid, Application::APP_ID, 'tabKey', $tabKey);
+			}
+			// The widths of the Pages bar and the Layers bar: pixels, or a percentage of
+			// the window (the owner, 2026-10-03).
+			foreach (['previewWidth', 'layersWidth'] as $key) {
+				$w = $this->request->getParam($key);
+				if (is_string($w) && preg_match('/^(\d{1,4}(?:\.\d{1,2})?)(px|%)$/', $w, $m)) {
+					$n = (float)$m[1];
+					if (($m[2] === 'px' && $n >= 60 && $n <= 1200) || ($m[2] === '%' && $n >= 3 && $n <= 60)) {
+						$this->config->setUserValue($uid, Application::APP_ID, $key, $w);
+					}
+				}
+			}
+			// The AI assistant's width: pixels 240-1200, or a percentage 15-60 of the
+			// window, as in the other Base apps (the owner, 2026-10-06).
+			$w = $this->request->getParam('aiWidth');
+			if (is_string($w) && preg_match('/^(\d{1,4}(?:\.\d{1,2})?)(px|%)$/', $w, $m)) {
+				$n = (float)$m[1];
+				if (($m[2] === 'px' && $n >= 240 && $n <= 1200) || ($m[2] === '%' && $n >= 15 && $n <= 60)) {
+					$this->config->setUserValue($uid, Application::APP_ID, 'aiWidth', $w);
+				}
 			}
 			$cellEnter = $this->request->getParam('cellEnter');
 			if ($cellEnter === 'br' || $cellEnter === 'para') {
@@ -397,7 +434,8 @@ class ApiController extends Controller {
 
 	#[NoAdminRequired]
 	public function documents(): JSONResponse {
-		return $this->run(fn () => ['documents' => $this->documents->list($this->uid())]);
+		// 入れたばかり・上げたばかりのアプリなら、見本の文書を一度だけ入れる（SampleService）
+		return $this->run(function () { $uid = $this->uid(); $this->samples->ensure($uid); return ['documents' => $this->documents->list($uid)]; });
 	}
 
 	#[NoAdminRequired]
@@ -604,6 +642,9 @@ class ApiController extends Controller {
 			'ja' => '日本語', 'en' => 'English', 'zh' => '简体中文', 'es' => 'Español',
 			'fr' => 'Français', 'de' => 'Deutsch', 'ru' => 'Русский', 'pt' => 'Português',
 			'ar' => 'العربية', 'hi' => 'हिन्दी', 'ko' => '한국어', 'it' => 'Italiano',
+			'zh_CN' => '简体中文', 'zh_TW' => '繁體中文（台灣）', 'zh_HK' => '繁體中文（香港）', 'pt_BR' => 'Português (Brasil)', 'pt_PT' => 'Português (Portugal)', 'uk' => 'Українська',
+			'pl' => 'Polski', 'cs' => 'Čeština', 'tr' => 'Türkçe', 'fa' => 'فارسی',
+			'id' => 'Bahasa Indonesia', 'th' => 'ไทย', 'vi' => 'Tiếng Việt',
 		];
 		$out = [];
 		foreach (glob(__DIR__ . '/../../l10n/*.json') ?: [] as $path) {

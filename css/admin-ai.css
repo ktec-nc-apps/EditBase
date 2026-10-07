@@ -1,0 +1,8 @@
+#editbase-ai-admin fieldset[disabled] { opacity: .5; }
+#editbase-ai-admin fieldset[disabled] * { cursor: not-allowed; }
+#editbase-ai-admin h3 { margin: 18px 0 6px; font-size: 15px; font-weight: 600; }
+#editbase-ai-admin .eb-ai-state { padding: 6px 10px; border-radius: 6px; background: var(--color-background-dark, #f2f2f2); display: inline-block; }
+#editbase-ai-admin .eb-ai-state.warn { background: var(--color-warning-hover, #fff3cd); }
+#editbase-ai-admin .eb-ai-groups { margin-left: 28px; }
+#editbase-ai-admin .eb-ai-groups.dim { opacity: .5; }
+#editbase-ai-admin .eb-ai-save { margin-top: 16px; display: flex; gap: 12px; align-items: center; }

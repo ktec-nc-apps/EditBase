@@ -88,6 +88,10 @@ large program, so many bugs may remain.
 - Tables, callout boxes, shapes, rules, embedded pages, and formulas as native
   MathML — drawn by the browser, so a formula stays selectable text
 - Formulas made in FormulaBase inserted into the document as they are
+- An AI assistant, through the **AI-Hub** app: a chat beside the pages that knows
+  EditBase, changes the open document when asked — every change undoable with
+  Ctrl+Z — and reads from the other apps of the series only as the administrator
+  allows. Without AI-Hub it is simply not shown
 - Anything can be placed by hand and dragged about the page, or nudged with the
   arrow keys. Two ways of placing it: **standard placement** follows the rules of
   HTML and keeps clear of the text and of other objects — above and below, with the
@@ -219,7 +223,8 @@ pile of inline styles:
 ### Requirements
 
 Nextcloud 30–35. No external service, no additional PHP extension, and nothing to
-install in the browser.
+install in the browser. The AI assistant alone needs the free **AI-Hub** app, where
+the AI service, its key and its limits are set once for every app on the server.
 
 ### Installation
 
@@ -302,6 +307,9 @@ EditBase は、外部のプログラムに頼らず、HTML・CSS・JavaScript �
 - 表・囲み記事・図形・罫線・埋め込みページ、そしてネイティブ MathML の数式
   （ブラウザが描画するので、数式は文字のまま残ります）
 - FormulaBase で作った式を、そのまま文書に挿入できます
+- **AI-Hub** アプリを通した AI アシスタント。EditBase を知っているチャットがページの横に
+  出て、頼めば開いている文書を直し（すべて Ctrl+Z で戻せます）、同じシリーズのほかの
+  アプリは管理者が許した範囲でだけ読みます。AI-Hub が無ければ表示されません
 - どれもページ上をドラッグで動かせ、矢印キーで微調整できます。置き方は2つです。
   **標準配置**は HTML の規則に則って配置し、文字列やほかのオブジェクトをよけます
   （上下によける・文字列を左側に・文字列を右側に。JavaScript を使うと両側にも）。
@@ -414,7 +422,8 @@ EditBase が育つにつれ、この表に足していきます。文書に入�
 ### 動作要件
 
 Nextcloud 30〜35。外部サービスも、追加の PHP 拡張も、ブラウザに入れるものも
-必要ありません。
+必要ありません。AI アシスタントだけは無料の **AI-Hub** アプリが必要で、AI サービス・
+キー・制限はそこでサーバー内の全アプリ分を一度に設定します。
 
 ### 導入
 
