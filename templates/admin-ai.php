@@ -55,6 +55,11 @@ $reasons = [
 				<label for="eb-ai-read-<?php p($app); ?>"><?php p($label); ?><?php if (!$there) { p(' ' . $l->t('(not installed)')); } ?></label></p>
 		<?php } ?>
 
+		<h3><?php p($l->t('What it may change')); ?></h3>
+		<p class="settings-hint"><?php p($l->t('The open document is always changed through the editor, as one step the writer can undo with Ctrl+Z. Ticked here, the assistant may also make documents and change, rename, move and delete the writer\'s other documents, with the writer\'s own rights. The version of what was there is kept first, and a deleted document goes to the trash.')); ?></p>
+		<p><input type="checkbox" class="checkbox" id="eb-ai-read-write" data-read="write" <?php if (in_array('write', $s['read'], true)) { p('checked'); } ?>>
+			<label for="eb-ai-read-write"><?php p($l->t('Make documents, and change, rename, move and delete the writer\'s other documents')); ?></label></p>
+
 		<h3><?php p($l->t('Web search')); ?></h3>
 		<p><input type="checkbox" class="checkbox" id="eb-ai-search" <?php if ($s['search']) { p('checked'); } ?> <?php if (!$off && !$tb['search']) { p('disabled'); } ?>>
 			<label for="eb-ai-search"><?php p($l->t('Let it search the web (on the AI provider\'s side: this server\'s own network is never reached)')); ?></label></p>

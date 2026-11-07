@@ -12,6 +12,8 @@
   const { createApp } = Vue;
 
   const BASE = ((window.OC && OC.generateUrl) ? OC.generateUrl('/apps/editbase') : '/apps/editbase') + '/';
+  // the assistant's tools that change documents: after one of them the document list is read again
+  const AI_WRITE_TOOLS = ['create_document', 'add_to_document', 'replace_in_document', 'rename_document', 'move_document', 'delete_document'];
   // AI-Hub's own pages for a remembered conversation: read back, saved, summed up, dropped.
   const HUB = ((window.OC && OC.generateUrl) ? OC.generateUrl('/apps/ai_hub') : '/apps/ai_hub') + '/conversation';
   // The request token is read each time it is sent, not once at load. Nextcloud
@@ -17424,7 +17426,7 @@ ${insideObjects('.eb-paper.boxed')} {
           </div>
         </div>
       </span>
-      <button class="eb-tb eb-fx-btn" @mousedown.prevent @click="fxSum" :title="t('Sum')">Σ</button>
+      <button class="eb-tb eb-fx-btn" @mousedown.prevent @click="fxSum" :title="t('Total')">Σ</button>
       <input class="eb-fx-input" ref="fxInput" type="text" spellcheck="false" v-model="fx.text"
         @focus="fxFocus" @blur="fxBlur" @keydown.enter.prevent="fxCommit" @keydown.esc.prevent="fxCancel"
         :placeholder="t('A value, or a formula that starts with =')">
@@ -17632,6 +17634,8 @@ ${insideObjects('.eb-paper.boxed')} {
             <div class="eb-ai-imgs" v-if="m.images && m.images.length"><img v-for="(im, k) in m.images" :key="k" :src="im.url" :alt="im.name" :title="im.name"></div>
             <div class="eb-bubble" v-html="aiHtml(m)"></div>
             <div class="did" v-if="m.did">{{ m.did }}</div>
+            <!-- What the tools did, from the tools themselves, apart from the assistant's words (2026-11-07). -->
+            <div class="eb-ai-acts" v-if="m.actions && m.actions.length"><div class="eb-ai-acts-h">{{ t('What was actually done') }}</div><div class="eb-ai-act" v-for="(a, k) in m.actions" :key="k" :class="a.ok ? 'ok' : 'ng'"><span class="mk">{{ a.ok ? '✓' : '✗' }}</span> <span>{{ a.report || aiToolLabel(a) }}</span><span v-if="!a.ok" class="ng-t"> （{{ t('Failed') }}）</span></div></div>
             <button type="button" class="eb-ai-copy" v-if="aiHtml(m)" :class="{ done: m.copied }" :title="t('Copy')" :aria-label="t('Copy')" @click="aiCopy(m)">{{ m.copied ? '✓' : '📋' }}<span class="eb-ai-copied" v-if="m.copied" role="status">{{ t('Copied') }}</span></button>
           </div>
         </template>
@@ -23319,7 +23323,7 @@ ${insideObjects('.eb-paper.boxed')} {
       /** What the model is shown of the open document: each paragraph by its id, kind and words. */
       aiContext() {
         const c = canvas();
-        const out = { title: this.doc.title || this.doc.name || '', paper: '', blocks: [], selection: '', caret: '' };
+        const out = { id: this.doc.id || 0, title: this.doc.title || this.doc.name || '', paper: '', blocks: [], selection: '', caret: '' };
         const p = normalisePaper(this.doc.paper);
         out.paper = [p.size, p.orientation, 'margins ' + [p.margin.top, p.margin.right, p.margin.bottom, p.margin.left].join('/') + ' mm',
           p.vertical ? 'vertical writing' : ''].filter(Boolean).join(', ');
@@ -23385,6 +23389,8 @@ ${insideObjects('.eb-paper.boxed')} {
         this.aiScroll();
         let answer = null;
         let fresh = false;
+        let changed = false;
+        let actions = [];
         try {
           const r = await api('ai/ask', { method: 'POST', body: { history, message, context: this.aiContext(), conversation: this.aiConvToken(true),
             images: images.map((im) => ({ type: im.type, data: im.data })) } });
@@ -23395,10 +23401,12 @@ ${insideObjects('.eb-paper.boxed')} {
             if (ticket !== this.ai.ask) { return; }
             const x = await api('ai/result/' + encodeURIComponent(r.id));
             if (x.state === 'running') { continue; }
-            if (x.state === 'done') { answer = String(x.text || ''); fresh = !!x.fresh; break; }
+            if (x.state === 'done') { answer = String(x.text || ''); fresh = !!x.fresh; changed = (x.tools || []).some((n) => AI_WRITE_TOOLS.includes(n)); actions = Array.isArray(x.actions) ? x.actions.filter((a) => a && a.kind !== 'read') : []; break; }
             throw new Error(x.error || x.state);
           }
           if (answer === null) { throw new Error('timeout'); }
+          // the assistant made or changed other documents: the list shows them (2026-11-07)
+          if (changed) { try { await this.loadDocs(); } catch (e) { /* shown on the next load */ } }
         } catch (e) {
           if (ticket === this.ai.ask) { this.ai.busy = false; this.ai.busyText = ''; this.ai.error = this.aiError(e); this.aiScroll(); }
           return;
@@ -23411,7 +23419,7 @@ ${insideObjects('.eb-paper.boxed')} {
           this.ai.note = this.t('The earlier conversation had ended, so this one starts afresh.');
         }
         const parsed = aiParse(answer);
-        const msg = { role: 'assistant', text: answer, did: '' };
+        const msg = { role: 'assistant', text: answer, did: '', actions };
         this.ai.msgs.push(msg);
         if (parsed.read && round < 6) {
           this.ai.busyText = this.aiReadLabel(parsed.read);
@@ -23427,6 +23435,12 @@ ${insideObjects('.eb-paper.boxed')} {
         this.ai.busy = false;
         this.ai.busyText = '';
         this.aiScroll();
+      },
+      // A tool's name on the screen, in the writer's language (AI-Hub's label is in the server's).
+      aiToolLabel(a) {
+        return { list_documents: this.t('List documents'), read_document: this.t('Read a document'), create_document: this.t('Make a document'),
+          add_to_document: this.t('Add to a document'), replace_in_document: this.t('Replace words in a document'), rename_document: this.t('Rename a document'),
+          move_document: this.t('Move a document'), delete_document: this.t('Delete a document') }[a.tool] || a.label || a.tool;
       },
       aiReadLabel(q) {
         const s = String(q.source || '');

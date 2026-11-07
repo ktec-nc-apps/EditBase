@@ -34,7 +34,7 @@ Features:
 
 EditBase は、外部のプログラムを使わず、HTML・CSS・JavaScript だけで文書を作るためのプログラムです。LibreOffice Writer と同じように使えること、DTP ソフトに近い操作感を目指して作っています。規模の大きなプログラムになったため、不具合がまだ多く残っている可能性があります。
 
-主な機能:
+主な機能：
 - 文書は Files に保存される標準の HTML ファイルで、ほかのファイルと同じように編集・共有できます
 - ミリ単位の用紙設定（A3・A4・A5・B4・B5・Letter・Legal、縦向き／横向き）。ページガイド・ルーラー・グリッドも表示できます
 - すべての印刷ページに入るヘッダーとフッター。ページ番号・タイトル・ファイル名・日付を差し込めます
@@ -52,12 +52,13 @@ EditBase は、外部のプログラムを使わず、HTML・CSS・JavaScript �
 - 印刷前にページの問題点を見つける「文書のチェック」
 - 検索と置換、変更の記録、差し込み印刷、エディター独自の「元に戻す」履歴
 - HTML5 と CSS が基本です。JavaScript は HTML と CSS ではできないこと（オブジェクトの両側への文字列の回り込み、画像の拡大効果、表の計算）にだけ使い、文書ごとにオン／オフを切り替えられます]]></description>
-	<version>0.3.1</version>
+	<version>0.3.2</version>
 	<licence>agpl</licence>
 	<author>KTEC</author>
 	<namespace>EditBase</namespace>
 	<category>office</category>
 	<category>tools</category>
+	<category>ai</category>
 	<website>https://github.com/ktec-nc-apps/EditBase</website>
 	<bugs>https://github.com/ktec-nc-apps/EditBase/issues</bugs>
 	<repository>https://github.com/ktec-nc-apps/EditBase</repository>

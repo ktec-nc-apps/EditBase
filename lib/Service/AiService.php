@@ -31,7 +31,7 @@ class AiService {
 	public const KEY_READ = 'ai_read';
 	public const KEY_SEARCH = 'ai_search';
 	/** What the assistant may be allowed to read, each an app of the Base series. */
-	public const SOURCES = ['editbase', 'regibase', 'formulabase', 'netbase'];
+	public const SOURCES = ['editbase', 'regibase', 'formulabase', 'netbase', 'write'];
 	/** The name EditBase's assistant is registered under at AI-Hub. */
 	public const SCENARIO = 'assistant';
 	private const HUB = 'ai_hub';
@@ -74,6 +74,9 @@ class AiService {
 			// Who may ask is the administrator's EditBase setting, and the hub holds
 			// to it on every way in -- not only through EditBase's own controller.
 			'allow' => fn (string $uid): bool => $this->allowed($uid),
+			// What it can do with the writer's other documents by itself (the owner, 2026-11-07);
+			// each tool looks up what the administrator allows when it runs.
+			'tools' => \OCP\Server::get(AiTools::class)->tools(fn (): array => $this->settings()['read']),
 			// How a turn reads in a conversation saved to Files: what the editor read for the
 			// assistant is left out, and so are the blocks of an answer meant for the editor.
 			'transcript' => static function (string $role, string $text): ?string {
@@ -174,7 +177,7 @@ class AiService {
 			'ready' => $hub['ready'],
 			'reason' => $hub['reason'],
 			'model' => $hub['model'],
-			'read' => array_values(array_filter($s['read'], fn ($a) => $a === 'editbase' || $this->apps->isEnabledForUser($a))),
+			'read' => array_values(array_filter($s['read'], fn ($a) => $a === 'editbase' || $a === 'write' || $this->apps->isEnabledForUser($a))),
 			'search' => $s['search'] && $hub['search'],
 			// whether the person may paste or drop images into a question
 			'images' => $this->imagesOk(),
@@ -209,6 +212,8 @@ class AiService {
 		$messages[] = ['role' => 'user', 'text' => $message];
 		$messages = self::withoutForbiddenReadings($messages, $st['read']);
 		$this->registerScenario();
+		// which document is open, so the tools leave it to the editor (they run in AI-Hub's own request)
+		\OCP\Server::get(AiTools::class)->noteOpen($uid, is_numeric($context['id'] ?? null) ? (int)$context['id'] : 0);
 		$options = [
 			'context' => AiScenario::perQuestion($st['read'], $st['search'], $context, $lang),
 			'search' => $st['search'],

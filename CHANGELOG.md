@@ -3,6 +3,29 @@
 All notable changes to EditBase are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] — 2026-11-08
+
+The AI assistant can now work with the writer's other documents; EditBase now speaks 21 languages, with corrected translations.
+（AI アシスタントが、開いている文書のほかに、ユーザーのほかの文書も扱えるようになりました。EditBase を 21 言語に対応させ、訳の誤りも直しました。）
+
+### Added
+- **The AI assistant can work with the writer's other documents** (with AI-Hub). Besides changing the open document as before (one step that Ctrl+Z undoes), it can list the writer's documents and read any of them, and, when the administrator allows it, make a document (with headings, paragraphs, lists and tables), add to another document, replace words in it keeping its formatting, rename it, move it to a category and delete it. It acts with the writer's own rights, so a document shared read only stays read only. Before it writes into a document, the version of what was there is kept ("Versions…"), whatever the version setting; a deleted document goes to the Nextcloud trash with its versions. It never writes into the document open in the editor by itself — that one it changes only through the editor. Under each answer, "What was actually done" lists what was really done, from the documents themselves, apart from the assistant's words, and a failure is shown as one. The document list shows the change as soon as the answer comes. In the administration settings there is a new section, "What it may change".
+  （**AI アシスタントが、AI-Hub を通して、ユーザーのほかの文書も扱えるようになりました。** これまでどおり開いている文書を変更できるほか（Ctrl+Z で 1 回で元に戻せます）、ユーザーの文書の一覧を見て、どの文書も読めます。管理者が許可すれば、文書の作成（見出し・段落・箇条書き・表）、ほかの文書への追加、書式を保ったままの語句の置き換え、名前の変更、カテゴリへの移動、削除も行います。操作はユーザー本人の権限で行うので、読み取り専用で共有された文書は読み取り専用のままです。文書に書き込む前に、それまでの内容をバージョンとして残します（「バージョン…」。バージョンの設定にかかわらず）。削除した文書はバージョンと一緒に Nextcloud のごみ箱に移ります。編集画面で開いている文書には、ツールでは書き込まず、編集画面を通してだけ変更します。答えの下には「実際に行った操作」として、AI の文章とは別に、実際の結果から作った一覧を出します。失敗したときは失敗と表示します。AI が答えると、文書の一覧にもすぐ反映されます。管理設定に「変更できる物」の欄を足しました。）
+- Twelve more languages: European Portuguese, Russian, Ukrainian, Polish, Czech, Turkish, Arabic, Persian, Hindi, Indonesian, Vietnamese and Thai.
+  （ポルトガル語（ポルトガル）、ロシア語、ウクライナ語、ポーランド語、チェコ語、トルコ語、アラビア語、ペルシア語、ヒンディー語、インドネシア語、ベトナム語、タイ語の 12 言語を追加しました。）
+
+### Changed
+- EditBase is listed in the App Store's AI category as well.
+  （App Store の「AI」の分類にも載るようにしました。）
+
+### Fixed
+- **Translations reviewed in every language.** Japanese was gone through in full, and every other language line by line for wrong meanings, literal phrasing and terms used two ways — for example, pitch and spacing, the table's heading row and the page header, or a frame and a border had the same word in some languages.
+  （**すべての言語の訳を見直しました。** 日本語は全体を、ほかの言語は 1 行ずつ、意味の誤り・直訳・用語の揺れを点検しました。たとえば、字送りと字間、表の見出し行とページのヘッダー、枠と罫線が、言語によって同じ語になっていました。）
+- **The list of functions in tables is translated.** Their categories, the way to write each one and its description were shown in English in every language.
+  （**表の関数一覧を訳しました。** 分類・書き方・説明が、どの言語でも英語のまま表示されていました。）
+- The table's Σ button and the Σ (summation) in the formula templates had one name; they are now told apart ("Total" and "Sum").
+  （表の Σ ボタンと、数式テンプレートの Σ（総和）が同じ名前でした。別の名前（合計・総和）に分けました。）
+
 ## [0.3.1] — 2026-10-11
 
 Only the Japanese text was rewritten — the README, the App Store description and the changelog — to read naturally. No feature was added or changed.
